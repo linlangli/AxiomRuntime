@@ -9,8 +9,16 @@
   "scripts": {
     "build": "tsc",
     "dev": "node --enable-source-maps dist/cli/index.js",
-    "test": "npm run build && node --test test/*.test.js"
+    "test": "npm run build && node --test test/*.test.js",
+    "release": "node scripts/release.js",
+    "prepublishOnly": "npm test"
   },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "package.json"
+  ],
   "engines": {
     "node": ">=20"
   },
