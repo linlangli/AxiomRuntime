@@ -1,0 +1,9 @@
+node_modules/
+dist/
+
+providers.json
+.ai-cache.json
+usage.json
+
+.DS_Store
+*.log
