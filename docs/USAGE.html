@@ -208,6 +208,7 @@
           <div class="command"><strong>使用 Codex</strong><code>ai use codex</code></div>
           <div class="command"><strong>添加 Provider</strong><code>ai add</code></div>
           <div class="command"><strong>编辑 Provider</strong><code>ai edit</code></div>
+          <div class="command"><strong>列出 Provider</strong><code>ai list</code></div>
           <div class="command"><strong>查看状态</strong><code>ai status</code></div>
           <div class="command"><strong>检查环境</strong><code>ai doctor</code></div>
           <div class="command"><strong>打开面板</strong><code>ai web</code></div>
@@ -272,10 +273,12 @@ ai use codex 51talk gpt-5.5</pre>
 
         <div class="card">
           <h2>状态和检查</h2>
-          <pre>ai status
+          <pre>ai list
+ai status
 ai doctor
 ai doctor --deep</pre>
           <ul>
+            <li><code>list</code> 只读取配置，展示 provider 的名称、地址、Key、level、mode 和默认模型。</li>
             <li><code>status</code> 会轻量刷新所有 provider，不发送真实对话请求，默认不消耗 token。</li>
             <li><code>status</code> 展示健康度、默认模型、token 使用量和使用占比。</li>
             <li><code>doctor</code> 检查配置文件、CLI、连通性、模型探测、level 冲突和默认模型。</li>
@@ -293,7 +296,7 @@ ai doctor --deep</pre>
         <div class="card">
           <h2>Web 控制面板</h2>
           <pre>ai web</pre>
-          <p>启动本地 Web 控制面板，用于查看 provider、健康度、使用占比、消耗曲线和可视化配置。</p>
+          <p>规划中的命令。当前基础版会提示暂未实现，后续用于查看 provider、健康度、使用占比、消耗曲线和可视化配置。</p>
         </div>
 
         <div class="card wide">

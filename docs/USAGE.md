@@ -14,7 +14,7 @@ ai
 ai help
 ```
 
-打开 `USAGE.html` 使用指南。
+打开 `docs/USAGE.html` 使用指南。
 
 ## 使用 Claude Code 或 Codex
 
@@ -94,6 +94,27 @@ model
 
 ## 查看状态
 
+## 列出 Provider
+
+```bash
+ai list
+```
+
+列出 `providers.json` 中的 provider 配置：
+
+```text
+level
+name
+baseUrl
+apiKey
+mode
+model
+```
+
+`ai list` 只展示配置，不刷新健康度。
+
+## 查看状态
+
 ```bash
 ai status
 ```
@@ -143,6 +164,12 @@ level 是否冲突
 默认模型是否存在
 ```
 
+如果 `codex` 不在 PATH，AI Gateway 会额外检查常见安装位置：
+
+```text
+/Applications/Codex.app/Contents/Resources/codex
+```
+
 深度检查：
 
 ```bash
@@ -171,7 +198,7 @@ ai last
 ai web
 ```
 
-启动本地 Web 控制面板。
+规划中的命令。当前基础版会提示暂未实现。
 
 ## 配置文件
 

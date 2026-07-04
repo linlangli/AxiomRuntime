@@ -43,7 +43,7 @@ Help:
 ai help
 ```
 
-`ai help` opens `USAGE.html`.
+`ai help` opens `docs/USAGE.html`.
 
 Direct:
 
@@ -55,6 +55,7 @@ ai use claude 51talk claude-opus-4-6
 ai use codex 51talk gpt-5.5
 ai add 51talk https://example.com sk-xxx
 ai edit
+ai list
 ai status
 ai web
 ```
@@ -160,9 +161,13 @@ The runner layer should map `mode` to Claude Code or Codex CLI permissions where
 
 ## Status And Usage
 
+`ai list` lists provider configuration from `providers.json` without refreshing provider health.
+
 `ai status` should list all providers and include health.
 
 `ai status` refreshes all providers before rendering the table. This refresh must be lightweight: connectivity check and model discovery only. It must not send chat, completion, or inference requests by default, so it should not intentionally consume model tokens.
+
+Model discovery should try `{baseUrl}/models` first and then `{baseUrl}/v1/models` if the first endpoint fails or returns a non-JSON response. This handles providers where the UI root and API root differ.
 
 If a provider cannot expose models without a token-consuming request, keep the model cache stale or unavailable and reserve deeper checks for an explicit diagnostic mode such as `ai doctor --deep`.
 
@@ -196,6 +201,48 @@ Planned features:
 - Default model switching.
 - Provider/model statistics.
 
+## Extension Management Direction
+
+AI Gateway should eventually manage MCP servers and skills through a unified registry.
+
+MCP direction:
+
+- MCP is a shared protocol concept supported by both Claude Code and Codex CLI.
+- Claude Code and Codex CLI do not use one identical configuration file.
+- AI Gateway should maintain its own MCP registry and sync entries to each client's native configuration.
+- The registry should support per-client enablement, because some MCP servers may only be safe or useful for one client.
+
+Skills direction:
+
+- Claude Code and Codex CLI both have a skills concept.
+- Skills should be modeled as reusable workflow packages in AI Gateway.
+- AI Gateway should store skill metadata once, then adapt installation or activation to each client.
+- Skill execution can be security-sensitive, so future implementation needs trust, source, and permission metadata.
+
+## Advanced Workflow Ideas
+
+These ideas are recorded for future iterations. They should not all be built in the first version.
+
+Recommended early investments:
+
+- Local proxy mode: expose an OpenAI-compatible local endpoint such as `http://localhost:8787/v1`, then route requests through AI Gateway for provider switching, fallback, and usage tracking.
+- Smart routing: `ai do "<task>"` chooses Claude Code or Codex CLI, provider, model, and mode based on task context.
+- Git workflow commands: `ai review`, `ai fix`, `ai commit`, and `ai pr`.
+- Project-level profile: store per-project defaults in `.ai-gateway/project.json`.
+- Unified MCP and skill management across Claude Code and Codex CLI.
+- Sensitive file protection for `.env`, keys, certificates, private keys, and production config.
+
+Additional ideas:
+
+- Context packaging: `ai context` generates a project summary, directory tree, key files, recent diff, and failed test logs.
+- Model fallback chains, such as `opus -> sonnet -> gpt -> mini`.
+- Task modes: `ai task bugfix`, `ai task review`, `ai task refactor`, and `ai task docs`.
+- Session aliases: `ai save <name>` and `ai resume <name>`.
+- Budget protection with token or cost limits.
+- Model and provider benchmark: `ai bench`.
+- Rule-based routing by task, project, directory, or file type.
+- Command replay: `ai replay` shows commands executed, files changed, and token usage.
+
 ## Doctor
 
 `ai doctor` is the diagnostic command.
@@ -226,6 +273,7 @@ Keep implementation decisions aligned with these principles:
 
 - Keep AI-facing project documents in English when practical.
 - Keep user-facing documentation in Chinese.
+- Keep project documents under `docs/`, except the root `README.md`.
 - Prefer clean core APIs over CLI-specific logic.
 - Keep `providers.json` stable and human-editable.
 - Keep internal runtime data in internal files.
@@ -274,15 +322,22 @@ Update `USAGE.html` when:
 - `PRD.md` has been created.
 - `USAGE.md` has been created as the concise command reference.
 - `USAGE.html` has been created as the visual Chinese usage page.
+- Product and usage documents have been moved under `docs/`.
+- Foundation CLI has been implemented with no runtime third-party dependencies.
+- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai list`, `ai status`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
+- Implemented core stores: `providers.json`, `.ai-cache.json`, and `usage.json`.
+- Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.
+- Implemented CLI command resolution fallback for known macOS app paths, including `/Applications/Codex.app/Contents/Resources/codex`.
+- Added basic Node tests for provider normalization, level swapping, and model compatibility.
+- Added `.gitignore` to keep API keys and runtime files out of Git.
+- Added Chinese `README.md` with install, build, test, and local link instructions.
 - Product direction is CLI first, with web and Flutter desktop planned.
-- Implementation has not started yet.
 
 ## Next Implementation Steps
 
-1. Initialize TypeScript CLI project.
-2. Implement core config types and stores.
-3. Implement provider add/edit/status flows.
-4. Implement model discovery cache.
-5. Implement fallback selection.
-6. Implement Claude Code and Codex runner adapters.
-7. Add README and verification commands.
+1. Harden Claude Code and Codex runner argument and permission mapping.
+2. Add stronger tests around `ai add`, `ai edit`, `ai status`, and `ai doctor`.
+3. Add project-level profile support.
+4. Add sensitive file protection rules.
+5. Implement local server foundation for future `ai web`.
+6. Implement web control panel foundation.

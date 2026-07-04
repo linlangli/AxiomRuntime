@@ -39,7 +39,7 @@ Help entry:
 ai help
 ```
 
-`ai help` opens `USAGE.html`.
+`ai help` opens `docs/USAGE.html`.
 
 Direct commands:
 
@@ -53,6 +53,7 @@ ai use codex 51talk gpt-5.5
 ai add 51talk https://example.com sk-xxx
 
 ai edit
+ai list
 ai status
 ai web
 ai doctor
@@ -254,6 +255,25 @@ Provider 51talk unavailable, fallback to 1n1.
 
 ## 9. Status Flow
 
+## 9. List Flow
+
+```bash
+ai list
+```
+
+`ai list` lists provider configuration from `providers.json` without refreshing provider health.
+
+Show:
+
+- `level`
+- `name`
+- `baseUrl`
+- masked `apiKey`
+- `mode`
+- default `model`
+
+## 10. Status Flow
+
 ```bash
 ai status
 ```
@@ -264,6 +284,7 @@ Refresh must be lightweight:
 
 - Check provider connectivity.
 - Discover or update model cache.
+- Model discovery should try `{baseUrl}/models` first, then `{baseUrl}/v1/models` when the first endpoint returns non-JSON or fails.
 - Do not send chat/completion/inference requests.
 - Do not intentionally consume model tokens.
 
@@ -284,7 +305,7 @@ Provider health comes from `.ai-cache.json`.
 
 If a provider does not support a token-free model discovery endpoint, mark the model cache as unavailable or stale. Token-consuming deep tests should be reserved for explicit diagnostic commands such as `ai doctor --deep`.
 
-## 10. Doctor Flow
+## 11. Doctor Flow
 
 ```bash
 ai doctor
@@ -342,7 +363,7 @@ Rules for `--deep`:
 - Record token usage if the provider returns usage data.
 - Never run as part of `ai status`.
 
-## 11. Web Control Panel
+## 12. Web Control Panel
 
 Command:
 
@@ -364,7 +385,7 @@ Planned capabilities:
 - Switch current provider/model.
 - View provider and model statistics.
 
-## 12. Architecture Requirements
+## 13. Architecture Requirements
 
 The first version must use an extensible architecture:
 
@@ -384,13 +405,19 @@ Principles:
 - `web` is the local control panel.
 - Future Flutter desktop app should call the same local server API.
 
-## 13. Todo
+## 14. Todo
 
 ### High Priority
 
 - Automatic provider fallback.
 - `ai doctor`.
 - `ai last`.
+- Local proxy mode with an OpenAI-compatible endpoint.
+- Smart routing command: `ai do`.
+- Git workflow commands: `ai review`, `ai fix`, `ai commit`, and `ai pr`.
+- Project-level profile: `.ai-gateway/project.json`.
+- Unified MCP and skill management.
+- Sensitive file protection.
 - Project-level default provider/model.
 - Token usage statistics.
 - Web provider list.
@@ -399,6 +426,15 @@ Principles:
 
 ### Medium Priority
 
+- Unified MCP management for Claude Code and Codex CLI.
+- Unified skills registry with per-client adapters.
+- Context packaging command: `ai context`.
+- Task modes: `ai task bugfix`, `ai task review`, `ai task refactor`, and `ai task docs`.
+- Session aliases: `ai save <name>` and `ai resume <name>`.
+- Model fallback chains.
+- Model and provider benchmark: `ai bench`.
+- Rule-based routing by task, project, directory, or file type.
+- Command replay: `ai replay`.
 - Model aliases, such as `fast`, `cheap`, and `best`.
 - Task-based default models, such as `coding`, `review`, `fast`, and `cheap`.
 - Provider/model latency benchmark.
@@ -413,17 +449,16 @@ Principles:
 
 - Automatically choose Claude or Codex based on task.
 - Team shared configuration.
-- Local proxy mode.
-- MCP management.
 - Flutter desktop app.
 - Advanced rule-based routing.
 
-## 14. First Version Acceptance Criteria
+## 15. First Version Acceptance Criteria
 
 - `ai` enters interactive mode.
 - `ai help` opens the Chinese HTML usage guide.
 - `ai add` adds a provider and writes `providers.json`.
 - `ai edit` can change `mode`, `level`, and `model`.
+- `ai list` lists provider config without refreshing health.
 - Level conflicts are resolved by swapping levels.
 - `ai status` lists health for all providers.
 - `ai doctor` prints a diagnostic report without consuming tokens by default.
