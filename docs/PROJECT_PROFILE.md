@@ -192,6 +192,8 @@ Status fields:
 
 Token usage should be stored as events in `usage.json`.
 
+Token usage must be real provider-returned data. AI Gateway should not estimate token usage when Claude Code or Codex CLI does not expose structured usage. Current real usage recording is implemented for AI Gateway-owned deep diagnostic requests, such as `ai doctor --deep`, when the provider response contains `usage`.
+
 ## Web Control Panel Direction
 
 `ai web` should launch a local web control panel.
@@ -235,6 +237,7 @@ Recommended early investments:
 - Smart routing: `ai do "<task>"` chooses Claude Code or Codex CLI, provider, model, and mode based on task context.
 - Git workflow commands: `ai review`, `ai fix`, `ai commit`, and `ai pr`.
 - Project-level profile: store per-project defaults in `.ai-gateway/project.json`.
+- Project-level last selection: prefer `ai last --cwd` or project-scoped last over terminal-scoped state.
 - Unified MCP and skill management across Claude Code and Codex CLI.
 - Sensitive file protection for `.env`, keys, certificates, private keys, and production config.
 
@@ -244,10 +247,34 @@ Additional ideas:
 - Model fallback chains, such as `opus -> sonnet -> gpt -> mini`.
 - Task modes: `ai task bugfix`, `ai task review`, `ai task refactor`, and `ai task docs`.
 - Session aliases: `ai save <name>` and `ai resume <name>`.
+- Session management: `ai sessions` and `ai resume <session-id>`.
 - Budget protection with token or cost limits.
 - Model and provider benchmark: `ai bench`.
 - Rule-based routing by task, project, directory, or file type.
 - Command replay: `ai replay` shows commands executed, files changed, and token usage.
+
+## Multi-Terminal Isolation Decision
+
+Full per-terminal isolation is not a near-term priority.
+
+Current `ai use` launches Claude Code or Codex CLI with provider-specific environment variables in the child process. This means different terminals can use different providers at the same time without sharing the active chat process configuration.
+
+Shared management files still exist:
+
+- `.ai-cache.json`
+- `.ai-gateway.log`
+- `usage.json`
+- global `lastSelection`
+
+These shared files affect management state, not the running chat process itself.
+
+Current decision:
+
+- Keep global `ai last` for now.
+- Document that `ai last` reuses the last launch parameters and does not restore chat context.
+- Prefer project-level state next, such as `.ai-gateway/project.json` and `ai last --cwd`.
+- Add session management before considering full per-terminal isolation.
+- Treat full per-terminal isolation as low priority unless real multi-terminal conflicts appear.
 
 ## Doctor
 
@@ -332,6 +359,7 @@ Update `USAGE.html` when:
 - Foundation CLI has been implemented with no runtime third-party dependencies.
 - Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai list`, `ai status`, `ai log`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
 - Implemented core stores: `providers.json`, `.ai-cache.json`, and `usage.json`.
+- Implemented real token usage recording for provider responses that include usage data, currently from `ai doctor --deep`.
 - Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.
 - Implemented operational logging to `.ai-gateway.log` and `ai log` for recent log inspection.
 - Implemented CLI command resolution fallback for known macOS app paths, including `/Applications/Codex.app/Contents/Resources/codex`.

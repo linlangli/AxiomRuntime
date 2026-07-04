@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { normalizeProviders, swapProviderLevel } from "../dist/core/config/providers-store.js";
+import { extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
 
 test("normalizes provider levels by priority", () => {
@@ -31,5 +32,39 @@ test("swaps provider levels", () => {
 test("filters compatible models", () => {
   assert.equal(isModelCompatible("claude", "claude-opus-4-6"), true);
   assert.equal(isModelCompatible("codex", "gpt-5.5"), true);
+  assert.equal(isModelCompatible("codex", "claude-opus-4-6"), false);
   assert.equal(pickCompatibleModel("codex", "claude-opus", ["claude-opus", "gpt-5"]), "gpt-5");
+});
+
+test("extracts OpenAI-compatible token usage", () => {
+  assert.deepEqual(
+    extractTokenUsage({
+      usage: {
+        prompt_tokens: 12,
+        completion_tokens: 3,
+        total_tokens: 15
+      }
+    }),
+    {
+      inputTokens: 12,
+      outputTokens: 3,
+      totalTokens: 15
+    }
+  );
+});
+
+test("extracts Anthropic-style token usage", () => {
+  assert.deepEqual(
+    extractTokenUsage({
+      usage: {
+        input_tokens: 8,
+        output_tokens: 2
+      }
+    }),
+    {
+      inputTokens: 8,
+      outputTokens: 2,
+      totalTokens: 10
+    }
+  );
 });

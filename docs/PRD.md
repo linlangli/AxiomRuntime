@@ -126,6 +126,7 @@ Example:
       "provider": "51talk",
       "tool": "codex",
       "model": "gpt-5.5",
+      "source": "doctor_deep",
       "inputTokens": 1200,
       "outputTokens": 800,
       "totalTokens": 2000,
@@ -134,6 +135,8 @@ Example:
   ]
 }
 ```
+
+Token usage must be recorded only from real provider-returned usage data. Do not estimate token usage when the downstream CLI does not expose structured usage data.
 
 ### Internal Logs: `.ai-gateway.log`
 
@@ -407,6 +410,7 @@ Rules for `--deep`:
 - If no provider is usable, automatically fall back to regular `ai doctor` behavior without using a model.
 - Use the smallest safe test prompt.
 - Record token usage if the provider returns usage data.
+- If the provider does not return usage, report that usage was not returned and do not write a fake usage event.
 - Never run as part of `ai status`.
 
 ## 13. Web Control Panel
@@ -462,6 +466,7 @@ Principles:
 - Smart routing command: `ai do`.
 - Git workflow commands: `ai review`, `ai fix`, `ai commit`, and `ai pr`.
 - Project-level profile: `.ai-gateway/project.json`.
+- Project-level last selection, such as `ai last --cwd`.
 - Unified MCP and skill management.
 - Sensitive file protection.
 - Project-level default provider/model.
@@ -477,6 +482,7 @@ Principles:
 - Context packaging command: `ai context`.
 - Task modes: `ai task bugfix`, `ai task review`, `ai task refactor`, and `ai task docs`.
 - Session aliases: `ai save <name>` and `ai resume <name>`.
+- Session management: `ai sessions` and `ai resume <session-id>`.
 - Model fallback chains.
 - Model and provider benchmark: `ai bench`.
 - Rule-based routing by task, project, directory, or file type.
@@ -495,6 +501,7 @@ Principles:
 
 - Automatically choose Claude or Codex based on task.
 - Team shared configuration.
+- Full per-terminal isolation for cache, logs, and last selection.
 - Flutter desktop app.
 - Advanced rule-based routing.
 
@@ -508,6 +515,7 @@ Principles:
 - `ai log` opens the log file, and `ai log --print` lists recent logs in the terminal.
 - Level conflicts are resolved by swapping levels.
 - `ai status` lists health for all providers.
+- `ai status` shows weekly token usage from real `usage.json` events.
 - `ai doctor` prints a diagnostic report without consuming tokens by default.
 - `ai use claude` and `ai use codex` start the matching CLI with the default provider/model.
 - Unavailable providers trigger automatic fallback.

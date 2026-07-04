@@ -143,6 +143,8 @@ token 使用量
 使用占比
 ```
 
+token 使用量来自 `usage.json` 中真实记录的 provider usage。当前只有 AI Gateway 自己发起且 provider 返回 usage 的请求会累计，例如 `ai doctor --deep`。
+
 ## 查看日志
 
 ```bash
@@ -218,6 +220,8 @@ ai doctor --deep
 - 默认从 `level` 最小的可用 provider 开始。
 - 当前 provider 不可用时，自动降级到下一个 provider。
 - 如果没有任何 provider 可用，自动回到普通 `ai doctor`，不使用大模型。
+- 如果 provider 返回 usage，会写入 `usage.json` 并反映到 `ai status`。
+- 如果 provider 没有返回 usage，不会估算 token。
 
 ## 继续上次会话
 

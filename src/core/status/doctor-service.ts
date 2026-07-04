@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import { getCachePath, getProvidersPath, getUsagePath } from "../config/paths.js";
 import { readCache } from "../config/cache-store.js";
 import { ensureUsageFile } from "../config/usage-store.js";
+import { appendUsageEvent } from "../config/usage-store.js";
 import { readProviders } from "../config/providers-store.js";
 import { checkProvider, runDeepCheck } from "../models/model-discovery.js";
+import { writeLog } from "../logs/log-service.js";
 import { getKnownCandidates, resolveToolCommand } from "../runner/command-resolver.js";
-import { resolveProviderForTool } from "../runner/fallback.js";
+import { resolveProviderCandidatesForTool, type ResolvedRun } from "../runner/fallback.js";
+import { buildUsageEvent } from "../usage/usage-service.js";
 import type { ToolType } from "../types.js";
 
 export type DoctorItem = {
@@ -63,13 +66,15 @@ export async function runDoctor(): Promise<DoctorItem[]> {
 export async function runDeepDoctor(tool: ToolType = "codex"): Promise<DoctorItem[]> {
   const items = await runDoctor();
   try {
-    const resolved = await resolveProviderForTool(tool);
-    const result = await runDeepCheck(resolved.provider, resolved.model);
-    items.push({
-      group: "Deep",
-      status: result.status === "ok" ? "ok" : "error",
-      message: `${resolved.provider.name}/${resolved.model}: ${result.status}${result.error ? ` (${result.error})` : ""}`
-    });
+    const candidates = await resolveProviderCandidatesForTool(tool);
+    const success = await runDeepCandidates(tool, candidates, items);
+    if (!success) {
+      items.push({
+        group: "Deep",
+        status: "error",
+        message: "No provider passed deep diagnostics."
+      });
+    }
   } catch (error) {
     items.push({
       group: "Deep",
@@ -78,6 +83,70 @@ export async function runDeepDoctor(tool: ToolType = "codex"): Promise<DoctorIte
     });
   }
   return items;
+}
+
+async function runDeepCandidates(tool: ToolType, candidates: ResolvedRun[], items: DoctorItem[]): Promise<boolean> {
+  for (const candidate of candidates) {
+    const result = await runDeepCheck(candidate.provider, candidate.model);
+    if (result.status === "ok") {
+      if (result.usage) {
+        await recordDeepUsage(tool, candidate, result.usage);
+      }
+      items.push({
+        group: "Deep",
+        status: "ok",
+        message: `${candidate.provider.name}/${candidate.model}: ok${formatUsage(result)}`
+      });
+      return true;
+    }
+
+    items.push({
+      group: "Deep",
+      status: "warn",
+      message: `${candidate.provider.name}/${candidate.model}: failed, trying next provider (${result.error})`
+    });
+    await writeLog({
+      level: "warn",
+      category: "strategy",
+      action: "deep_fallback",
+      message: `${candidate.provider.name}/${candidate.model} failed deep check; trying next provider.`,
+      metadata: { provider: candidate.provider.name, model: candidate.model, tool, error: result.error }
+    });
+  }
+  return false;
+}
+
+async function recordDeepUsage(tool: ToolType, candidate: ResolvedRun, usage: NonNullable<Awaited<ReturnType<typeof runDeepCheck>>["usage"]>): Promise<void> {
+  await appendUsageEvent(buildUsageEvent({
+    provider: candidate.provider.name,
+    tool,
+    model: candidate.model,
+    source: "doctor_deep",
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens
+  }));
+  await writeLog({
+    category: "usage",
+    action: "token_usage_recorded",
+    message: `Recorded ${usage.totalTokens} token(s) from doctor deep check.`,
+    metadata: {
+      provider: candidate.provider.name,
+      tool,
+      model: candidate.model,
+      source: "doctor_deep",
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens
+    }
+  });
+}
+
+function formatUsage(result: Awaited<ReturnType<typeof runDeepCheck>>): string {
+  if (!result.usage) {
+    return " (usage not returned)";
+  }
+  return ` (${result.usage.totalTokens} tokens: ${result.usage.inputTokens} input, ${result.usage.outputTokens} output)`;
 }
 
 async function checkJsonFile(group: string, filePath: string, items: DoctorItem[], missingIsWarn: boolean): Promise<void> {

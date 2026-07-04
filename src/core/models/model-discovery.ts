@@ -1,4 +1,4 @@
-import type { ConnectivityResult, Provider } from "../types.js";
+import type { ConnectivityResult, Provider, TokenUsage } from "../types.js";
 
 export async function checkProvider(provider: Provider): Promise<ConnectivityResult> {
   const checkedAt = new Date().toISOString();
@@ -69,6 +69,7 @@ export async function runDeepCheck(provider: Provider, model: string): Promise<C
       })
     });
 
+    const text = await response.text();
     if (!response.ok) {
       return {
         status: "error",
@@ -78,11 +79,13 @@ export async function runDeepCheck(provider: Provider, model: string): Promise<C
       };
     }
 
+    const json = looksLikeJson(response.headers.get("content-type") ?? "", text) ? JSON.parse(text) : {};
     return {
       status: "ok",
       models: [model],
       checkedAt,
-      error: null
+      error: null,
+      usage: extractTokenUsage(json)
     };
   } catch (error) {
     return {
@@ -92,6 +95,40 @@ export async function runDeepCheck(provider: Provider, model: string): Promise<C
       error: error instanceof Error ? error.message : String(error)
     };
   }
+}
+
+export function extractTokenUsage(value: unknown): TokenUsage | undefined {
+  const usage = (value as { usage?: unknown })?.usage;
+  if (!usage || typeof usage !== "object") {
+    return undefined;
+  }
+
+  const data = usage as Record<string, unknown>;
+  const inputTokens = readNumber(data, ["input_tokens", "prompt_tokens", "inputTokens", "promptTokens"]);
+  const outputTokens = readNumber(data, ["output_tokens", "completion_tokens", "outputTokens", "completionTokens"]);
+  const totalTokens = readNumber(data, ["total_tokens", "totalTokens"]);
+
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+
+  const input = inputTokens ?? 0;
+  const output = outputTokens ?? 0;
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: totalTokens ?? input + output
+  };
+}
+
+function readNumber(data: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = data[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function buildModelUrlCandidates(baseUrl: string): string[] {

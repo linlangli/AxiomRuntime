@@ -34,6 +34,7 @@ export type UsageEvent = {
   provider: string;
   tool: ToolType;
   model: string;
+  source: "doctor_deep" | "proxy" | "cli";
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
@@ -58,6 +59,13 @@ export type ConnectivityResult = {
   models: string[];
   error: string | null;
   checkedAt: string;
+  usage?: TokenUsage;
+};
+
+export type TokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
 };
 
 export type LogLevel = "info" | "warn" | "error";
