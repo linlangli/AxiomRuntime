@@ -64,6 +64,8 @@ ai web
 
 ## Configuration Philosophy
 
+Provider configuration is global by default and lives at `~/.ai-gateway/providers.json`. `AI_GATEWAY_HOME` can override the config directory for tests or advanced workflows.
+
 `providers.json` is user-facing and should stay minimal.
 
 It should only include fields users need to configure directly:
@@ -95,9 +97,9 @@ Internal runtime data should not pollute `providers.json`.
 
 Internal files:
 
-- `.ai-cache.json`: provider health, model discovery cache, last checked time, last error.
-- `usage.json`: token usage events for status, charts, and future analytics.
-- `.ai-gateway.log`: JSONL operational logs for usage traces, errors, provider health checks, and strategy execution.
+- `~/.ai-gateway/.ai-cache.json`: provider health, model discovery cache, last checked time, last error.
+- `~/.ai-gateway/usage.json`: token usage events for status, charts, and future analytics.
+- `~/.ai-gateway/.ai-gateway.log`: JSONL operational logs for usage traces, errors, provider health checks, and strategy execution.
 - `.ai-gateway/context.md`: generated project context package for Claude Code and Codex.
 
 ## Architecture Direction

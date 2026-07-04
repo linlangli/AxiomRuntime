@@ -1,9 +1,14 @@
 import path from "node:path";
+import os from "node:os";
 
 export function getConfigRoot(): string {
   return process.env.AI_GATEWAY_HOME
     ? path.resolve(process.env.AI_GATEWAY_HOME)
-    : process.cwd();
+    : path.join(os.homedir(), ".ai-gateway");
+}
+
+export function getProjectRoot(): string {
+  return process.cwd();
 }
 
 export function getProvidersPath(): string {
@@ -23,7 +28,7 @@ export function getLogPath(): string {
 }
 
 export function getContextDir(): string {
-  return path.join(getConfigRoot(), ".ai-gateway");
+  return path.join(getProjectRoot(), ".ai-gateway");
 }
 
 export function getContextPath(): string {

@@ -66,6 +66,14 @@ ai last
 
 ### User Editable: `providers.json`
 
+Default path:
+
+```text
+~/.ai-gateway/providers.json
+```
+
+`AI_GATEWAY_HOME` can override the config directory.
+
 `providers.json` should stay clean and only contain fields users need to understand and edit.
 
 ```json
@@ -92,6 +100,12 @@ Field definitions:
 
 ### Internal Cache: `.ai-cache.json`
 
+Default path:
+
+```text
+~/.ai-gateway/.ai-cache.json
+```
+
 Stores internal runtime data:
 
 - Provider health status.
@@ -115,6 +129,12 @@ Example:
 ```
 
 ### Usage Events: `usage.json`
+
+Default path:
+
+```text
+~/.ai-gateway/usage.json
+```
 
 Stores token usage events for CLI status, web charts, and future desktop statistics.
 
@@ -140,6 +160,12 @@ Example:
 Token usage must be recorded only from real provider-returned usage data. Do not estimate token usage when the downstream CLI does not expose structured usage data.
 
 ### Internal Logs: `.ai-gateway.log`
+
+Default path:
+
+```text
+~/.ai-gateway/.ai-gateway.log
+```
 
 Stores recent operational events in JSONL format:
 

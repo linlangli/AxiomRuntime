@@ -292,7 +292,7 @@ ai web
 用户可直接编辑：
 
 ```text
-providers.json
+~/.ai-gateway/providers.json
 ```
 
 示例：
@@ -313,8 +313,15 @@ providers.json
 内部文件：
 
 ```text
-.ai-cache.json
-usage.json
+~/.ai-gateway/.ai-cache.json
+~/.ai-gateway/usage.json
+~/.ai-gateway/.ai-gateway.log
 ```
 
 除非调试问题，否则不要手动修改内部文件。
+
+如需临时使用其它配置目录：
+
+```bash
+AI_GATEWAY_HOME=/path/to/config ai list
+```

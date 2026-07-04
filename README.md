@@ -43,15 +43,18 @@ ai doctor
 
 ## 配置文件
 
-默认从当前执行目录读取：
+默认从全局配置目录读取：
 
 ```text
-providers.json
-.ai-cache.json
-usage.json
+~/.ai-gateway/providers.json
+~/.ai-gateway/.ai-cache.json
+~/.ai-gateway/usage.json
+~/.ai-gateway/.ai-gateway.log
 ```
 
-`providers.json` 含 API Key，已加入 `.gitignore`，不要提交到仓库。
+可通过 `AI_GATEWAY_HOME` 覆盖配置目录。
+
+`providers.json` 含 API Key，不要提交到仓库。
 
 更多命令用法见：
 

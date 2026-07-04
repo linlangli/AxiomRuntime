@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { getConfigRoot, getContextPath } from "../config/paths.js";
+import { getContextPath, getProjectRoot } from "../config/paths.js";
 import { readRecentLogs } from "../logs/log-service.js";
 
 const execFileAsync = promisify(execFile);
@@ -43,7 +43,7 @@ export type ProjectContext = {
 };
 
 export async function generateProjectContext(): Promise<ProjectContext> {
-  const root = getConfigRoot();
+  const root = getProjectRoot();
   const content = [
     "# AI Gateway Project Context",
     "",

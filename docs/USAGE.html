@@ -308,7 +308,7 @@ ai doctor --deep</pre>
 
         <div class="card wide">
           <h2>配置文件</h2>
-          <h3>用户可编辑：providers.json</h3>
+          <h3>用户可编辑：~/.ai-gateway/providers.json</h3>
           <pre>[
   {
     "name": "51talk",
@@ -320,8 +320,9 @@ ai doctor --deep</pre>
   }
 ]</pre>
           <h3>内部文件</h3>
-          <pre>.ai-cache.json
-usage.json</pre>
+          <pre>~/.ai-gateway/.ai-cache.json
+~/.ai-gateway/usage.json
+~/.ai-gateway/.ai-gateway.log</pre>
           <p>除非调试问题，否则不要手动修改内部文件。</p>
         </div>
       </section>
