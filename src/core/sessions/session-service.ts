@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { addSession, readSessions, updateSession } from "../config/session-store.js";
+import { addSession, clearSessions, readSessions, updateSession } from "../config/session-store.js";
 import type { Provider, SessionRecord, ToolType } from "../types.js";
 
 export type StartSessionInput = {
@@ -51,6 +51,10 @@ export async function getSession(id: string): Promise<SessionRecord | null> {
 
 export async function getLastSession(): Promise<SessionRecord | null> {
   return (await listRecentSessions(1))[0] ?? null;
+}
+
+export async function clearAllSessions(): Promise<number> {
+  return clearSessions();
 }
 
 function buildSessionId(date: Date): string {

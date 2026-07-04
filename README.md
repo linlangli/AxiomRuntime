@@ -40,6 +40,7 @@ ai context
 ai context --print
 ai session
 ai session list
+ai session clear
 ai report
 ai doctor
 ```

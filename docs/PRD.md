@@ -59,6 +59,7 @@ ai log
 ai context
 ai session
 ai session list
+ai session clear
 ai report
 ai web
 ai doctor
@@ -484,6 +485,7 @@ The context must exclude sensitive or noisy paths:
 ai session
 ai session list
 ai session resume <session-id>
+ai session clear
 ```
 
 Each `ai use` launch creates a session record in `~/.ai-gateway/sessions.json`.
@@ -494,10 +496,13 @@ Each `ai use` launch creates a session record in `~/.ai-gateway/sessions.json`.
 
 `ai session resume <session-id>` resumes a specific session launch configuration.
 
+`ai session clear` removes all AI Gateway session records from `~/.ai-gateway/sessions.json`.
+
 Current scope:
 
 - Resume means reusing `tool/provider/model/projectPath` launch parameters.
 - It does not guarantee restoration of Claude Code or Codex CLI's native chat history.
+- Clearing sessions must not delete Claude Code or Codex native conversation history.
 
 ## 14. Report Flow
 

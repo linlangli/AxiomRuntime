@@ -284,6 +284,7 @@ ai log
 ai context
 ai session
 ai session list
+ai session clear
 ai report
 ai doctor
 ai doctor --deep</pre>
@@ -293,7 +294,7 @@ ai doctor --deep</pre>
             <li><code>status</code> 展示健康度、Claude/Codex 各自的有效 baseUrl、兼容模型、真实 token 使用量和使用占比。</li>
             <li><code>log</code> 打开日志文件；<code>log --print</code> 以分块形式在终端输出最近日志。</li>
             <li><code>context</code> 生成并打开 <code>.ai-gateway/context.md</code>，用于给 Claude/Codex 提供项目上下文。</li>
-            <li><code>session</code> 进入最近 session 选择列表；<code>session list</code> 列出最近 session。</li>
+            <li><code>session</code> 进入最近 session 选择列表；<code>session list</code> 列出最近 session；<code>session clear</code> 清空 AI Gateway session 记录。</li>
             <li><code>report</code> 选择 session 生成 Markdown 报告，包含 context、真实 token、模型、provider 快照和画像信息。</li>
             <li><code>doctor</code> 检查配置文件、CLI、连通性、模型探测、level 冲突和默认模型。</li>
             <li><code>doctor --deep</code> 使用最高优先级可用 provider 验证真实推理链路，支持自动降级，可能消耗 token。</li>

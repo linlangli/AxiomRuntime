@@ -9,7 +9,7 @@ import { readProviders, writeProviders } from "../dist/core/config/providers-sto
 import { getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveProviderForTool } from "../dist/core/runner/fallback.js";
-import { finishSession, getSession, listRecentSessions, startSession } from "../dist/core/sessions/session-service.js";
+import { clearAllSessions, finishSession, getSession, listRecentSessions, startSession } from "../dist/core/sessions/session-service.js";
 import { generateSessionReport } from "../dist/core/reports/report-service.js";
 
 const ORIGINAL_FETCH = globalThis.fetch;
@@ -196,6 +196,32 @@ test("session service starts, lists, and finishes sessions", async () => {
     assert.equal(updated.status, "completed");
     assert.equal(updated.exitCode, 0);
     assert.equal(sessions[0].id, session.id);
+  });
+});
+
+test("clearAllSessions removes stored sessions", async () => {
+  await withTempHome(async () => {
+    const provider = { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" };
+    await startSession({
+      tool: "codex",
+      provider,
+      model: "gpt-5.5",
+      projectPath: "/tmp/project",
+      fallbackFrom: null
+    });
+    await startSession({
+      tool: "claude",
+      provider: { ...provider, model: "claude-sonnet-4-6" },
+      model: "claude-sonnet-4-6",
+      projectPath: "/tmp/project",
+      fallbackFrom: null
+    });
+
+    const count = await clearAllSessions();
+    const sessions = await listRecentSessions();
+
+    assert.equal(count, 2);
+    assert.equal(sessions.length, 0);
   });
 });
 

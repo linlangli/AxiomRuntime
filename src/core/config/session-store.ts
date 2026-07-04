@@ -24,3 +24,10 @@ export async function updateSession(sessionId: string, patch: Partial<SessionRec
   );
   await writeSessions(file);
 }
+
+export async function clearSessions(): Promise<number> {
+  const file = await readSessions();
+  const count = file.sessions.length;
+  await writeSessions({ sessions: [] });
+  return count;
+}

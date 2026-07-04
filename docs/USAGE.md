@@ -171,11 +171,18 @@ ai session
 ai session resume <session-id>
 ```
 
+清空所有 session：
+
+```bash
+ai session clear
+```
+
 说明：
 
 - 每次 `ai use` 启动 Claude/Codex 时会记录一条 session。
 - session 记录 tool、provider、model、项目路径、开始时间、结束时间和退出状态。
 - 当前版本是复用启动参数继续，不承诺恢复 Claude/Codex 原生聊天上下文。
+- `ai session clear` 只清空 AI Gateway 的 session 记录，不删除 Claude Code 或 Codex 自己的历史记录。
 
 ## 生成 Session 报告
 

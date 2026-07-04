@@ -61,6 +61,7 @@ ai log
 ai context
 ai session
 ai session list
+ai session clear
 ai report
 ai web
 ```
@@ -181,6 +182,8 @@ Logs must not persist full API keys. Direct command arguments such as `ai add <n
 `ai context` generates `.ai-gateway/context.md` and opens it by default. `ai context --print` prints the same content in the terminal. Context generation must exclude secrets and noisy directories.
 
 `ai report` generates a Markdown handoff report for a selected session. Reports are written to `~/.ai-gateway/reports/<session-id>.md` and include session context, real token usage, tool/model, provider snapshot, session profile, and user profile. Reports must not include API keys or estimated token usage.
+
+`ai session clear` clears AI Gateway's `sessions.json` records only. It must not delete Claude Code or Codex native conversation history.
 
 Claude Code provider injection should use a temporary `--settings` file that merges the user's existing `~/.claude/settings.json` and overrides `env.ANTHROPIC_API_KEY` plus `env.ANTHROPIC_BASE_URL`. Do not mutate the user's Claude settings for ordinary `ai use`, and do not use `--bare` by default because it disables hooks, plugin sync, auto-memory, and other default Claude Code behavior.
 
@@ -384,7 +387,7 @@ Update `USAGE.html` when:
 - `USAGE.html` has been created as the visual Chinese usage page.
 - Product and usage documents have been moved under `docs/`.
 - Foundation CLI has been implemented with no runtime third-party dependencies.
-- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai provider list`, `ai session`, `ai session list`, `ai report`, `ai status`, `ai log`, `ai context`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
+- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai provider list`, `ai session`, `ai session list`, `ai session clear`, `ai report`, `ai status`, `ai log`, `ai context`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
 - Implemented core stores: `providers.json`, `.ai-cache.json`, and `usage.json`.
 - Implemented real token usage recording for provider responses that include usage data, currently from `ai doctor --deep`.
 - Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.

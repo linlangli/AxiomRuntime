@@ -1,4 +1,5 @@
-import { getSession, listRecentSessions } from "../../core/sessions/session-service.js";
+import { clearAllSessions, getSession, listRecentSessions } from "../../core/sessions/session-service.js";
+import { writeLog } from "../../core/logs/log-service.js";
 import type { SessionRecord } from "../../core/types.js";
 import { promptSelect } from "../prompts/prompt.js";
 import { runUseCommand } from "./use.js";
@@ -7,6 +8,10 @@ export async function runSessionCommand(args: string[]): Promise<void> {
   const subcommand = args[0];
   if (subcommand === "list") {
     await printSessions();
+    return;
+  }
+  if (subcommand === "clear") {
+    await clearSessionsCommand();
     return;
   }
   if (subcommand === "resume" && args[1]) {
@@ -63,6 +68,17 @@ async function printSessions(): Promise<void> {
       console.log("-".repeat(88));
     }
   });
+}
+
+async function clearSessionsCommand(): Promise<void> {
+  const count = await clearAllSessions();
+  await writeLog({
+    category: "usage",
+    action: "sessions_cleared",
+    message: `Cleared ${count} session(s).`,
+    metadata: { count }
+  });
+  console.log(`Cleared ${count} session(s).`);
 }
 
 function formatSessionLabel(session: SessionRecord): string {
