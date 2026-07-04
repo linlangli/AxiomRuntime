@@ -108,6 +108,28 @@ Internal files:
 - `~/.ai-gateway/reports/`: generated session handoff reports.
 - `.ai-gateway/context.md`: generated project context package for Claude Code and Codex.
 
+## Release And CI
+
+The project includes a GitLab CI pipeline in `.gitlab-ci.yml`.
+
+CI rules:
+
+- Normal branch and merge request pipelines run `npm test`.
+- Tag pipelines publish to npm.
+- npm publishing requires the GitLab CI/CD variable `NPM_TOKEN`.
+- A release tag must point to a commit contained in `origin/main`.
+- The tag version must match `package.json` version. Both `v0.1.1` and `0.1.1` tag formats are accepted.
+- The publish job runs `npm test` and `npm pack --dry-run` before `npm publish --access public`.
+
+Release convention:
+
+```bash
+git switch main
+git merge develop
+npm version patch
+git push origin main --tags
+```
+
 ## Architecture Direction
 
 Use a layered architecture from the first version:

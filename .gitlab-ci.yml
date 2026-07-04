@@ -1,0 +1,60 @@
+image: node:20
+
+stages:
+  - test
+  - publish
+
+variables:
+  GIT_DEPTH: "0"
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_AUDIT: "false"
+
+cache:
+  key:
+    files:
+      - package-lock.json
+  paths:
+    - .npm/
+
+default:
+  before_script:
+    - npm ci --cache .npm --prefer-offline
+
+test:
+  stage: test
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - when: on_success
+  script:
+    - npm test
+
+publish_npm:
+  stage: publish
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: on_success
+    - when: never
+  script:
+    - |
+      if [ -z "$NPM_TOKEN" ]; then
+        echo "NPM_TOKEN is required. Add it in GitLab CI/CD variables."
+        exit 1
+      fi
+    - git fetch origin main
+    - |
+      if ! git merge-base --is-ancestor "$CI_COMMIT_SHA" origin/main; then
+        echo "Tag $CI_COMMIT_TAG does not point to a commit contained in origin/main."
+        exit 1
+      fi
+    - |
+      TAG_VERSION="${CI_COMMIT_TAG#v}"
+      PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+      if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+        echo "Tag version ($TAG_VERSION) must match package.json version ($PACKAGE_VERSION)."
+        exit 1
+      fi
+    - npm test
+    - npm pack --dry-run
+    - echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+    - npm publish --access public
