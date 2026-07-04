@@ -366,7 +366,7 @@ Update `USAGE.html` when:
 - Implemented operational logging to `.ai-gateway.log` and `ai log` for recent log inspection.
 - Implemented project context generation to `.ai-gateway/context.md`.
 - Implemented CLI command resolution fallback for known macOS app paths, including `/Applications/Codex.app/Contents/Resources/codex`.
-- Added basic Node tests for provider normalization, level swapping, and model compatibility.
+- Added Node tests for provider normalization, level swapping, model compatibility, usage parsing, provider add/edit, status aggregation, doctor diagnostics, deep usage recording, and provider fallback.
 - Added `.gitignore` to keep API keys and runtime files out of Git.
 - Added Chinese `README.md` with install, build, test, and local link instructions.
 - Product direction is CLI first, with web and Flutter desktop planned.
@@ -374,7 +374,7 @@ Update `USAGE.html` when:
 ## Next Implementation Steps
 
 1. Harden Claude Code and Codex runner argument and permission mapping.
-2. Add stronger tests around `ai add`, `ai edit`, `ai status`, and `ai doctor`.
+2. Add CLI process-level tests for command parsing and terminal output.
 3. Add project-level profile support.
 4. Add sensitive file protection rules.
 5. Implement local server foundation for future `ai web`.
