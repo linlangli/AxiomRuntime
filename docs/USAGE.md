@@ -97,7 +97,7 @@ model
 ## 列出 Provider
 
 ```bash
-ai list
+ai provider list
 ```
 
 列出 `providers.json` 中的 provider 配置：
@@ -111,7 +111,7 @@ mode
 model
 ```
 
-`ai list` 只展示配置，不刷新健康度。
+`ai provider list` 只展示配置，不刷新健康度。
 
 终端会以卡片形式展示，每个 provider 单独一块，`level: 1` 会标记为默认 provider。
 
@@ -120,6 +120,32 @@ model
 ```bash
 ai status
 ```
+
+## 会话
+
+列出最近 session：
+
+```bash
+ai session list
+```
+
+进入交互模式，选择最近 session 继续：
+
+```bash
+ai session
+```
+
+指定 session 继续：
+
+```bash
+ai session resume <session-id>
+```
+
+说明：
+
+- 每次 `ai use` 启动 Claude/Codex 时会记录一条 session。
+- session 记录 tool、provider、model、项目路径、开始时间、结束时间和退出状态。
+- 当前版本是复用启动参数继续，不承诺恢复 Claude/Codex 原生聊天上下文。
 
 执行时会轻量刷新所有 provider：
 
@@ -315,6 +341,7 @@ ai web
 ```text
 ~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
+~/.ai-gateway/sessions.json
 ~/.ai-gateway/.ai-gateway.log
 ```
 
@@ -323,5 +350,5 @@ ai web
 如需临时使用其它配置目录：
 
 ```bash
-AI_GATEWAY_HOME=/path/to/config ai list
+AI_GATEWAY_HOME=/path/to/config ai provider list
 ```

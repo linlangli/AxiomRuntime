@@ -55,10 +55,12 @@ ai use claude 51talk claude-opus-4-6
 ai use codex 51talk gpt-5.5
 ai add 51talk https://example.com sk-xxx
 ai edit
-ai list
+ai provider list
 ai status
 ai log
 ai context
+ai session
+ai session list
 ai web
 ```
 
@@ -100,6 +102,7 @@ Internal files:
 - `~/.ai-gateway/.ai-cache.json`: provider health, model discovery cache, last checked time, last error.
 - `~/.ai-gateway/usage.json`: token usage events for status, charts, and future analytics.
 - `~/.ai-gateway/.ai-gateway.log`: JSONL operational logs for usage traces, errors, provider health checks, and strategy execution.
+- `~/.ai-gateway/sessions.json`: launch session records for tool/provider/model/project.
 - `.ai-gateway/context.md`: generated project context package for Claude Code and Codex.
 
 ## Architecture Direction
@@ -167,7 +170,7 @@ The runner layer should map `mode` to Claude Code or Codex CLI permissions where
 
 ## Status And Usage
 
-`ai list` lists provider configuration from `providers.json` without refreshing provider health. It should use a readable card-style terminal layout rather than the dense status table.
+`ai provider list` lists provider configuration from `providers.json` without refreshing provider health. It should use a readable card-style terminal layout rather than the dense status table.
 
 `ai log` opens `.ai-gateway.log` with the system default app. `ai log --print` lists recent operational logs in a readable block-style terminal layout. Logs should cover command usage, errors, provider checks, fallback strategy execution, and doctor diagnostics.
 
@@ -251,7 +254,7 @@ Additional ideas:
 - Model fallback chains, such as `opus -> sonnet -> gpt -> mini`.
 - Task modes: `ai task bugfix`, `ai task review`, `ai task refactor`, and `ai task docs`.
 - Session aliases: `ai save <name>` and `ai resume <name>`.
-- Session management: `ai sessions` and `ai resume <session-id>`.
+- Session management: `ai session list` and `ai session resume <session-id>`.
 - Budget protection with token or cost limits.
 - Model and provider benchmark: `ai bench`.
 - Rule-based routing by task, project, directory, or file type.
@@ -361,7 +364,7 @@ Update `USAGE.html` when:
 - `USAGE.html` has been created as the visual Chinese usage page.
 - Product and usage documents have been moved under `docs/`.
 - Foundation CLI has been implemented with no runtime third-party dependencies.
-- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai list`, `ai status`, `ai log`, `ai context`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
+- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai provider list`, `ai session`, `ai session list`, `ai status`, `ai log`, `ai context`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
 - Implemented core stores: `providers.json`, `.ai-cache.json`, and `usage.json`.
 - Implemented real token usage recording for provider responses that include usage data, currently from `ai doctor --deep`.
 - Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.
@@ -371,6 +374,7 @@ Update `USAGE.html` when:
 - Added Node tests for provider normalization, level swapping, model compatibility, usage parsing, provider add/edit, status aggregation, doctor diagnostics, deep usage recording, and provider fallback.
 - Added `.gitignore` to keep API keys and runtime files out of Git.
 - Added Chinese `README.md` with install, build, test, and local link instructions.
+- Added interactive release script: `npm run release`; script usage lives in `scripts/USAGE.md`.
 - Product direction is CLI first, with web and Flutter desktop planned.
 
 ## Next Implementation Steps

@@ -23,6 +23,10 @@ export function getUsagePath(): string {
   return path.join(getConfigRoot(), "usage.json");
 }
 
+export function getSessionsPath(): string {
+  return path.join(getConfigRoot(), "sessions.json");
+}
+
 export function getLogPath(): string {
   return path.join(getConfigRoot(), ".ai-gateway.log");
 }

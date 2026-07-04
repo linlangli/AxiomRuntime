@@ -32,12 +32,14 @@ npm link
 ai
 ai help
 ai add
-ai list
+ai provider list
 ai status
 ai log
 ai log --print
 ai context
 ai context --print
+ai session
+ai session list
 ai doctor
 ```
 

@@ -4,6 +4,7 @@ dist/
 providers.json
 .ai-cache.json
 usage.json
+sessions.json
 .ai-gateway.log
 .ai-gateway/
 

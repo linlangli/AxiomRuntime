@@ -7,6 +7,7 @@ import { runHelpCommand } from "./commands/help.js";
 import { runListCommand } from "./commands/list.js";
 import { runLogCommand } from "./commands/log.js";
 import { runLastCommand, runUseCommand } from "./commands/use.js";
+import { runSessionCommand } from "./commands/session.js";
 import { runStatusCommand } from "./commands/status.js";
 import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
@@ -37,8 +38,11 @@ async function main(): Promise<void> {
     case "status":
       await runStatusCommand();
       break;
-    case "list":
-      await runListCommand();
+    case "provider":
+      await runProviderCommand(args);
+      break;
+    case "session":
+      await runSessionCommand(args);
       break;
     case "log":
       await runLogCommand(args);
@@ -95,8 +99,9 @@ async function runInteractive(): Promise<void> {
     { label: "use", value: "use" },
     { label: "add", value: "add" },
     { label: "edit", value: "edit" },
-    { label: "list", value: "list" },
+    { label: "provider list", value: "provider:list" },
     { label: "status", value: "status" },
+    { label: "session", value: "session" },
     { label: "doctor", value: "doctor" },
     { label: "log", value: "log" },
     { label: "context", value: "context" },
@@ -108,13 +113,23 @@ async function runInteractive(): Promise<void> {
   if (command === "use") await runUseCommand([]);
   if (command === "add") await runAddCommand([]);
   if (command === "edit") await runEditCommand();
-  if (command === "list") await runListCommand();
+  if (command === "provider:list") await runListCommand();
   if (command === "status") await runStatusCommand();
+  if (command === "session") await runSessionCommand([]);
   if (command === "doctor") await runDoctorCommand([]);
   if (command === "log") await runLogCommand([]);
   if (command === "context") await runContextCommand([]);
   if (command === "help") await runHelpCommand();
   if (command === "last") await runLastCommand();
+}
+
+async function runProviderCommand(args: string[]): Promise<void> {
+  const subcommand = args[0];
+  if (subcommand === "list") {
+    await runListCommand();
+    return;
+  }
+  throw new Error(`Unknown provider command: ${subcommand ?? "(missing)"}`);
 }
 
 main().catch(async (error) => {

@@ -45,6 +45,26 @@ export type UsageFile = {
   events: UsageEvent[];
 };
 
+export type SessionStatus = "running" | "completed" | "failed";
+
+export type SessionRecord = {
+  id: string;
+  tool: ToolType;
+  provider: string;
+  model: string;
+  mode: ProviderMode;
+  projectPath: string;
+  startedAt: string;
+  endedAt: string | null;
+  status: SessionStatus;
+  exitCode: number | null;
+  fallbackFrom: string | null;
+};
+
+export type SessionsFile = {
+  sessions: SessionRecord[];
+};
+
 export type ProviderStatus = Provider & {
   health: HealthStatus;
   models: string[];

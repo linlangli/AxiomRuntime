@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { getCachePath, getProvidersPath, getUsagePath } from "../config/paths.js";
+import { getCachePath, getProvidersPath, getSessionsPath, getUsagePath } from "../config/paths.js";
 import { readCache } from "../config/cache-store.js";
 import { ensureUsageFile } from "../config/usage-store.js";
 import { appendUsageEvent } from "../config/usage-store.js";
@@ -23,6 +23,7 @@ export async function runDoctor(): Promise<DoctorItem[]> {
   await checkJsonFile("Cache", getCachePath(), items, false);
   await ensureUsageFile();
   await checkJsonFile("Usage", getUsagePath(), items, false);
+  await checkJsonFile("Sessions", getSessionsPath(), items, false);
 
   try {
     const providers = await readProviders();

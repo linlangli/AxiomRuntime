@@ -53,10 +53,12 @@ ai use codex 51talk gpt-5.5
 ai add 51talk https://example.com sk-xxx
 
 ai edit
-ai list
+ai provider list
 ai status
 ai log
 ai context
+ai session
+ai session list
 ai web
 ai doctor
 ai last
@@ -176,6 +178,28 @@ Stores recent operational events in JSONL format:
 - Doctor diagnostics.
 
 Logs must not store full API keys. Direct command arguments that contain keys must be masked before writing logs.
+
+### Sessions: `sessions.json`
+
+Default path:
+
+```text
+~/.ai-gateway/sessions.json
+```
+
+Stores launch sessions:
+
+- session id
+- tool
+- provider
+- model
+- mode
+- project path
+- started time
+- ended time
+- status
+- exit code
+- fallback source
 
 ## 5. Add Flow
 
@@ -299,10 +323,10 @@ Provider 51talk unavailable, fallback to 1n1.
 ## 9. List Flow
 
 ```bash
-ai list
+ai provider list
 ```
 
-`ai list` lists provider configuration from `providers.json` without refreshing provider health.
+`ai provider list` lists provider configuration from `providers.json` without refreshing provider health.
 
 Show:
 
@@ -424,7 +448,28 @@ The context must exclude sensitive or noisy paths:
 - `.env`
 - key and certificate files
 
-## 13. Doctor Flow
+## 13. Session Flow
+
+```bash
+ai session
+ai session list
+ai session resume <session-id>
+```
+
+Each `ai use` launch creates a session record in `~/.ai-gateway/sessions.json`.
+
+`ai session list` lists recent sessions.
+
+`ai session` opens an interactive selector and resumes the selected session launch parameters.
+
+`ai session resume <session-id>` resumes a specific session launch configuration.
+
+Current scope:
+
+- Resume means reusing `tool/provider/model/projectPath` launch parameters.
+- It does not guarantee restoration of Claude Code or Codex CLI's native chat history.
+
+## 14. Doctor Flow
 
 ```bash
 ai doctor
@@ -483,7 +528,7 @@ Rules for `--deep`:
 - If the provider does not return usage, report that usage was not returned and do not write a fake usage event.
 - Never run as part of `ai status`.
 
-## 14. Web Control Panel
+## 15. Web Control Panel
 
 Command:
 
@@ -505,7 +550,7 @@ Planned capabilities:
 - Switch current provider/model.
 - View provider and model statistics.
 
-## 15. Architecture Requirements
+## 16. Architecture Requirements
 
 The first version must use an extensible architecture:
 
@@ -525,7 +570,7 @@ Principles:
 - `web` is the local control panel.
 - Future Flutter desktop app should call the same local server API.
 
-## 16. Todo
+## 17. Todo
 
 ### High Priority
 
@@ -552,7 +597,7 @@ Principles:
 - Context packaging command: `ai context`.
 - Task modes: `ai task bugfix`, `ai task review`, `ai task refactor`, and `ai task docs`.
 - Session aliases: `ai save <name>` and `ai resume <name>`.
-- Session management: `ai sessions` and `ai resume <session-id>`.
+- Session management: `ai session list` and `ai session resume <session-id>`.
 - Model fallback chains.
 - Model and provider benchmark: `ai bench`.
 - Rule-based routing by task, project, directory, or file type.
@@ -575,13 +620,15 @@ Principles:
 - Flutter desktop app.
 - Advanced rule-based routing.
 
-## 17. First Version Acceptance Criteria
+## 18. First Version Acceptance Criteria
 
 - `ai` enters interactive mode.
 - `ai help` opens the Chinese HTML usage guide.
 - `ai add` adds a provider and writes `providers.json`.
 - `ai edit` can change `mode`, `level`, and `model`.
-- `ai list` lists provider config without refreshing health.
+- `ai provider list` lists provider config without refreshing health.
+- `ai session list` lists recent sessions.
+- `ai session` opens an interactive selector to resume a recent session launch configuration.
 - `ai log` opens the log file, and `ai log --print` lists recent logs in the terminal.
 - `ai context` generates `.ai-gateway/context.md`.
 - Level conflicts are resolved by swapping levels.

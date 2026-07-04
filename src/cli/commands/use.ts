@@ -36,7 +36,7 @@ export async function runUseCommand(args: string[]): Promise<void> {
     if (!confirmed) return;
   }
 
-  const code = await runTool(tool, resolved.provider, resolved.model);
+  const code = await runTool(tool, resolved.provider, resolved.model, { fallbackFrom: resolved.fallbackFrom ?? null });
   process.exitCode = code;
 }
 

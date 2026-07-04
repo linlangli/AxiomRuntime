@@ -9,6 +9,7 @@ import { readProviders, writeProviders } from "../dist/core/config/providers-sto
 import { getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveProviderForTool } from "../dist/core/runner/fallback.js";
+import { finishSession, getSession, listRecentSessions, startSession } from "../dist/core/sessions/session-service.js";
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
@@ -147,6 +148,31 @@ test("resolveProviderForTool skips unhealthy providers and falls back", async ()
     const resolved = await resolveProviderForTool("codex");
     assert.equal(resolved.provider.name, "good");
     assert.equal(resolved.model, "gpt-5.4");
+  });
+});
+
+test("session service starts, lists, and finishes sessions", async () => {
+  await withTempHome(async () => {
+    const provider = { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" };
+    const session = await startSession({
+      tool: "codex",
+      provider,
+      model: "gpt-5.5",
+      projectPath: "/tmp/project",
+      fallbackFrom: null
+    });
+
+    let sessions = await listRecentSessions();
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].status, "running");
+    assert.equal(sessions[0].provider, "api");
+
+    await finishSession(session.id, 0);
+    const updated = await getSession(session.id);
+    sessions = await listRecentSessions();
+    assert.equal(updated.status, "completed");
+    assert.equal(updated.exitCode, 0);
+    assert.equal(sessions[0].id, session.id);
   });
 });
 
