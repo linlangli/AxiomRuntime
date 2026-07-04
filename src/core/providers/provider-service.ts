@@ -1,4 +1,5 @@
 import { readCache, renameProviderCache, upsertProviderCache } from "../config/cache-store.js";
+import { writeLog } from "../logs/log-service.js";
 import { readProviders, swapProviderLevel, writeProviders } from "../config/providers-store.js";
 import { checkProvider } from "../models/model-discovery.js";
 import type { Provider, ProviderMode } from "../types.js";
@@ -95,6 +96,13 @@ export async function refreshProvider(provider: Provider): Promise<void> {
     models: result.models,
     lastCheckedAt: result.checkedAt,
     lastError: result.error
+  });
+  await writeLog({
+    level: result.status === "ok" ? "info" : "error",
+    category: "provider",
+    action: "provider_health_check",
+    message: `${provider.name}: ${result.status}${result.error ? ` (${result.error})` : ""}`,
+    metadata: { provider: provider.name, status: result.status, models: result.models.length, checkedAt: result.checkedAt }
   });
 }
 

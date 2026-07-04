@@ -1,4 +1,5 @@
 import { readCache } from "../../core/config/cache-store.js";
+import { writeLog } from "../../core/logs/log-service.js";
 import { refreshAllProviders } from "../../core/providers/provider-service.js";
 import { resolveProviderForTool } from "../../core/runner/fallback.js";
 import { runTool } from "../../core/runner/tool-runner.js";
@@ -15,9 +16,21 @@ export async function runUseCommand(args: string[]): Promise<void> {
 
   if (resolved.fallbackFrom) {
     console.log(`Provider ${resolved.fallbackFrom} unavailable, fallback to ${resolved.provider.name}.`);
+    await writeLog({
+      category: "strategy",
+      action: "fallback_applied",
+      message: `Provider ${resolved.fallbackFrom} unavailable, fallback to ${resolved.provider.name}.`,
+      metadata: { from: resolved.fallbackFrom, to: resolved.provider.name, tool, model: resolved.model }
+    });
   }
 
   console.log(`Using ${tool}: ${resolved.provider.name} / ${resolved.model}`);
+  await writeLog({
+    category: "usage",
+    action: "tool_start",
+    message: `Starting ${tool}: ${resolved.provider.name} / ${resolved.model}`,
+    metadata: { tool, provider: resolved.provider.name, model: resolved.model, mode: resolved.provider.mode }
+  });
   if (resolved.provider.mode === "ask") {
     const confirmed = await promptConfirm("Start CLI?");
     if (!confirmed) return;

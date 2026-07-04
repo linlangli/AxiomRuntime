@@ -32,7 +32,10 @@ npm link
 ai
 ai help
 ai add
+ai list
 ai status
+ai log
+ai log --print
 ai doctor
 ```
 

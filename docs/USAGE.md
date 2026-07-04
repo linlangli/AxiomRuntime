@@ -113,6 +113,8 @@ model
 
 `ai list` 只展示配置，不刷新健康度。
 
+终端会以卡片形式展示，每个 provider 单独一块，`level: 1` 会标记为默认 provider。
+
 ## 查看状态
 
 ```bash
@@ -139,6 +141,39 @@ model
 最近检查时间
 token 使用量
 使用占比
+```
+
+## 查看日志
+
+```bash
+ai log
+```
+
+打开日志文件。
+
+终端打印最近日志：
+
+```bash
+ai log --print
+ai log --print 100
+```
+
+`--print` 会按日志条目分块展示，适合快速查看最近错误和策略执行记录。
+
+日志包括：
+
+```text
+使用痕迹
+报错信息
+provider 健康检查
+fallback 策略执行
+doctor 诊断记录
+```
+
+日志文件：
+
+```text
+.ai-gateway.log
 ```
 
 ## 检查本地环境

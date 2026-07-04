@@ -55,6 +55,7 @@ ai add 51talk https://example.com sk-xxx
 ai edit
 ai list
 ai status
+ai log
 ai web
 ai doctor
 ai last
@@ -133,6 +134,18 @@ Example:
   ]
 }
 ```
+
+### Internal Logs: `.ai-gateway.log`
+
+Stores recent operational events in JSONL format:
+
+- Command usage traces.
+- Error messages.
+- Provider health checks.
+- Fallback and routing strategy execution.
+- Doctor diagnostics.
+
+Logs must not store full API keys. Direct command arguments that contain keys must be masked before writing logs.
 
 ## 5. Add Flow
 
@@ -305,7 +318,40 @@ Provider health comes from `.ai-cache.json`.
 
 If a provider does not support a token-free model discovery endpoint, mark the model cache as unavailable or stale. Token-consuming deep tests should be reserved for explicit diagnostic commands such as `ai doctor --deep`.
 
-## 11. Doctor Flow
+## 11. Log Flow
+
+```bash
+ai log
+ai log --print
+ai log --print 100
+```
+
+`ai log` opens `.ai-gateway.log` with the system default app.
+
+`ai log --print` lists recent entries in the terminal.
+
+Default limit: 50 entries.
+
+Maximum limit: 500 entries.
+
+Each log entry should include:
+
+- timestamp
+- level
+- category
+- action
+- message
+- metadata
+
+Log categories:
+
+- `usage`
+- `error`
+- `strategy`
+- `provider`
+- `system`
+
+## 12. Doctor Flow
 
 ```bash
 ai doctor
@@ -363,7 +409,7 @@ Rules for `--deep`:
 - Record token usage if the provider returns usage data.
 - Never run as part of `ai status`.
 
-## 12. Web Control Panel
+## 13. Web Control Panel
 
 Command:
 
@@ -385,7 +431,7 @@ Planned capabilities:
 - Switch current provider/model.
 - View provider and model statistics.
 
-## 13. Architecture Requirements
+## 14. Architecture Requirements
 
 The first version must use an extensible architecture:
 
@@ -405,7 +451,7 @@ Principles:
 - `web` is the local control panel.
 - Future Flutter desktop app should call the same local server API.
 
-## 14. Todo
+## 15. Todo
 
 ### High Priority
 
@@ -452,13 +498,14 @@ Principles:
 - Flutter desktop app.
 - Advanced rule-based routing.
 
-## 15. First Version Acceptance Criteria
+## 16. First Version Acceptance Criteria
 
 - `ai` enters interactive mode.
 - `ai help` opens the Chinese HTML usage guide.
 - `ai add` adds a provider and writes `providers.json`.
 - `ai edit` can change `mode`, `level`, and `model`.
 - `ai list` lists provider config without refreshing health.
+- `ai log` opens the log file, and `ai log --print` lists recent logs in the terminal.
 - Level conflicts are resolved by swapping levels.
 - `ai status` lists health for all providers.
 - `ai doctor` prints a diagnostic report without consuming tokens by default.

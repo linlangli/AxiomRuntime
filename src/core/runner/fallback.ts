@@ -1,5 +1,6 @@
 import { readCache } from "../config/cache-store.js";
 import { readProviders } from "../config/providers-store.js";
+import { writeLog } from "../logs/log-service.js";
 import { pickCompatibleModel } from "../models/model-filter.js";
 import type { Provider, ToolType } from "../types.js";
 
@@ -31,13 +32,34 @@ export async function resolveProviderForTool(
   for (const provider of candidates) {
     const cached = cache.providers[provider.name];
     if (cached?.status === "error") {
+      await writeLog({
+        level: "warn",
+        category: "strategy",
+        action: "fallback_skip_provider",
+        message: `Skipped provider ${provider.name} because health is error.`,
+        metadata: { provider: provider.name, tool, reason: cached.lastError }
+      });
       continue;
     }
 
     const model = modelName || pickCompatibleModel(tool, provider.model, cached?.models ?? []) || provider.model;
     if (!model) {
+      await writeLog({
+        level: "warn",
+        category: "strategy",
+        action: "fallback_skip_provider",
+        message: `Skipped provider ${provider.name} because no model is available.`,
+        metadata: { provider: provider.name, tool }
+      });
       continue;
     }
+
+    await writeLog({
+      category: "strategy",
+      action: "provider_resolved",
+      message: `Resolved provider ${provider.name} with model ${model}.`,
+      metadata: { provider: provider.name, tool, model, requestedProvider: providerName ?? null, requestedModel: modelName ?? null }
+    });
 
     return {
       provider,

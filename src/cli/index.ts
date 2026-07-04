@@ -4,12 +4,21 @@ import { runDoctorCommand } from "./commands/doctor.js";
 import { runEditCommand } from "./commands/edit.js";
 import { runHelpCommand } from "./commands/help.js";
 import { runListCommand } from "./commands/list.js";
+import { runLogCommand } from "./commands/log.js";
 import { runLastCommand, runUseCommand } from "./commands/use.js";
 import { runStatusCommand } from "./commands/status.js";
+import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
 
 async function main(): Promise<void> {
   const [, , command, ...args] = process.argv;
+  const safeArgs = sanitizeArgs(command, args);
+  await writeLog({
+    category: "usage",
+    action: "command_start",
+    message: `Command started: ${command ?? "interactive"}`,
+    metadata: { command: command ?? "interactive", args: safeArgs }
+  });
 
   switch (command) {
     case undefined:
@@ -30,6 +39,9 @@ async function main(): Promise<void> {
     case "list":
       await runListCommand();
       break;
+    case "log":
+      await runLogCommand(args);
+      break;
     case "doctor":
       await runDoctorCommand(args);
       break;
@@ -43,10 +55,35 @@ async function main(): Promise<void> {
       console.log("`ai web` is planned but not implemented in this foundation build.");
       break;
     default:
+      await writeLog({
+        level: "warn",
+        category: "usage",
+        action: "unknown_command",
+        message: `Unknown command: ${command}`,
+        metadata: { command, args: safeArgs }
+      });
       console.error(`Unknown command: ${command}`);
       console.error("Run `ai help` for usage.");
       process.exitCode = 1;
   }
+}
+
+function sanitizeArgs(command: string | undefined, args: string[]): string[] {
+  if (command === "add" && args.length >= 3) {
+    return [args[0]!, args[1]!, maskSecretArg(args[2]!)];
+  }
+  return args.map((arg, index) => {
+    const previous = args[index - 1]?.toLowerCase();
+    if (previous === "--api-key" || previous === "--apikey" || previous === "--key") {
+      return maskSecretArg(arg);
+    }
+    return arg;
+  });
+}
+
+function maskSecretArg(value: string): string {
+  if (value.length <= 8) return "****";
+  return `${value.slice(0, 4)}****${value.slice(-4)}`;
 }
 
 async function runInteractive(): Promise<void> {
@@ -57,6 +94,7 @@ async function runInteractive(): Promise<void> {
     { label: "list", value: "list" },
     { label: "status", value: "status" },
     { label: "doctor", value: "doctor" },
+    { label: "log", value: "log" },
     { label: "help", value: "help" },
     { label: "last", value: "last" },
     { label: "exit", value: "exit" }
@@ -68,11 +106,18 @@ async function runInteractive(): Promise<void> {
   if (command === "list") await runListCommand();
   if (command === "status") await runStatusCommand();
   if (command === "doctor") await runDoctorCommand([]);
+  if (command === "log") await runLogCommand([]);
   if (command === "help") await runHelpCommand();
   if (command === "last") await runLastCommand();
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  await writeLog({
+    level: "error",
+    category: "error",
+    action: "command_error",
+    message: error instanceof Error ? error.message : String(error)
+  });
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });

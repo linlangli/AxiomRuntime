@@ -59,3 +59,16 @@ export type ConnectivityResult = {
   error: string | null;
   checkedAt: string;
 };
+
+export type LogLevel = "info" | "warn" | "error";
+
+export type LogCategory = "usage" | "error" | "strategy" | "provider" | "system";
+
+export type LogEvent = {
+  timestamp: string;
+  level: LogLevel;
+  category: LogCategory;
+  action: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+};

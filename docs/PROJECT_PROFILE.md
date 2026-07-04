@@ -57,6 +57,7 @@ ai add 51talk https://example.com sk-xxx
 ai edit
 ai list
 ai status
+ai log
 ai web
 ```
 
@@ -95,6 +96,7 @@ Internal files:
 
 - `.ai-cache.json`: provider health, model discovery cache, last checked time, last error.
 - `usage.json`: token usage events for status, charts, and future analytics.
+- `.ai-gateway.log`: JSONL operational logs for usage traces, errors, provider health checks, and strategy execution.
 
 ## Architecture Direction
 
@@ -161,7 +163,11 @@ The runner layer should map `mode` to Claude Code or Codex CLI permissions where
 
 ## Status And Usage
 
-`ai list` lists provider configuration from `providers.json` without refreshing provider health.
+`ai list` lists provider configuration from `providers.json` without refreshing provider health. It should use a readable card-style terminal layout rather than the dense status table.
+
+`ai log` opens `.ai-gateway.log` with the system default app. `ai log --print` lists recent operational logs in a readable block-style terminal layout. Logs should cover command usage, errors, provider checks, fallback strategy execution, and doctor diagnostics.
+
+Logs must not persist full API keys. Direct command arguments such as `ai add <name> <baseUrl> <apiKey>` must be masked before logging.
 
 `ai status` should list all providers and include health.
 
@@ -324,9 +330,10 @@ Update `USAGE.html` when:
 - `USAGE.html` has been created as the visual Chinese usage page.
 - Product and usage documents have been moved under `docs/`.
 - Foundation CLI has been implemented with no runtime third-party dependencies.
-- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai list`, `ai status`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
+- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai list`, `ai status`, `ai log`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
 - Implemented core stores: `providers.json`, `.ai-cache.json`, and `usage.json`.
 - Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.
+- Implemented operational logging to `.ai-gateway.log` and `ai log` for recent log inspection.
 - Implemented CLI command resolution fallback for known macOS app paths, including `/Applications/Codex.app/Contents/Resources/codex`.
 - Added basic Node tests for provider normalization, level swapping, and model compatibility.
 - Added `.gitignore` to keep API keys and runtime files out of Git.

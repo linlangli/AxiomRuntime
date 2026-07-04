@@ -18,6 +18,10 @@ export function getUsagePath(): string {
   return path.join(getConfigRoot(), "usage.json");
 }
 
+export function getLogPath(): string {
+  return path.join(getConfigRoot(), ".ai-gateway.log");
+}
+
 export function getUsageHtmlPath(): string {
   return path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../docs/USAGE.html");
 }

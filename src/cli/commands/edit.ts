@@ -1,4 +1,5 @@
 import { readCache } from "../../core/config/cache-store.js";
+import { writeLog } from "../../core/logs/log-service.js";
 import { listProviders, updateProvider } from "../../core/providers/provider-service.js";
 import type { Provider, ProviderMode } from "../../core/types.js";
 import { promptSelect, promptText } from "../prompts/prompt.js";
@@ -30,6 +31,12 @@ export async function runEditCommand(): Promise<void> {
   const patch = await buildPatch(provider, providers, field);
   const updated = await updateProvider(provider.name, patch);
   console.log(`Updated provider: ${updated.name}`);
+  await writeLog({
+    category: "provider",
+    action: "provider_edit",
+    message: `Updated provider: ${updated.name}`,
+    metadata: { provider: provider.name, field, renamedTo: updated.name !== provider.name ? updated.name : undefined }
+  });
 }
 
 async function buildPatch(provider: Provider, providers: Provider[], field: EditableField): Promise<Partial<Provider>> {
