@@ -44,6 +44,9 @@ ai use codex 51talk gpt-5.5
 - 不指定 provider 时，使用 `level: 1` 的 provider。
 - 不指定模型时，使用该 provider 的默认 `model`。
 - 当前 provider 不可用时，按 `level` 自动降级。
+- 启动 Claude Code 时，AI Gateway 会生成临时 `--settings` 文件，把 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 写入 settings 的 `env` 后启动；不会修改 `~/.claude/settings.json`，也不会使用 `--bare`。
+- 如果 provider 的 `baseUrl` 是 OpenAI 兼容地址，例如 `https://icode.51talk.biz/v1`，启动 Claude Code 时会自动注入 `https://icode.51talk.biz`；启动 Codex 时仍使用 `/v1`。
+- 启动记录会写入日志，包含 provider、baseUrl、模型、启动参数和 API Key 指纹，不包含完整 API Key。
 
 ## 添加 Provider
 
@@ -126,20 +129,25 @@ ai status
 - 不发送真实对话请求。
 - 默认不消耗 token。
 
-展示内容：
+终端会按 provider 分块展示，避免小窗口表格错位。展示内容：
 
 ```text
 level
 name
-baseUrl
+Claude 状态
+Claude 实际 baseUrl
+Codex 状态
+Codex 实际 baseUrl
+配置 baseUrl
 apiKey
 mode
-model
 健康度
 最近检查时间
 token 使用量
 使用占比
 ```
+
+`ai status` 是轻量检查：它验证 provider 连通性、模型列表、Claude/Codex 各自的有效 baseUrl 和兼容模型，不发送真实对话请求。
 
 token 使用量来自 `usage.json` 中真实记录的 provider usage。当前只有 AI Gateway 自己发起且 provider 返回 usage 的请求会累计，例如 `ai doctor --deep`。
 

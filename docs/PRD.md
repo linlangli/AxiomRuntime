@@ -302,6 +302,13 @@ Default rules:
 - If provider is omitted, use the provider with `level: 1`.
 - If model is omitted, use the selected provider's default `model`.
 - If the provider is unavailable, trigger automatic fallback.
+- Claude Code launches must pass `--model <model>` and a temporary `--settings <file>` containing `env.ANTHROPIC_API_KEY` and `env.ANTHROPIC_BASE_URL`.
+- Ordinary `ai use` must not mutate `~/.claude/settings.json`.
+- Ordinary `ai use` must not use `--bare` by default.
+- If a configured provider base URL ends with `/v1`, Claude Code launches must strip the trailing `/v1` before injecting `ANTHROPIC_BASE_URL`.
+- Codex/OpenAI-compatible launches must keep the configured `/v1` suffix.
+- Runtime logs must include provider, model, mode, baseUrl, command path, launch args, auth injection mode, fallback, and an API key fingerprint.
+- Runtime logs must never print the full API key.
 
 ## 8. Automatic Fallback
 
@@ -366,14 +373,24 @@ Refresh must be lightweight:
 - Do not send chat/completion/inference requests.
 - Do not intentionally consume model tokens.
 
+Provider connectivity and downstream runtime readiness are separate:
+
+- Provider health checks whether token-free model discovery works.
+- Claude readiness uses Claude's effective base URL and a compatible Claude model.
+- Codex readiness uses Codex/OpenAI's effective base URL and a compatible Codex model.
+- `health: ok` must not be treated as proof that a real inference request will succeed.
+
 Show all providers:
 
 - `level`
 - `name`
-- `baseUrl`
+- configured `baseUrl`
+- Claude runtime state
+- Claude effective baseUrl
+- Codex runtime state
+- Codex effective baseUrl
 - masked `apiKey`
 - `mode`
-- default `model`
 - health
 - last checked time
 - token usage

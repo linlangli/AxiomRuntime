@@ -182,9 +182,22 @@ Logs must not persist full API keys. Direct command arguments such as `ai add <n
 
 `ai report` generates a Markdown handoff report for a selected session. Reports are written to `~/.ai-gateway/reports/<session-id>.md` and include session context, real token usage, tool/model, provider snapshot, session profile, and user profile. Reports must not include API keys or estimated token usage.
 
+Claude Code provider injection should use a temporary `--settings` file that merges the user's existing `~/.claude/settings.json` and overrides `env.ANTHROPIC_API_KEY` plus `env.ANTHROPIC_BASE_URL`. Do not mutate the user's Claude settings for ordinary `ai use`, and do not use `--bare` by default because it disables hooks, plugin sync, auto-memory, and other default Claude Code behavior.
+
+Tool-specific base URL rules:
+
+- Claude Code should receive the Anthropic root base URL. If a provider is configured with an OpenAI-compatible `/v1` suffix, strip the trailing `/v1` before injecting `ANTHROPIC_BASE_URL`.
+- Codex/OpenAI-compatible flows should keep the configured `/v1` suffix.
+
+Real `ai use` launches should write provider, baseUrl, model, launch args, auth injection mode, and a non-secret API key fingerprint to logs so provider/key routing can be audited safely without exposing the full key.
+
 `ai status` should list all providers and include health.
 
 `ai status` refreshes all providers before rendering the table. This refresh must be lightweight: connectivity check and model discovery only. It must not send chat, completion, or inference requests by default, so it should not intentionally consume model tokens.
+
+`ai status` must distinguish provider connectivity from downstream runtime readiness. It should show Claude and Codex separately, including each tool's effective base URL and selected compatible model. A provider-level `health: ok` only means model discovery worked; it must not be presented as proof that inference will succeed.
+
+`ai status` should use a card/block layout rather than a wide table so output remains readable in narrow terminal windows.
 
 Model discovery should try `{baseUrl}/models` first and then `{baseUrl}/v1/models` if the first endpoint fails or returns a non-JSON response. This handles providers where the UI root and API root differ.
 
@@ -194,10 +207,13 @@ Status fields:
 
 - level
 - name
-- baseUrl
+- configured baseUrl
+- Claude runtime state
+- Claude effective baseUrl
+- Codex runtime state
+- Codex effective baseUrl
 - masked apiKey
 - mode
-- default model
 - health
 - last checked time
 - token usage

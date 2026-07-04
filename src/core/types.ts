@@ -72,6 +72,15 @@ export type ProviderStatus = Provider & {
   lastError: string | null;
   weeklyTokens: number;
   usageShare: number;
+  claude: ToolProviderStatus;
+  codex: ToolProviderStatus;
+};
+
+export type ToolProviderStatus = {
+  state: "ready" | "no-model" | "provider-error";
+  baseUrl: string;
+  model: string | null;
+  note: string;
 };
 
 export type ConnectivityResult = {

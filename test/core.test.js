@@ -3,6 +3,7 @@ import test from "node:test";
 import { normalizeProviders, swapProviderLevel } from "../dist/core/config/providers-store.js";
 import { extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
+import { getSecretFingerprint, getToolBaseUrl } from "../dist/core/runner/tool-runner.js";
 
 test("normalizes provider levels by priority", () => {
   const providers = normalizeProviders([
@@ -67,4 +68,26 @@ test("extracts Anthropic-style token usage", () => {
       totalTokens: 10
     }
   );
+});
+
+test("secret fingerprint identifies keys without exposing full value", () => {
+  const key = "sk-TESTKEY1234567890abcdefghijklmnopQRSTUV";
+  const fingerprint = getSecretFingerprint(key);
+
+  assert.equal(fingerprint.includes(key), false);
+  assert.match(fingerprint, /^sk-TESTK\.\.\.QRSTUV len=42$/);
+});
+
+test("normalizes base URL per downstream tool", () => {
+  const provider = {
+    name: "api",
+    baseUrl: "https://icode.51talk.biz/v1/",
+    apiKey: "key",
+    mode: "auto",
+    level: 1,
+    model: "claude-sonnet-4-6"
+  };
+
+  assert.equal(getToolBaseUrl("claude", provider), "https://icode.51talk.biz");
+  assert.equal(getToolBaseUrl("codex", provider), "https://icode.51talk.biz/v1");
 });

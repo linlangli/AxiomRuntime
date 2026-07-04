@@ -1,6 +1,7 @@
 import { getProviderStatuses } from "../../core/status/status-service.js";
 import { writeLog } from "../../core/logs/log-service.js";
-import { maskSecret, printTable } from "../output/table.js";
+import type { ProviderStatus, ToolProviderStatus } from "../../core/types.js";
+import { maskSecret } from "../output/table.js";
 
 export async function runStatusCommand(): Promise<void> {
   const statuses = await getProviderStatuses({ refresh: true });
@@ -10,19 +11,48 @@ export async function runStatusCommand(): Promise<void> {
     message: `Refreshed ${statuses.length} provider(s) for status.`,
     metadata: { providers: statuses.map((status) => ({ name: status.name, health: status.health, models: status.models.length })) }
   });
-  printTable(
-    statuses.map((status) => ({
-      level: status.level,
-      name: status.name,
-      health: status.health,
-      mode: status.mode,
-      model: status.model || "(none)",
-      baseUrl: status.baseUrl,
-      apiKey: maskSecret(status.apiKey),
-      models: status.models.length,
-      weeklyTokens: status.weeklyTokens,
-      usageShare: `${status.usageShare}%`,
-      checked: status.lastCheckedAt ?? "(never)"
-    }))
-  );
+  printStatusCards(statuses);
+}
+
+function printStatusCards(statuses: ProviderStatus[]): void {
+  if (!statuses.length) {
+    console.log("No providers configured. Run `ai add` first.");
+    return;
+  }
+
+  console.log(`AI Gateway Status (${statuses.length})`);
+  console.log("=".repeat(72));
+
+  statuses.forEach((status, index) => {
+    const isDefault = status.level === 1;
+    const title = `${status.level.toString().padStart(2, "0")}  ${status.name}${isDefault ? "  [default]" : ""}`;
+    const healthLine = `${title}  health:${status.health}  mode:${status.mode}`;
+
+    console.log(healthLine);
+    console.log("-".repeat(Math.min(72, Math.max(28, healthLine.length))));
+    printToolStatus("Claude", status.claude);
+    printToolStatus("Codex ", status.codex);
+    console.log(`  Config   ${status.baseUrl}`);
+    console.log(`  API Key  ${maskSecret(status.apiKey)}`);
+    console.log(`  Models   ${status.models.length}`);
+    console.log(`  Usage    ${status.weeklyTokens} weekly token(s), ${status.usageShare}% share`);
+    console.log(`  Checked  ${status.lastCheckedAt ?? "(never)"}`);
+    if (status.lastError) {
+      console.log(`  Error    ${status.lastError}`);
+    }
+
+    if (index < statuses.length - 1) {
+      console.log("");
+    }
+  });
+}
+
+function printToolStatus(label: string, status: ToolProviderStatus): void {
+  const state = status.state === "ready" ? "ready" : status.state;
+  const model = status.model ?? "(none)";
+  console.log(`  ${label}  ${state}  ${model}`);
+  console.log(`          ${status.baseUrl}`);
+  if (status.state !== "ready") {
+    console.log(`          ${status.note}`);
+  }
 }

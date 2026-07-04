@@ -234,6 +234,9 @@ ai use codex 51talk gpt-5.5</pre>
             <li>不指定 provider 时，使用 <code>level: 1</code>。</li>
             <li>不指定模型时，使用 provider 默认 <code>model</code>。</li>
             <li>provider 不可用时，按 <code>level</code> 自动降级。</li>
+            <li>启动 Claude Code 时会使用临时 <code>--settings</code> 文件注入 <code>ANTHROPIC_API_KEY</code> 和 <code>ANTHROPIC_BASE_URL</code>，不会修改用户 settings，也不会使用 <code>--bare</code>。</li>
+            <li>如果 provider 地址是 <code>https://icode.51talk.biz/v1</code>，Claude Code 会自动注入根地址 <code>https://icode.51talk.biz</code>；Codex 仍使用 <code>/v1</code>。</li>
+            <li>启动记录会写入日志，包含 provider、baseUrl、模型、启动参数和 Key 指纹，不包含完整 Key。</li>
           </ul>
         </div>
 
@@ -287,7 +290,7 @@ ai doctor --deep</pre>
           <ul>
             <li><code>provider list</code> 只读取配置，以卡片形式展示 provider 的名称、地址、Key、level、mode 和默认模型。</li>
             <li><code>status</code> 会轻量刷新所有 provider，不发送真实对话请求，默认不消耗 token。</li>
-            <li><code>status</code> 展示健康度、默认模型、真实 token 使用量和使用占比。</li>
+            <li><code>status</code> 展示健康度、Claude/Codex 各自的有效 baseUrl、兼容模型、真实 token 使用量和使用占比。</li>
             <li><code>log</code> 打开日志文件；<code>log --print</code> 以分块形式在终端输出最近日志。</li>
             <li><code>context</code> 生成并打开 <code>.ai-gateway/context.md</code>，用于给 Claude/Codex 提供项目上下文。</li>
             <li><code>session</code> 进入最近 session 选择列表；<code>session list</code> 列出最近 session。</li>

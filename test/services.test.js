@@ -88,6 +88,28 @@ test("getProviderStatuses refreshes health and aggregates weekly tokens", async 
     assert.equal(statuses[0].models.length, 1);
     assert.equal(statuses[0].weeklyTokens, 15);
     assert.equal(statuses[0].usageShare, 100);
+    assert.equal(statuses[0].codex.state, "ready");
+    assert.equal(statuses[0].codex.baseUrl, "https://api.test/v1");
+    assert.equal(statuses[0].claude.state, "no-model");
+    assert.equal(statuses[0].claude.baseUrl, "https://api.test");
+  });
+});
+
+test("getProviderStatuses reports tool-specific runtime readiness", async () => {
+  await withTempHome(async () => {
+    mockFetchModels(["claude-sonnet-4-6", "gpt-5.5"]);
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-sonnet-4-6" }
+    ]);
+
+    const statuses = await getProviderStatuses({ refresh: true });
+
+    assert.equal(statuses[0].claude.state, "ready");
+    assert.equal(statuses[0].claude.model, "claude-sonnet-4-6");
+    assert.equal(statuses[0].claude.baseUrl, "https://api.test");
+    assert.equal(statuses[0].codex.state, "ready");
+    assert.equal(statuses[0].codex.model, "gpt-5.5");
+    assert.equal(statuses[0].codex.baseUrl, "https://api.test/v1");
   });
 });
 
