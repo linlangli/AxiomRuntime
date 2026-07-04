@@ -178,6 +178,54 @@ doctor 诊断记录
 .ai-gateway.log
 ```
 
+## 生成项目上下文
+
+```bash
+ai context
+```
+
+生成并打开：
+
+```text
+.ai-gateway/context.md
+```
+
+终端打印：
+
+```bash
+ai context --print
+```
+
+上下文包括：
+
+```text
+项目路径
+Git 分支和最近 commit
+git status
+git diff --stat
+package.json scripts
+文件树摘要
+关键文档摘要
+最近 AI Gateway 日志
+```
+
+默认排除：
+
+```text
+node_modules
+dist
+build
+.git
+.ai-gateway
+providers.json
+.ai-cache.json
+usage.json
+.ai-gateway.log
+.env
+*.key
+*.pem
+```
+
 ## 检查本地环境
 
 ```bash

@@ -56,6 +56,7 @@ ai edit
 ai list
 ai status
 ai log
+ai context
 ai web
 ai doctor
 ai last
@@ -269,8 +270,6 @@ CLI fallback output should be explicit:
 Provider 51talk unavailable, fallback to 1n1.
 ```
 
-## 9. Status Flow
-
 ## 9. List Flow
 
 ```bash
@@ -354,7 +353,52 @@ Log categories:
 - `provider`
 - `system`
 
-## 12. Doctor Flow
+## 12. Context Flow
+
+```bash
+ai context
+ai context --print
+```
+
+`ai context` generates a safe project context package at:
+
+```text
+.ai-gateway/context.md
+```
+
+Default behavior:
+
+- Generate context markdown.
+- Open the generated file with the system default app.
+
+`--print` prints the generated context to the terminal.
+
+The context should include:
+
+- Project root.
+- Git branch and latest commit.
+- `git status --short`.
+- `git diff --stat`.
+- `package.json` metadata and scripts.
+- A shallow file tree summary.
+- Key document excerpts.
+- Recent AI Gateway logs.
+
+The context must exclude sensitive or noisy paths:
+
+- `node_modules`
+- `dist`
+- `build`
+- `.git`
+- `.ai-gateway`
+- `providers.json`
+- `.ai-cache.json`
+- `usage.json`
+- `.ai-gateway.log`
+- `.env`
+- key and certificate files
+
+## 13. Doctor Flow
 
 ```bash
 ai doctor
@@ -413,7 +457,7 @@ Rules for `--deep`:
 - If the provider does not return usage, report that usage was not returned and do not write a fake usage event.
 - Never run as part of `ai status`.
 
-## 13. Web Control Panel
+## 14. Web Control Panel
 
 Command:
 
@@ -435,7 +479,7 @@ Planned capabilities:
 - Switch current provider/model.
 - View provider and model statistics.
 
-## 14. Architecture Requirements
+## 15. Architecture Requirements
 
 The first version must use an extensible architecture:
 
@@ -455,7 +499,7 @@ Principles:
 - `web` is the local control panel.
 - Future Flutter desktop app should call the same local server API.
 
-## 15. Todo
+## 16. Todo
 
 ### High Priority
 
@@ -505,7 +549,7 @@ Principles:
 - Flutter desktop app.
 - Advanced rule-based routing.
 
-## 16. First Version Acceptance Criteria
+## 17. First Version Acceptance Criteria
 
 - `ai` enters interactive mode.
 - `ai help` opens the Chinese HTML usage guide.
@@ -513,6 +557,7 @@ Principles:
 - `ai edit` can change `mode`, `level`, and `model`.
 - `ai list` lists provider config without refreshing health.
 - `ai log` opens the log file, and `ai log --print` lists recent logs in the terminal.
+- `ai context` generates `.ai-gateway/context.md`.
 - Level conflicts are resolved by swapping levels.
 - `ai status` lists health for all providers.
 - `ai status` shows weekly token usage from real `usage.json` events.

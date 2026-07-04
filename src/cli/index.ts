@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { runAddCommand } from "./commands/add.js";
+import { runContextCommand } from "./commands/context.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runEditCommand } from "./commands/edit.js";
 import { runHelpCommand } from "./commands/help.js";
@@ -41,6 +42,9 @@ async function main(): Promise<void> {
       break;
     case "log":
       await runLogCommand(args);
+      break;
+    case "context":
+      await runContextCommand(args);
       break;
     case "doctor":
       await runDoctorCommand(args);
@@ -95,6 +99,7 @@ async function runInteractive(): Promise<void> {
     { label: "status", value: "status" },
     { label: "doctor", value: "doctor" },
     { label: "log", value: "log" },
+    { label: "context", value: "context" },
     { label: "help", value: "help" },
     { label: "last", value: "last" },
     { label: "exit", value: "exit" }
@@ -107,6 +112,7 @@ async function runInteractive(): Promise<void> {
   if (command === "status") await runStatusCommand();
   if (command === "doctor") await runDoctorCommand([]);
   if (command === "log") await runLogCommand([]);
+  if (command === "context") await runContextCommand([]);
   if (command === "help") await runHelpCommand();
   if (command === "last") await runLastCommand();
 }

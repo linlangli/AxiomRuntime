@@ -5,6 +5,7 @@ providers.json
 .ai-cache.json
 usage.json
 .ai-gateway.log
+.ai-gateway/
 
 .DS_Store
 *.log

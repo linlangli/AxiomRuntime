@@ -58,6 +58,7 @@ ai edit
 ai list
 ai status
 ai log
+ai context
 ai web
 ```
 
@@ -97,6 +98,7 @@ Internal files:
 - `.ai-cache.json`: provider health, model discovery cache, last checked time, last error.
 - `usage.json`: token usage events for status, charts, and future analytics.
 - `.ai-gateway.log`: JSONL operational logs for usage traces, errors, provider health checks, and strategy execution.
+- `.ai-gateway/context.md`: generated project context package for Claude Code and Codex.
 
 ## Architecture Direction
 
@@ -168,6 +170,8 @@ The runner layer should map `mode` to Claude Code or Codex CLI permissions where
 `ai log` opens `.ai-gateway.log` with the system default app. `ai log --print` lists recent operational logs in a readable block-style terminal layout. Logs should cover command usage, errors, provider checks, fallback strategy execution, and doctor diagnostics.
 
 Logs must not persist full API keys. Direct command arguments such as `ai add <name> <baseUrl> <apiKey>` must be masked before logging.
+
+`ai context` generates `.ai-gateway/context.md` and opens it by default. `ai context --print` prints the same content in the terminal. Context generation must exclude secrets and noisy directories.
 
 `ai status` should list all providers and include health.
 
@@ -242,8 +246,6 @@ Recommended early investments:
 - Sensitive file protection for `.env`, keys, certificates, private keys, and production config.
 
 Additional ideas:
-
-- Context packaging: `ai context` generates a project summary, directory tree, key files, recent diff, and failed test logs.
 - Model fallback chains, such as `opus -> sonnet -> gpt -> mini`.
 - Task modes: `ai task bugfix`, `ai task review`, `ai task refactor`, and `ai task docs`.
 - Session aliases: `ai save <name>` and `ai resume <name>`.
@@ -357,11 +359,12 @@ Update `USAGE.html` when:
 - `USAGE.html` has been created as the visual Chinese usage page.
 - Product and usage documents have been moved under `docs/`.
 - Foundation CLI has been implemented with no runtime third-party dependencies.
-- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai list`, `ai status`, `ai log`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
+- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai list`, `ai status`, `ai log`, `ai context`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
 - Implemented core stores: `providers.json`, `.ai-cache.json`, and `usage.json`.
 - Implemented real token usage recording for provider responses that include usage data, currently from `ai doctor --deep`.
 - Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.
 - Implemented operational logging to `.ai-gateway.log` and `ai log` for recent log inspection.
+- Implemented project context generation to `.ai-gateway/context.md`.
 - Implemented CLI command resolution fallback for known macOS app paths, including `/Applications/Codex.app/Contents/Resources/codex`.
 - Added basic Node tests for provider normalization, level swapping, and model compatibility.
 - Added `.gitignore` to keep API keys and runtime files out of Git.

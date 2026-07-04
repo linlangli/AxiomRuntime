@@ -211,6 +211,7 @@
           <div class="command"><strong>列出 Provider</strong><code>ai list</code></div>
           <div class="command"><strong>查看状态</strong><code>ai status</code></div>
           <div class="command"><strong>查看日志</strong><code>ai log</code></div>
+          <div class="command"><strong>项目上下文</strong><code>ai context</code></div>
           <div class="command"><strong>检查环境</strong><code>ai doctor</code></div>
           <div class="command"><strong>打开面板</strong><code>ai web</code></div>
         </div>
@@ -277,6 +278,7 @@ ai use codex 51talk gpt-5.5</pre>
           <pre>ai list
 ai status
 ai log
+ai context
 ai doctor
 ai doctor --deep</pre>
           <ul>
@@ -284,6 +286,7 @@ ai doctor --deep</pre>
             <li><code>status</code> 会轻量刷新所有 provider，不发送真实对话请求，默认不消耗 token。</li>
             <li><code>status</code> 展示健康度、默认模型、真实 token 使用量和使用占比。</li>
             <li><code>log</code> 打开日志文件；<code>log --print</code> 以分块形式在终端输出最近日志。</li>
+            <li><code>context</code> 生成并打开 <code>.ai-gateway/context.md</code>，用于给 Claude/Codex 提供项目上下文。</li>
             <li><code>doctor</code> 检查配置文件、CLI、连通性、模型探测、level 冲突和默认模型。</li>
             <li><code>doctor --deep</code> 使用最高优先级可用 provider 验证真实推理链路，支持自动降级，可能消耗 token。</li>
             <li>如果 provider 返回 usage，<code>doctor --deep</code> 会写入真实 token 使用记录。</li>

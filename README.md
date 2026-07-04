@@ -36,6 +36,8 @@ ai list
 ai status
 ai log
 ai log --print
+ai context
+ai context --print
 ai doctor
 ```
 
