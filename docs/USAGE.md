@@ -92,8 +92,6 @@ model
 - 如果选择的 `level` 已被占用，会和对应 provider 交换等级。
 - `model` 从已探测到的模型中选择，不手动输入。
 
-## 查看状态
-
 ## 列出 Provider
 
 ```bash
@@ -121,6 +119,30 @@ model
 ai status
 ```
 
+执行时会轻量刷新所有 provider：
+
+- 检查连通性。
+- 刷新模型缓存。
+- 不发送真实对话请求。
+- 默认不消耗 token。
+
+展示内容：
+
+```text
+level
+name
+baseUrl
+apiKey
+mode
+model
+健康度
+最近检查时间
+token 使用量
+使用占比
+```
+
+token 使用量来自 `usage.json` 中真实记录的 provider usage。当前只有 AI Gateway 自己发起且 provider 返回 usage 的请求会累计，例如 `ai doctor --deep`。
+
 ## 会话
 
 列出最近 session：
@@ -147,29 +169,33 @@ ai session resume <session-id>
 - session 记录 tool、provider、model、项目路径、开始时间、结束时间和退出状态。
 - 当前版本是复用启动参数继续，不承诺恢复 Claude/Codex 原生聊天上下文。
 
-执行时会轻量刷新所有 provider：
+## 生成 Session 报告
 
-- 检查连通性。
-- 刷新模型缓存。
-- 不发送真实对话请求。
-- 默认不消耗 token。
+交互选择 session 并生成报告：
 
-展示内容：
-
-```text
-level
-name
-baseUrl
-apiKey
-mode
-model
-健康度
-最近检查时间
-token 使用量
-使用占比
+```bash
+ai report
 ```
 
-token 使用量来自 `usage.json` 中真实记录的 provider usage。当前只有 AI Gateway 自己发起且 provider 返回 usage 的请求会累计，例如 `ai doctor --deep`。
+指定 session：
+
+```bash
+ai report <session-id>
+```
+
+直接在终端打印：
+
+```bash
+ai report --print <session-id>
+```
+
+报告会写入：
+
+```text
+~/.ai-gateway/reports/<session-id>.md
+```
+
+报告包含 session context、真实 token 汇总、工具和模型、provider 快照、当前 session 画像和用户画像。报告不会写入 API Key，也不会估算 token。
 
 ## 查看日志
 
@@ -342,6 +368,7 @@ ai web
 ~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
 ~/.ai-gateway/sessions.json
+~/.ai-gateway/reports/
 ~/.ai-gateway/.ai-gateway.log
 ```
 

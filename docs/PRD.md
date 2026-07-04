@@ -59,6 +59,7 @@ ai log
 ai context
 ai session
 ai session list
+ai report
 ai web
 ai doctor
 ai last
@@ -200,6 +201,18 @@ Stores launch sessions:
 - status
 - exit code
 - fallback source
+
+### Reports: `reports/`
+
+Default path:
+
+```text
+~/.ai-gateway/reports/
+```
+
+Stores generated session handoff reports.
+
+Reports must not contain API keys or estimated token usage.
 
 ## 5. Add Flow
 
@@ -469,7 +482,30 @@ Current scope:
 - Resume means reusing `tool/provider/model/projectPath` launch parameters.
 - It does not guarantee restoration of Claude Code or Codex CLI's native chat history.
 
-## 14. Doctor Flow
+## 14. Report Flow
+
+```bash
+ai report
+ai report <session-id>
+ai report --print <session-id>
+```
+
+`ai report` opens an interactive selector for recent sessions and generates a Markdown report.
+
+Reports are written to `~/.ai-gateway/reports/<session-id>.md`.
+
+Report content:
+
+- session context for agent handoff
+- token usage from real recorded provider usage events
+- tool and model type
+- provider snapshot
+- current session profile
+- user profile
+
+Token usage must be matched from structured `usage.json` events by session time window, tool, provider, and model. AI Gateway must not estimate missing usage.
+
+## 15. Doctor Flow
 
 ```bash
 ai doctor

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { getContextPath, getProjectRoot } from "../config/paths.js";
+import { getContextPathForRoot, getProjectRoot } from "../config/paths.js";
 import { readRecentLogs } from "../logs/log-service.js";
 
 const execFileAsync = promisify(execFile);
@@ -42,8 +42,7 @@ export type ProjectContext = {
   content: string;
 };
 
-export async function generateProjectContext(): Promise<ProjectContext> {
-  const root = getProjectRoot();
+export async function generateProjectContext(root = getProjectRoot()): Promise<ProjectContext> {
   const content = [
     "# AI Gateway Project Context",
     "",
@@ -57,7 +56,7 @@ export async function generateProjectContext(): Promise<ProjectContext> {
     await renderLogsSection()
   ].join("\n");
 
-  const filePath = getContextPath();
+  const filePath = getContextPathForRoot(root);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${content.trim()}\n`, "utf8");
   return { filePath, content: `${content.trim()}\n` };

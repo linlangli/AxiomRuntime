@@ -40,6 +40,7 @@ ai context
 ai context --print
 ai session
 ai session list
+ai report
 ai doctor
 ```
 
@@ -51,6 +52,8 @@ ai doctor
 ~/.ai-gateway/providers.json
 ~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
+~/.ai-gateway/sessions.json
+~/.ai-gateway/reports/
 ~/.ai-gateway/.ai-gateway.log
 ```
 

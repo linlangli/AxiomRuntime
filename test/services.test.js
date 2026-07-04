@@ -10,6 +10,7 @@ import { getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveProviderForTool } from "../dist/core/runner/fallback.js";
 import { finishSession, getSession, listRecentSessions, startSession } from "../dist/core/sessions/session-service.js";
+import { generateSessionReport } from "../dist/core/reports/report-service.js";
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
@@ -173,6 +174,50 @@ test("session service starts, lists, and finishes sessions", async () => {
     assert.equal(updated.status, "completed");
     assert.equal(updated.exitCode, 0);
     assert.equal(sessions[0].id, session.id);
+  });
+});
+
+test("generateSessionReport writes agent handoff report with session usage", async () => {
+  await withTempHome(async (tempDir) => {
+    const projectDir = path.join(tempDir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, "README.md"), "# Demo Project\n", "utf8");
+    const provider = { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" };
+    await writeProviders([provider]);
+    await upsertProviderCache("api", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+    const session = await startSession({
+      tool: "codex",
+      provider,
+      model: "gpt-5.5",
+      projectPath: projectDir,
+      fallbackFrom: null
+    });
+    await fs.writeFile(
+      path.join(process.env.AI_GATEWAY_HOME, "usage.json"),
+      JSON.stringify({
+        events: [
+          {
+            provider: "api",
+            tool: "codex",
+            model: "gpt-5.5",
+            source: "doctor_deep",
+            inputTokens: 20,
+            outputTokens: 8,
+            totalTokens: 28,
+            createdAt: new Date().toISOString()
+          }
+        ]
+      })
+    );
+    await finishSession(session.id, 0);
+
+    const report = await generateSessionReport(session.id);
+
+    assert.equal(report.filePath.endsWith(`${session.id}.md`), true);
+    assert.match(report.content, /# AI Gateway Session Report/);
+    assert.match(report.content, /- Total tokens: 28/);
+    assert.match(report.content, /## Session Context/);
+    assert.match(await fs.readFile(report.filePath, "utf8"), /Demo Project/);
   });
 });
 

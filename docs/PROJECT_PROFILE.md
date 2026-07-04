@@ -61,6 +61,7 @@ ai log
 ai context
 ai session
 ai session list
+ai report
 ai web
 ```
 
@@ -103,6 +104,7 @@ Internal files:
 - `~/.ai-gateway/usage.json`: token usage events for status, charts, and future analytics.
 - `~/.ai-gateway/.ai-gateway.log`: JSONL operational logs for usage traces, errors, provider health checks, and strategy execution.
 - `~/.ai-gateway/sessions.json`: launch session records for tool/provider/model/project.
+- `~/.ai-gateway/reports/`: generated session handoff reports.
 - `.ai-gateway/context.md`: generated project context package for Claude Code and Codex.
 
 ## Architecture Direction
@@ -177,6 +179,8 @@ The runner layer should map `mode` to Claude Code or Codex CLI permissions where
 Logs must not persist full API keys. Direct command arguments such as `ai add <name> <baseUrl> <apiKey>` must be masked before logging.
 
 `ai context` generates `.ai-gateway/context.md` and opens it by default. `ai context --print` prints the same content in the terminal. Context generation must exclude secrets and noisy directories.
+
+`ai report` generates a Markdown handoff report for a selected session. Reports are written to `~/.ai-gateway/reports/<session-id>.md` and include session context, real token usage, tool/model, provider snapshot, session profile, and user profile. Reports must not include API keys or estimated token usage.
 
 `ai status` should list all providers and include health.
 
@@ -364,7 +368,7 @@ Update `USAGE.html` when:
 - `USAGE.html` has been created as the visual Chinese usage page.
 - Product and usage documents have been moved under `docs/`.
 - Foundation CLI has been implemented with no runtime third-party dependencies.
-- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai provider list`, `ai session`, `ai session list`, `ai status`, `ai log`, `ai context`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
+- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai provider list`, `ai session`, `ai session list`, `ai report`, `ai status`, `ai log`, `ai context`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
 - Implemented core stores: `providers.json`, `.ai-cache.json`, and `usage.json`.
 - Implemented real token usage recording for provider responses that include usage data, currently from `ai doctor --deep`.
 - Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.

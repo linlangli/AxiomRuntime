@@ -27,6 +27,14 @@ export function getSessionsPath(): string {
   return path.join(getConfigRoot(), "sessions.json");
 }
 
+export function getReportsDir(): string {
+  return path.join(getConfigRoot(), "reports");
+}
+
+export function getReportPath(sessionId: string): string {
+  return path.join(getReportsDir(), `${sessionId}.md`);
+}
+
 export function getLogPath(): string {
   return path.join(getConfigRoot(), ".ai-gateway.log");
 }
@@ -37,6 +45,10 @@ export function getContextDir(): string {
 
 export function getContextPath(): string {
   return path.join(getContextDir(), "context.md");
+}
+
+export function getContextPathForRoot(root: string): string {
+  return path.join(root, ".ai-gateway", "context.md");
 }
 
 export function getUsageHtmlPath(): string {
