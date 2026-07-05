@@ -36,6 +36,7 @@ ai provider list
 ai hermes
 ai hermes list
 ai hermes edit
+ai hermes sync
 ai hermes status
 ai hermes import-local
 ai status

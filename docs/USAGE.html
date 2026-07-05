@@ -247,6 +247,7 @@ ai use codex 51talk gpt-5.5</pre>
 ai hermes add
 ai hermes list
 ai hermes edit
+ai hermes sync
 ai hermes status
 ai hermes use robot-name
 ai use hermes robot-name</pre>
@@ -264,6 +265,7 @@ ai hermes import ./hermes-robot.json</pre>
             <li><code>list</code> 只列出机器人配置，不刷新健康度。</li>
             <li><code>status</code> 检查 Hermes CLI、provider、模型缓存和 Telegram 绑定状态。</li>
             <li><code>use</code> 使用 <code>~/.ai-gateway/hermes/&lt;机器人名称&gt;/</code> 独立运行目录启动 Hermes，不读取全局 <code>~/.hermes/config.yaml</code> 的 API Key。</li>
+            <li><code>add/edit</code> 保存后会自动同步本机 <code>~/.hermes/config.yaml</code> 并重启 Hermes gateway；Telegram 里的 <code>/model</code> 只显示 AI Gateway 配置过的 provider。<code>sync</code> 只作为手动补救命令。</li>
             <li><code>clear</code> 清空机器人状态和记忆，保留配置。</li>
             <li><code>delete</code> 删除机器人配置和 AI Gateway 管理状态。</li>
             <li><code>export</code> 不导出 API Key，可复制到其他电脑后用 <code>import</code> 导入。</li>

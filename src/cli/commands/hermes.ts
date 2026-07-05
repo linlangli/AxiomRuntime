@@ -9,6 +9,7 @@ import {
   importLocalHermesRobots,
   importHermesRobot,
   listHermesRobots,
+  syncHermesRobotToLocalConfigAndRestart,
   updateHermesRobot,
   useHermesRobot
 } from "../../core/hermes/hermes-service.js";
@@ -38,6 +39,9 @@ export async function runHermesCommand(args: string[]): Promise<void> {
     case "edit":
       await runHermesEditCommand(rest[0]);
       return;
+    case "sync":
+      await runHermesSyncCommand(rest[0]);
+      return;
     case "clear":
       await runHermesClearCommand(rest[0]);
       return;
@@ -65,6 +69,7 @@ async function runHermesInteractive(): Promise<void> {
     { label: "add", value: "add" },
     { label: "list", value: "list" },
     { label: "edit", value: "edit" },
+    { label: "sync local config", value: "sync" },
     { label: "clear", value: "clear" },
     { label: "delete", value: "delete" },
     { label: "import", value: "import" },
@@ -78,6 +83,7 @@ async function runHermesInteractive(): Promise<void> {
   if (command === "add") await runHermesAddCommand();
   if (command === "list") await runHermesListCommand();
   if (command === "edit") await runHermesEditCommand();
+  if (command === "sync") await runHermesSyncCommand();
   if (command === "clear") await runHermesClearCommand();
   if (command === "delete") await runHermesDeleteCommand();
   if (command === "import") await runHermesImportCommand();
@@ -116,6 +122,7 @@ async function runHermesAddCommand(): Promise<void> {
     telegram
   });
   console.log(`Added Hermes robot: ${robot.name}`);
+  await syncAndRestartLocalHermes(robot.name);
 }
 
 async function runHermesEditCommand(name?: string): Promise<void> {
@@ -137,6 +144,7 @@ async function runHermesEditCommand(name?: string): Promise<void> {
     const newName = await promptText("Robot name", { defaultValue: robot.name });
     const updated = await updateHermesRobot(robot.name, { name: newName });
     console.log(`Updated Hermes robot: ${updated.name}`);
+    await syncAndRestartLocalHermes(updated.name);
     return;
   }
 
@@ -150,6 +158,7 @@ async function runHermesEditCommand(name?: string): Promise<void> {
     const model = await selectModel(provider);
     const updated = await updateHermesRobot(robot.name, { provider: provider.name, model });
     console.log(`Updated Hermes robot: ${updated.name}`);
+    await syncAndRestartLocalHermes(updated.name);
     return;
   }
 
@@ -161,6 +170,7 @@ async function runHermesEditCommand(name?: string): Promise<void> {
     const model = await selectModel(provider);
     const updated = await updateHermesRobot(robot.name, { model });
     console.log(`Updated Hermes robot: ${updated.name}`);
+    await syncAndRestartLocalHermes(updated.name);
     return;
   }
 
@@ -171,6 +181,7 @@ async function runHermesEditCommand(name?: string): Promise<void> {
     ]);
     const updated = await updateHermesRobot(robot.name, { mode });
     console.log(`Updated Hermes robot: ${updated.name}`);
+    await syncAndRestartLocalHermes(updated.name);
     return;
   }
 
@@ -184,6 +195,7 @@ async function runHermesEditCommand(name?: string): Promise<void> {
     : { enabled: false, chatId: "", name: "" };
   const updated = await updateHermesRobot(robot.name, { telegram });
   console.log(`Updated Hermes robot: ${updated.name}`);
+  await syncAndRestartLocalHermes(updated.name);
 }
 
 async function runHermesListCommand(): Promise<void> {
@@ -251,6 +263,18 @@ async function runHermesDeleteCommand(name?: string): Promise<void> {
   }
   await deleteHermesRobot(robotName);
   console.log(`Deleted Hermes robot: ${robotName}`);
+}
+
+async function runHermesSyncCommand(name?: string): Promise<void> {
+  const robotName = name ?? (await selectRobotName("Select robot to sync"));
+  await syncAndRestartLocalHermes(robotName);
+}
+
+async function syncAndRestartLocalHermes(robotName: string): Promise<void> {
+  const result = await syncHermesRobotToLocalConfigAndRestart(robotName);
+  console.log(`Synced local Hermes config: ${result.configPath}`);
+  console.log(`Active Hermes default: ${result.robot.name} / ${result.provider.name} / ${result.robot.model}`);
+  console.log(result.restart.message);
 }
 
 async function runHermesExportCommand(name?: string): Promise<void> {

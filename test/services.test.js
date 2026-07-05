@@ -20,6 +20,8 @@ import {
   importHermesRobot,
   importLocalHermesRobots,
   listHermesRobots,
+  syncHermesRobotToLocalConfigAndRestart,
+  syncHermesRobotToLocalConfig,
   updateHermesRobot
 } from "../dist/core/hermes/hermes-service.js";
 import { readHermesState, upsertHermesRobotState } from "../dist/core/hermes/hermes-store.js";
@@ -347,6 +349,108 @@ test("hermes runtime uses isolated config with selected provider credentials", a
   });
 });
 
+test("syncHermesRobotToLocalConfig updates native Hermes model config", async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "native-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    await fs.mkdir(hermesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(hermesDir, "config.yaml"),
+      [
+        "toolsets:",
+        "  - hermes-cli",
+        "model:",
+        "  default: old-model",
+        "  provider: anthropic",
+        "  base_url: https://old.example",
+        "  api_key: old-key",
+        "terminal:",
+        "  backend: local"
+      ].join("\n")
+    );
+    await fs.writeFile(
+      path.join(hermesDir, ".env"),
+      [
+        "ANTHROPIC_API_KEY=sk-old-api",
+        "ANTHROPIC_TOKEN=sk-old-token",
+        "ANTHROPIC_BASE_URL=https://old.example",
+        "OTHER_SETTING=keep"
+      ].join("\n")
+    );
+    await fs.writeFile(
+      path.join(hermesDir, "auth.json"),
+      JSON.stringify({
+        version: 1,
+        providers: { "openai-codex": { tokens: { access_token: "secret" } } },
+        credential_pool: { copilot: [{ access_token: "secret" }] },
+        active_provider: "openai-codex"
+      })
+    );
+    await writeProviders([
+      {
+        name: "51talk-cs",
+        baseUrl: "https://icode.51talk.biz/v1",
+        apiKey: "sk-selected-native",
+        mode: "auto",
+        level: 1,
+        model: "claude-sonnet-4-6"
+      }
+    ]);
+    await addHermesRobot({ name: "telegram-bot", provider: "51talk-cs", model: "claude-sonnet-4-6" });
+
+    const result = await syncHermesRobotToLocalConfig("telegram-bot");
+    const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
+    const env = await fs.readFile(path.join(hermesDir, ".env"), "utf8");
+    const auth = JSON.parse(await fs.readFile(path.join(hermesDir, "auth.json"), "utf8"));
+
+    assert.equal(result.configPath, path.join(hermesDir, "config.yaml"));
+    assert.equal(result.envPath, path.join(hermesDir, ".env"));
+    assert.match(config, /toolsets:\n  - hermes-cli/);
+    assert.match(config, /terminal:\n  backend: local/);
+    assert.match(config, /default: "claude-sonnet-4-6"/);
+    assert.match(config, /provider: "51talk-cs"/);
+    assert.match(config, /base_url: "https:\/\/icode\.51talk\.biz"/);
+    assert.match(config, /api_key: "sk-selected-native"/);
+    assert.match(config, /providers:\n  51talk-cs:/);
+    assert.match(config, /custom_providers:\n  - name: "51talk-cs"/);
+    assert.doesNotMatch(config, /old-key|old-model|https:\/\/old\.example/);
+    assert.match(env, /^ANTHROPIC_API_KEY=$/m);
+    assert.match(env, /^ANTHROPIC_BASE_URL=$/m);
+    assert.match(env, /^ANTHROPIC_TOKEN=$/m);
+    assert.match(env, /^COPILOT_GITHUB_TOKEN=$/m);
+    assert.match(env, /OTHER_SETTING=keep/);
+    assert.doesNotMatch(env, /sk-selected-native|sk-old-api|sk-old-token/);
+    assert.deepEqual(auth.providers, {});
+    assert.deepEqual(auth.credential_pool, {});
+    assert.equal(auth.active_provider, "");
+  });
+});
+
+test("syncHermesRobotToLocalConfigAndRestart can skip gateway restart in tests", async () => {
+  await withTempHome(async (tempDir) => {
+    process.env.AI_GATEWAY_SKIP_HERMES_RESTART = "1";
+    const hermesDir = path.join(tempDir, "native-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    await writeProviders([
+      {
+        name: "51talk-cs",
+        baseUrl: "https://icode.51talk.biz",
+        apiKey: "sk-selected-native",
+        mode: "auto",
+        level: 1,
+        model: "claude-sonnet-4-6"
+      }
+    ]);
+    await addHermesRobot({ name: "telegram-bot", provider: "51talk-cs", model: "claude-sonnet-4-6" });
+
+    const result = await syncHermesRobotToLocalConfigAndRestart("telegram-bot");
+
+    assert.equal(result.restart.restarted, false);
+    assert.equal(result.restart.method, "skipped");
+    assert.equal(result.configPath, path.join(hermesDir, "config.yaml"));
+  });
+});
+
 test("hermes robots are stored in editable hermes.json and can be edited", async () => {
   await withTempHome(async () => {
     await writeProviders([
@@ -515,6 +619,7 @@ test("imports local Hermes config and cron jobs as robots", async () => {
 async function withTempHome(fn) {
   const previousHome = process.env.AI_GATEWAY_HOME;
   const previousHermesHome = process.env.AI_GATEWAY_HERMES_HOME;
+  const previousSkipHermesRestart = process.env.AI_GATEWAY_SKIP_HERMES_RESTART;
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-test-"));
   process.env.AI_GATEWAY_HOME = tempDir;
   try {
@@ -529,6 +634,11 @@ async function withTempHome(fn) {
       delete process.env.AI_GATEWAY_HERMES_HOME;
     } else {
       process.env.AI_GATEWAY_HERMES_HOME = previousHermesHome;
+    }
+    if (previousSkipHermesRestart === undefined) {
+      delete process.env.AI_GATEWAY_SKIP_HERMES_RESTART;
+    } else {
+      process.env.AI_GATEWAY_SKIP_HERMES_RESTART = previousSkipHermesRestart;
     }
     globalThis.fetch = ORIGINAL_FETCH;
     await fs.rm(tempDir, { recursive: true, force: true });

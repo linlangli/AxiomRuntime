@@ -114,6 +114,7 @@ ai hermes use <robot-name>
 ai hermes add
 ai hermes list
 ai hermes edit
+ai hermes sync <robot-name>
 ai hermes clear
 ai hermes delete
 ai hermes import <file>
@@ -159,6 +160,8 @@ Editable fields:
 - Telegram binding
 
 The flow should be selection-first. Avoid requiring users to remember provider names or model names.
+
+After add/edit, the CLI automatically syncs the selected robot into native local Hermes config for Telegram use and attempts to restart the local Hermes gateway.
 
 ## List Flow
 
@@ -232,6 +235,38 @@ Runtime injection:
 
 - Anthropic-compatible robots: write `model.provider: anthropic`, selected base URL, selected API key, and also pass `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`.
 - OpenAI-compatible robots: write `model.provider: auto`, selected base URL, selected API key, and also pass `OPENAI_API_KEY` / `OPENAI_BASE_URL`.
+
+## Native Local Config Sync
+
+Command:
+
+```bash
+ai hermes sync <robot-name>
+```
+
+Purpose:
+
+- Make native local Hermes surfaces, especially Telegram-backed Hermes, use the same provider/model selected in AI Gateway.
+- This command is a manual repair path. Normal add/edit flows sync and restart automatically.
+- This is separate from `ai hermes use`, which launches Hermes with an isolated AI Gateway-managed `HERMES_HOME`.
+
+Behavior:
+
+1. Load the robot from `hermes.json`.
+2. Resolve the referenced provider from `providers.json`.
+3. Write the robot's model, provider kind, base URL, and API key into the top-level `model:` block in `~/.hermes/config.yaml` or `AI_GATEWAY_HERMES_HOME/config.yaml`.
+4. Write all AI Gateway providers into native Hermes `providers:` and `custom_providers:` so gateway `/model` lists AI Gateway providers only.
+5. Clear native Hermes provider credential entry points in `.env` and `auth.json` that would otherwise make built-in providers appear in `/model`.
+6. Preserve unrelated native Hermes config blocks.
+7. Restart the local Hermes gateway when possible.
+8. Log only the API key fingerprint, not the full key.
+
+Rules:
+
+- Never write API keys into `hermes.json`.
+- Sync is allowed to write API keys into native Hermes config because that is the configuration file the native Hermes service uses.
+- After sync, Telegram `/model` should show only AI Gateway-configured providers.
+- Restart prefers launchd `ai.hermes.gateway` on macOS and falls back to `hermes gateway restart`.
 
 ## Clear Flow
 

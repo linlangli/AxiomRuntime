@@ -71,6 +71,7 @@ ai hermes use <robot-name>
 ai hermes add
 ai hermes list
 ai hermes edit
+ai hermes sync <robot-name>
 ai hermes clear
 ai hermes delete
 ai hermes import <file>
@@ -164,6 +165,7 @@ ai hermes use <robot-name>
 ai hermes add
 ai hermes list
 ai hermes edit
+ai hermes sync <robot-name>
 ai hermes clear
 ai hermes delete
 ai hermes import <file>
@@ -181,6 +183,7 @@ Behavior rules:
 - `list` shows robot configuration only.
 - `status` checks Hermes CLI availability, provider existence, provider health, model cache, Telegram binding status, and recent robot state.
 - `use` launches Hermes CLI for the selected robot.
+- `add` and `edit` automatically sync the selected robot plus all AI Gateway providers into native local Hermes config at `~/.hermes/config.yaml`, preserve unrelated Hermes settings, clear native Hermes provider credential entry points, and restart the local Hermes gateway when possible. Telegram `/model` should show only AI Gateway-configured providers. `sync` remains available as a manual repair command.
 - `clear` resets robot memory and AI Gateway-managed runtime state while keeping robot configuration.
 - `delete` removes the robot configuration and AI Gateway-managed robot state.
 - `import` and `export` move robot definitions between machines without API keys.
@@ -345,7 +348,7 @@ Planned features:
 - Drag-and-drop level ordering.
 - Default model switching.
 - Provider/model statistics.
-- Hermes robot list, status, provider/model, Telegram binding, edit, tasks, recent errors, usage share, import/export, clear, and delete.
+- Hermes robot list, status, provider/model, Telegram binding, edit, native local config sync, tasks, recent errors, usage share, import/export, clear, and delete.
 
 ## Extension Management Direction
 
@@ -505,7 +508,7 @@ Update `USAGE.html` when:
 - Added Chinese `README.md` with install, build, test, and local link instructions.
 - Added interactive release script: `npm run release`; script usage lives in `scripts/USAGE.md`.
 - Added GitLab CI release plan for tag-triggered npm publishing.
-- Implemented Hermes robot foundation: `ai hermes`, `ai hermes add/list/edit/status/use/clear/delete/import/import-local/export`, `ai use hermes <robot>`, user-editable `hermes.json`, robot store, state store, import/export, local Hermes import, and isolated Hermes runtime launch.
+- Implemented Hermes robot foundation: `ai hermes`, `ai hermes add/list/edit/status/use/sync/clear/delete/import/import-local/export`, `ai use hermes <robot>`, user-editable `hermes.json`, robot store, state store, import/export, local Hermes import, native local config sync, and isolated Hermes runtime launch.
 - Hermes robot integration has been documented in `docs/HERMES_INTEGRATION.md`.
 - Product direction is CLI first, with web and Flutter desktop planned.
 

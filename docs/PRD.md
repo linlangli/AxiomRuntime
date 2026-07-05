@@ -70,6 +70,7 @@ ai hermes use <robot-name>
 ai hermes add
 ai hermes list
 ai hermes edit
+ai hermes sync <robot-name>
 ai hermes clear
 ai hermes delete
 ai hermes import <file>
@@ -686,6 +687,7 @@ ai hermes use <robot-name>
 ai hermes add
 ai hermes list
 ai hermes edit
+ai hermes sync <robot-name>
 ai hermes clear
 ai hermes delete
 ai hermes import <file>
@@ -731,6 +733,20 @@ Launch rules:
 - Do not mutate `~/.hermes/config.yaml` by default.
 - Write AI Gateway logs and session records.
 - Mask all secrets.
+
+`ai hermes add` and `ai hermes edit` automatically write the selected robot and AI Gateway provider list into the native local Hermes config file at `~/.hermes/config.yaml`, then restart the local Hermes gateway when possible.
+
+`ai hermes sync <robot-name>` keeps the same behavior as a manual repair command.
+
+Sync rules:
+
+- Replace only the top-level `model:` block.
+- Write AI Gateway providers into native Hermes `providers:` and `custom_providers:` so Telegram `/model` lists AI Gateway providers only.
+- Clear native Hermes provider credential entry points in `.env` and `auth.json` that would otherwise make built-in providers appear in `/model`.
+- Preserve other native Hermes configuration such as Telegram, toolsets, terminal, cron, memory settings, and MCP servers.
+- Use the referenced AI Gateway provider from `providers.json`.
+- Never write secrets into `hermes.json`; secrets are written only to the native Hermes config during `add`, `edit`, or explicit `sync`.
+- Restart the native Hermes gateway automatically after sync. Prefer launchd `ai.hermes.gateway` on macOS; fall back to `hermes gateway restart`.
 
 `ai hermes clear` resets robot memory and AI Gateway-managed robot runtime state while keeping robot configuration.
 

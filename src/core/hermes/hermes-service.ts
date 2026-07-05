@@ -1,11 +1,14 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { getHermesExportPath } from "../config/paths.js";
 import { readCache } from "../config/cache-store.js";
 import { readProviders } from "../config/providers-store.js";
 import { writeJsonFile } from "../config/json-store.js";
 import { writeLog } from "../logs/log-service.js";
+import { getSecretFingerprint, getToolBaseUrl } from "../runner/tool-runner.js";
 import { getProviderStatuses } from "../status/status-service.js";
 import type { Provider } from "../types.js";
 import {
@@ -25,6 +28,9 @@ import type {
   ImportHermesRobotResult,
   UpdateHermesRobotInput
 } from "./hermes-types.js";
+
+const execFileAsync = promisify(execFile);
+const DEFAULT_HERMES_LAUNCHD_LABEL = "ai.hermes.gateway";
 
 export async function listHermesRobots(): Promise<HermesRobot[]> {
   return (await readHermesRobots()).robots;
@@ -121,6 +127,81 @@ export async function updateHermesRobot(name: string, patch: UpdateHermesRobotIn
     metadata: { robot: updated.name, previousName: current.name, provider: updated.provider, model: updated.model }
   });
   return updated;
+}
+
+export async function syncHermesRobotToLocalConfig(name: string): Promise<{ robot: HermesRobot; provider: Provider; configPath: string; envPath: string }> {
+  const robot = await getHermesRobot(name);
+  if (!robot) {
+    throw new Error(`Hermes robot not found: ${name}`);
+  }
+  const provider = await resolveRobotProvider(robot);
+  const providers = await readProviders();
+  const hermesDir = getLocalHermesDir();
+  const configPath = path.join(hermesDir, "config.yaml");
+  const envPath = path.join(hermesDir, ".env");
+  const authPath = path.join(hermesDir, "auth.json");
+  const nextConfig = await buildLocalHermesConfig(configPath, robot, provider, providers);
+  const nextEnv = await buildLocalHermesEnv(envPath);
+
+  await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(configPath, nextConfig, { encoding: "utf8", mode: 0o600 });
+  await fs.writeFile(envPath, nextEnv, { encoding: "utf8", mode: 0o600 });
+  await pruneNativeHermesAuthStore(authPath);
+  await fs.chmod(configPath, 0o600).catch(() => undefined);
+  await fs.chmod(envPath, 0o600).catch(() => undefined);
+  await writeLog({
+    category: "system",
+    action: "hermes_sync_local_config",
+    message: `Synced Hermes robot ${robot.name} to local Hermes config.`,
+    metadata: {
+      robot: robot.name,
+      provider: provider.name,
+      model: robot.model,
+      configPath,
+      envPath,
+      baseUrl: getHermesProviderBaseUrl(robot, provider),
+      providers: providers.map((item) => item.name),
+      apiKeyFingerprint: getSecretFingerprint(provider.apiKey)
+    }
+  });
+  return { robot, provider, configPath, envPath };
+}
+
+export async function restartLocalHermesGateway(): Promise<{ restarted: boolean; method: string; message: string }> {
+  if (process.env.AI_GATEWAY_SKIP_HERMES_RESTART === "1") {
+    return { restarted: false, method: "skipped", message: "Hermes gateway restart skipped by AI_GATEWAY_SKIP_HERMES_RESTART." };
+  }
+
+  const launchd = await restartHermesLaunchdGateway();
+  if (launchd.restarted) return launchd;
+
+  const cli = await restartHermesCliGateway();
+  const result = cli.restarted ? cli : {
+    restarted: false,
+    method: "none",
+    message: `Unable to restart Hermes gateway automatically. ${launchd.message} ${cli.message}`.trim()
+  };
+
+  await writeLog({
+    level: result.restarted ? "info" : "warn",
+    category: "system",
+    action: "hermes_gateway_restart",
+    message: result.message,
+    metadata: { restarted: result.restarted, method: result.method }
+  });
+  return result;
+}
+
+export async function syncHermesRobotToLocalConfigAndRestart(name: string): Promise<{
+  robot: HermesRobot;
+  provider: Provider;
+  configPath: string;
+  envPath: string;
+  restart: { restarted: boolean; method: string; message: string };
+}> {
+  const synced = await syncHermesRobotToLocalConfig(name);
+  const restart = await restartLocalHermesGateway();
+  return { ...synced, restart };
 }
 
 export async function getHermesRobotStatuses(options: { refreshProviders?: boolean } = {}): Promise<HermesRobotStatus[]> {
@@ -312,6 +393,196 @@ async function resolveRobotProvider(robot: HermesRobot): Promise<Provider> {
     throw new Error(`Provider not found for Hermes robot ${robot.name}: ${robot.provider}`);
   }
   return provider;
+}
+
+async function buildLocalHermesConfig(configPath: string, robot: HermesRobot, provider: Provider, providers: Provider[]): Promise<string> {
+  const existing = await readTextIfExists(configPath);
+  const modelBlock = [
+    "model:",
+    `  default: ${yamlString(robot.model)}`,
+    `  provider: ${yamlString(provider.name)}`,
+    `  base_url: ${yamlString(getHermesProviderBaseUrl(robot, provider))}`,
+    `  api_key: ${yamlString(provider.apiKey)}`
+  ];
+  const withModel = replaceTopLevelYamlBlock(existing, "model", modelBlock);
+  const withProviders = replaceTopLevelYamlBlock(withModel, "providers", buildHermesProvidersBlock(providers));
+  return replaceTopLevelYamlBlock(withProviders, "custom_providers", buildHermesCustomProvidersBlock(providers));
+}
+
+async function buildLocalHermesEnv(envPath: string): Promise<string> {
+  const existing = await readTextIfExists(envPath);
+  const updates: Record<string, string> = {
+    ANTHROPIC_API_KEY: "",
+    ANTHROPIC_BASE_URL: "",
+    ANTHROPIC_TOKEN: "",
+    CLAUDE_CODE_OAUTH_TOKEN: "",
+    OPENAI_API_KEY: "",
+    OPENAI_BASE_URL: "",
+    OPENROUTER_API_KEY: "",
+    OPENROUTER_BASE_URL: "",
+    COPILOT_GITHUB_TOKEN: "",
+    GH_TOKEN: ""
+  };
+  return replaceEnvValues(existing, updates);
+}
+
+function buildHermesProvidersBlock(providers: Provider[]): string[] {
+  const lines = ["providers:"];
+  if (!providers.length) return [...lines, "  {}"];
+  for (const provider of providers) {
+    lines.push(`  ${yamlKey(provider.name)}:`);
+    lines.push(`    name: ${yamlString(provider.name)}`);
+    lines.push(`    api: ${yamlString(getProviderDefaultBaseUrl(provider))}`);
+    lines.push(`    api_key: ${yamlString(provider.apiKey)}`);
+    lines.push(`    default_model: ${yamlString(provider.model)}`);
+    lines.push(`    transport: ${yamlString(getProviderApiMode(provider))}`);
+  }
+  return lines;
+}
+
+function buildHermesCustomProvidersBlock(providers: Provider[]): string[] {
+  const lines = ["custom_providers:"];
+  if (!providers.length) return [...lines, "  []"];
+  for (const provider of providers) {
+    lines.push(`  - name: ${yamlString(provider.name)}`);
+    lines.push(`    base_url: ${yamlString(getProviderDefaultBaseUrl(provider))}`);
+    lines.push(`    api_key: ${yamlString(provider.apiKey)}`);
+    lines.push(`    model: ${yamlString(provider.model)}`);
+    lines.push(`    api_mode: ${yamlString(getProviderApiMode(provider))}`);
+  }
+  return lines;
+}
+
+async function pruneNativeHermesAuthStore(authPath: string): Promise<void> {
+  const raw = await readJsonIfExists(authPath);
+  if (!raw) return;
+  const next = isRecord(raw) ? { ...raw } : {};
+  next.providers = {};
+  next.credential_pool = {};
+  next.active_provider = "";
+  next.updated_at = new Date().toISOString();
+  await fs.writeFile(authPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(authPath, 0o600).catch(() => undefined);
+}
+
+async function readJsonIfExists(filePath: string): Promise<unknown | null> {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function readTextIfExists(filePath: string): Promise<string> {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
+  }
+}
+
+function replaceTopLevelYamlBlock(raw: string, key: string, replacement: string[]): string {
+  const lines = raw ? raw.split(/\r?\n/) : [];
+  const start = lines.findIndex((line) => line.trim() === `${key}:` && !line.startsWith(" "));
+  if (start < 0) {
+    const prefix = raw.trim() ? `${raw.replace(/\s*$/, "")}\n\n` : "";
+    return `${prefix}${replacement.join("\n")}\n`;
+  }
+
+  let end = start + 1;
+  while (end < lines.length && (lines[end]!.trim() === "" || /^\s/.test(lines[end]!))) {
+    end += 1;
+  }
+  const nextLines = [...lines.slice(0, start), ...replacement, ...lines.slice(end)];
+  return `${nextLines.join("\n").replace(/\s*$/, "")}\n`;
+}
+
+function replaceEnvValues(raw: string, updates: Record<string, string>): string {
+  const lines = raw ? raw.split(/\r?\n/) : [];
+  const seen = new Set<string>();
+  const nextLines = lines.map((line) => {
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/);
+    if (!match) return line;
+    const key = match[1]!;
+    if (!(key in updates)) return line;
+    seen.add(key);
+    return `${key}=${quoteEnvValue(updates[key]!)}`;
+  });
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (!seen.has(key)) {
+      nextLines.push(`${key}=${quoteEnvValue(value)}`);
+    }
+  }
+  return `${nextLines.filter((line, index, array) => line || index < array.length - 1).join("\n").replace(/\s*$/, "")}\n`;
+}
+
+function quoteEnvValue(value: string): string {
+  if (!value) return "";
+  return JSON.stringify(value);
+}
+
+function getHermesProviderBaseUrl(robot: HermesRobot, provider: Provider): string {
+  return getToolBaseUrl(robot.model.toLowerCase().includes("claude") ? "claude" : "codex", provider);
+}
+
+function getProviderDefaultBaseUrl(provider: Provider): string {
+  return getToolBaseUrl(provider.model.toLowerCase().includes("claude") ? "claude" : "codex", provider);
+}
+
+function getProviderApiMode(provider: Provider): string {
+  return provider.model.toLowerCase().includes("claude") ? "anthropic_messages" : "chat_completions";
+}
+
+function yamlKey(value: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(value) ? value : yamlString(value);
+}
+
+function yamlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+async function restartHermesLaunchdGateway(): Promise<{ restarted: boolean; method: string; message: string }> {
+  if (process.platform !== "darwin" || typeof process.getuid !== "function") {
+    return { restarted: false, method: "launchd", message: "launchd is not available on this platform." };
+  }
+
+  const label = process.env.AI_GATEWAY_HERMES_LAUNCHD_LABEL || DEFAULT_HERMES_LAUNCHD_LABEL;
+  const service = `gui/${process.getuid()}/${label}`;
+  try {
+    await execFileAsync("launchctl", ["print", service], { timeout: 5000 });
+    await execFileAsync("launchctl", ["kickstart", "-k", service], { timeout: 10000 });
+    const result = { restarted: true, method: "launchd", message: `Restarted Hermes gateway service: ${service}` };
+    await writeLog({
+      category: "system",
+      action: "hermes_gateway_restart",
+      message: result.message,
+      metadata: { restarted: true, method: result.method, service }
+    });
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { restarted: false, method: "launchd", message: `launchd restart failed for ${service}: ${message}` };
+  }
+}
+
+async function restartHermesCliGateway(): Promise<{ restarted: boolean; method: string; message: string }> {
+  try {
+    await execFileAsync("hermes", ["gateway", "restart"], { timeout: 20000 });
+    const result = { restarted: true, method: "hermes-cli", message: "Restarted Hermes gateway with `hermes gateway restart`." };
+    await writeLog({
+      category: "system",
+      action: "hermes_gateway_restart",
+      message: result.message,
+      metadata: { restarted: true, method: result.method }
+    });
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { restarted: false, method: "hermes-cli", message: `hermes gateway restart failed: ${message}` };
+  }
 }
 
 function normalizeImport(value: unknown): HermesRobot {
