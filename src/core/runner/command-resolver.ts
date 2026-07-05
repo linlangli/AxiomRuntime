@@ -5,7 +5,7 @@ import path from "node:path";
 import type { ToolType } from "../types.js";
 
 export function resolveToolCommand(tool: ToolType): string | null {
-  const command = tool === "claude" ? "claude" : "codex";
+  const command = tool === "claude" ? "claude" : tool === "hermes" ? "hermes" : "codex";
   const fromPath = resolveFromPath(command);
   if (fromPath) return fromPath;
 
@@ -24,6 +24,15 @@ export function getKnownCandidates(tool: ToolType): string[] {
       path.join(os.homedir(), ".local/bin/claude"),
       "/opt/homebrew/bin/claude",
       "/usr/local/bin/claude"
+    ];
+  }
+
+  if (tool === "hermes") {
+    return [
+      path.join(os.homedir(), ".local/bin/hermes"),
+      path.join(os.homedir(), ".hermes", "bin", "hermes"),
+      "/opt/homebrew/bin/hermes",
+      "/usr/local/bin/hermes"
     ];
   }
 

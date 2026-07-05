@@ -11,6 +11,19 @@ import { runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js"
 import { resolveProviderForTool } from "../dist/core/runner/fallback.js";
 import { clearAllSessions, finishSession, getSession, listRecentSessions, startSession } from "../dist/core/sessions/session-service.js";
 import { generateSessionReport } from "../dist/core/reports/report-service.js";
+import {
+  addHermesRobot,
+  clearHermesRobot,
+  deleteHermesRobot,
+  exportHermesRobot,
+  getHermesRobotStatuses,
+  importHermesRobot,
+  importLocalHermesRobots,
+  listHermesRobots,
+  updateHermesRobot
+} from "../dist/core/hermes/hermes-service.js";
+import { readHermesState, upsertHermesRobotState } from "../dist/core/hermes/hermes-store.js";
+import { prepareHermesRuntime } from "../dist/core/hermes/hermes-runner.js";
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
@@ -269,8 +282,239 @@ test("generateSessionReport writes agent handoff report with session usage", asy
   });
 });
 
+test("hermes robot service adds robots and reports provider/model status", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" }
+    ]);
+    await upsertProviderCache("api", { status: "ok", models: ["claude-opus-4-6"], lastCheckedAt: "now", lastError: null });
+
+    const robot = await addHermesRobot({
+      name: "robot-a",
+      provider: "api",
+      model: "claude-opus-4-6",
+      telegram: { enabled: true, chatId: "123", name: "telegram" }
+    });
+    const robots = await listHermesRobots();
+    const statuses = await getHermesRobotStatuses();
+
+    assert.equal(robot.name, "robot-a");
+    assert.equal(robots.length, 1);
+    assert.equal(statuses[0].providerExists, true);
+    assert.equal(statuses[0].providerHealth, "ok");
+    assert.equal(statuses[0].modelAvailable, true);
+    assert.equal(statuses[0].telegram, "configured");
+  });
+});
+
+test("hermes runtime uses isolated config with selected provider credentials", async () => {
+  await withTempHome(async () => {
+    const plusProvider = {
+      name: "51talk-plus",
+      baseUrl: "https://icode.51talk.biz/v1",
+      apiKey: "sk-plus-selected",
+      mode: "auto",
+      level: 1,
+      model: "claude-opus-4-6"
+    };
+    const apiProvider = {
+      name: "51talk-api",
+      baseUrl: "https://icode.51talk.biz/v1",
+      apiKey: "sk-api-should-not-be-used",
+      mode: "auto",
+      level: 2,
+      model: "claude-opus-4-6"
+    };
+    await writeProviders([plusProvider, apiProvider]);
+    const robot = await addHermesRobot({ name: "invest-bot", provider: "51talk-plus", model: "claude-opus-4-6" });
+
+    const runtime = await prepareHermesRuntime(robot, plusProvider, {
+      command: "hermes",
+      args: ["chat", "--model", robot.model, "--provider", "anthropic", "--source", `ai-gateway:${robot.name}`],
+      providerKind: "anthropic",
+      baseUrl: "https://icode.51talk.biz"
+    });
+    const config = await fs.readFile(runtime.configPath, "utf8");
+
+    assert.match(runtime.hermesHome, /hermes\/invest-bot$/);
+    assert.equal(runtime.env.HERMES_HOME, runtime.hermesHome);
+    assert.equal(runtime.env.ANTHROPIC_API_KEY, "sk-plus-selected");
+    assert.equal(runtime.env.AI_GATEWAY_PROVIDER, "51talk-plus");
+    assert.match(config, /provider: "anthropic"/);
+    assert.match(config, /base_url: "https:\/\/icode\.51talk\.biz"/);
+    assert.match(config, /api_key: "sk-plus-selected"/);
+    assert.doesNotMatch(config, /sk-api-should-not-be-used/);
+  });
+});
+
+test("hermes robots are stored in editable hermes.json and can be edited", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" },
+      { name: "api2", baseUrl: "https://api2.test/v1", apiKey: "key2", mode: "auto", level: 2, model: "gpt-5.5" }
+    ]);
+    await addHermesRobot({ name: "robot-a", provider: "api", model: "claude-opus-4-6" });
+
+    let raw = JSON.parse(await fs.readFile(path.join(process.env.AI_GATEWAY_HOME, "hermes.json"), "utf8"));
+    assert.equal(Array.isArray(raw), true);
+    assert.equal(raw[0].telegram, undefined);
+
+    const updated = await updateHermesRobot("robot-a", {
+      provider: "api2",
+      model: "gpt-5.5",
+      telegram: { enabled: true, chatId: "123", name: "tester" }
+    });
+    raw = JSON.parse(await fs.readFile(path.join(process.env.AI_GATEWAY_HOME, "hermes.json"), "utf8"));
+
+    assert.equal(updated.provider, "api2");
+    assert.equal(updated.model, "gpt-5.5");
+    assert.equal(updated.telegram.chatId, "123");
+    assert.equal(raw[0].provider, "api2");
+    assert.equal(raw[0].telegram.name, "tester");
+    assert.equal(raw[0].createdAt, undefined);
+    assert.equal(raw[0].updatedAt, undefined);
+    assert.equal(raw[0].source, undefined);
+  });
+});
+
+test("legacy hermes-robots.json is still readable", async () => {
+  await withTempHome(async () => {
+    await fs.writeFile(
+      path.join(process.env.AI_GATEWAY_HOME, "hermes-robots.json"),
+      JSON.stringify({
+        robots: [
+          {
+            name: "legacy",
+            provider: "api",
+            model: "claude-opus-4-6",
+            mode: "auto",
+            telegram: { enabled: false, chatId: "", name: "" },
+            tasks: [],
+            createdAt: "now",
+            updatedAt: "now"
+          }
+        ]
+      })
+    );
+
+    const robots = await listHermesRobots();
+    assert.equal(robots.length, 1);
+    assert.equal(robots[0].name, "legacy");
+  });
+});
+
+test("hermes robot import and export omit secrets and support rename", async () => {
+  await withTempHome(async (tempDir) => {
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" }
+    ]);
+    await addHermesRobot({ name: "robot-a", provider: "api", model: "claude-opus-4-6" });
+
+    const exportedPath = await exportHermesRobot("robot-a");
+    const exported = await fs.readFile(exportedPath, "utf8");
+    assert.doesNotMatch(exported, /apiKey|key/);
+    assert.match(exported, /robot-a/);
+
+    const imported = await importHermesRobot(exportedPath, { onConflict: "rename", renameTo: "robot-b" });
+    const robots = await listHermesRobots();
+    assert.equal(imported.action, "renamed");
+    assert.equal(robots.length, 2);
+    assert.equal(robots.some((robot) => robot.name === "robot-b"), true);
+
+    const badImport = path.join(tempDir, "bad-hermes.json");
+    await fs.writeFile(badImport, JSON.stringify({ robot: { name: "bad", provider: "api", model: "x", apiKey: "secret" } }));
+    await assert.rejects(() => importHermesRobot(badImport), /must not contain API keys/);
+  });
+});
+
+test("hermes clear keeps robot config and delete removes it", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" }
+    ]);
+    await addHermesRobot({ name: "robot-a", provider: "api", model: "claude-opus-4-6" });
+    await upsertHermesRobotState("robot-a", { lastUsedAt: "now", lastSessionId: "ses_1", lastError: "boom" });
+
+    await clearHermesRobot("robot-a");
+    let robots = await listHermesRobots();
+    let state = await readHermesState();
+    assert.equal(robots.length, 1);
+    assert.equal(state.robots["robot-a"].lastUsedAt, null);
+    assert.equal(state.robots["robot-a"].lastError, null);
+    assert.equal(Boolean(state.robots["robot-a"].clearedAt), true);
+
+    await deleteHermesRobot("robot-a");
+    robots = await listHermesRobots();
+    state = await readHermesState();
+    assert.equal(robots.length, 0);
+    assert.equal(state.robots["robot-a"], undefined);
+  });
+});
+
+test("imports local Hermes config and cron jobs as robots", async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "local-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    await fs.mkdir(path.join(hermesDir, "cron"), { recursive: true });
+    await fs.writeFile(
+      path.join(hermesDir, "config.yaml"),
+      [
+        "model:",
+        "  default: claude-opus-4-6",
+        "  provider: anthropic",
+        "  base_url: https://api.test",
+        "  api_key: sk-secret"
+      ].join("\n")
+    );
+    await fs.writeFile(
+      path.join(hermesDir, "channel_directory.json"),
+      JSON.stringify({
+        platforms: {
+          telegram: [{ id: "123", name: "tester", type: "dm" }]
+        }
+      })
+    );
+    await fs.writeFile(
+      path.join(hermesDir, "cron", "jobs.json"),
+      JSON.stringify({
+        jobs: [
+          {
+            id: "job123456",
+            name: "Cron Robot",
+            enabled: true,
+            state: "scheduled",
+            model: null,
+            provider: null,
+            schedule_display: "0 9 * * *"
+          }
+        ]
+      })
+    );
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" }
+    ]);
+
+    const result = await importLocalHermesRobots();
+    const robots = await listHermesRobots();
+    const raw = await fs.readFile(path.join(process.env.AI_GATEWAY_HOME, "hermes.json"), "utf8");
+
+    assert.equal(result.imported.length, 1);
+    assert.equal(robots.length, 1);
+    assert.equal(robots[0].name, "hermes-default");
+    assert.equal(robots[0].provider, "api");
+    assert.equal(robots[0].telegram.chatId, "123");
+    assert.equal(robots[0].tasks.length, 1);
+    assert.equal(robots[0].tasks[0].name, "Cron Robot");
+    assert.equal(robots[0].tasks[0].type, "cron");
+    assert.doesNotMatch(raw, /sk-secret/);
+    assert.doesNotMatch(raw, /createdAt|updatedAt|source/);
+    assert.doesNotMatch(raw, /"schedule"\s*:/);
+  });
+});
+
 async function withTempHome(fn) {
   const previousHome = process.env.AI_GATEWAY_HOME;
+  const previousHermesHome = process.env.AI_GATEWAY_HERMES_HOME;
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-test-"));
   process.env.AI_GATEWAY_HOME = tempDir;
   try {
@@ -280,6 +524,11 @@ async function withTempHome(fn) {
       delete process.env.AI_GATEWAY_HOME;
     } else {
       process.env.AI_GATEWAY_HOME = previousHome;
+    }
+    if (previousHermesHome === undefined) {
+      delete process.env.AI_GATEWAY_HERMES_HOME;
+    } else {
+      process.env.AI_GATEWAY_HERMES_HOME = previousHermesHome;
     }
     globalThis.fetch = ORIGINAL_FETCH;
     await fs.rm(tempDir, { recursive: true, force: true });

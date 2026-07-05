@@ -1,4 +1,4 @@
-export type ToolType = "claude" | "codex";
+export type ToolType = "claude" | "codex" | "hermes";
 
 export type ProviderMode = "ask" | "auto";
 
@@ -59,6 +59,7 @@ export type SessionRecord = {
   status: SessionStatus;
   exitCode: number | null;
   fallbackFrom: string | null;
+  hermesRobot?: string | null;
 };
 
 export type SessionsFile = {

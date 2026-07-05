@@ -48,6 +48,88 @@ ai use codex 51talk gpt-5.5
 - 如果 provider 的 `baseUrl` 是 OpenAI 兼容地址，例如 `https://icode.51talk.biz/v1`，启动 Claude Code 时会自动注入 `https://icode.51talk.biz`；启动 Codex 时仍使用 `/v1`。
 - 启动记录会写入日志，包含 provider、baseUrl、模型、启动参数和 API Key 指纹，不包含完整 API Key。
 
+## 管理 Hermes 机器人
+
+进入 Hermes 交互模式：
+
+```bash
+ai hermes
+```
+
+可选择：
+
+```text
+status
+use
+add
+list
+clear
+delete
+import
+export
+exit
+```
+
+直接命令：
+
+```bash
+ai hermes status
+ai hermes use <机器人名称>
+ai hermes add
+ai hermes list
+ai hermes edit
+ai hermes clear
+ai hermes delete
+ai hermes import <文件路径>
+ai hermes import-local
+ai hermes export <机器人名称>
+```
+
+也可以从 `ai use` 进入：
+
+```bash
+ai use hermes <机器人名称>
+```
+
+添加机器人：
+
+```bash
+ai hermes add
+```
+
+流程：
+
+```text
+输入机器人名称
+选择 AI Gateway provider
+选择默认模型
+选择 mode
+按需配置 Telegram 绑定
+保存
+```
+
+说明：
+
+- Hermes 机器人配置保存到 `~/.ai-gateway/hermes.json`，可手动编辑。
+- `hermes.json` 只保留用户需要配置的字段，不写入内部状态、来源或时间戳。
+- 机器人只保存 provider 名称，不保存 API Key。
+- Telegram 不是必填项，可通过 `ai hermes edit` 添加或修改。
+- Hermes cron job 不会作为机器人导入，只会作为该机器人下面的 task。
+- task 的定时规则不写入 `hermes.json`，需要通过和机器人聊天或后续 task 管理功能修改。
+- 启动时会从 `providers.json` 读取 provider 的 `apiKey`、`baseUrl` 和模型信息。
+- 启动 Hermes 时会使用 AI Gateway 管理的独立机器人运行目录，例如 `~/.ai-gateway/hermes/<机器人名称>/`。
+- 每次启动都会从 `providers.json` 读取当前 provider，生成该机器人专用的 Hermes 运行配置，避免读取全局 `~/.hermes/config.yaml` 后串用其它 API Key。
+- 不会默认修改你的全局 `~/.hermes/config.yaml`。
+- `list` 只列出机器人配置，不刷新健康度。
+- `edit` 可修改机器人名称、默认 provider、默认 model、mode 和 Telegram 绑定。
+- `status` 会检查 Hermes CLI、provider 是否存在、provider 健康度、模型缓存和 Telegram 绑定状态。
+- `clear` 会清空该机器人的 AI Gateway 管理状态和记忆，保留机器人配置。
+- `delete` 会删除机器人配置和 AI Gateway 管理状态。
+- `export` 导出的文件不包含 API Key，可复制到其他电脑。
+- `import` 导入时如果本机没有同名 provider，也会导入成功，但 `status` 会提示 provider 缺失。
+- `import-local` 会自动扫描本机 `~/.hermes/config.yaml`、`~/.hermes/channel_directory.json` 和 `~/.hermes/cron/jobs.json`，导入 Hermes 默认机器人和该机器人下面的 tasks。
+- `import-local --overwrite` 会用本机 Hermes 配置覆盖同名机器人。
+
 ## 添加 Provider
 
 交互式添加：
@@ -383,7 +465,11 @@ ai web
 ~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
 ~/.ai-gateway/sessions.json
+~/.ai-gateway/hermes.json
+~/.ai-gateway/hermes-state.json
+~/.ai-gateway/hermes/<机器人名称>/
 ~/.ai-gateway/reports/
+~/.ai-gateway/exports/
 ~/.ai-gateway/.ai-gateway.log
 ```
 

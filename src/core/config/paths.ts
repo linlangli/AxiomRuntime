@@ -27,6 +27,26 @@ export function getSessionsPath(): string {
   return path.join(getConfigRoot(), "sessions.json");
 }
 
+export function getHermesRobotsPath(): string {
+  return path.join(getConfigRoot(), "hermes.json");
+}
+
+export function getLegacyHermesRobotsPath(): string {
+  return path.join(getConfigRoot(), "hermes-robots.json");
+}
+
+export function getHermesStatePath(): string {
+  return path.join(getConfigRoot(), "hermes-state.json");
+}
+
+export function getExportsDir(): string {
+  return path.join(getConfigRoot(), "exports");
+}
+
+export function getHermesExportPath(robotName: string): string {
+  return path.join(getExportsDir(), `hermes-${robotName}.json`);
+}
+
 export function getReportsDir(): string {
   return path.join(getConfigRoot(), "reports");
 }

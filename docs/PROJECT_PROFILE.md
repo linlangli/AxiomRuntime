@@ -26,6 +26,7 @@ Core capabilities:
 - View provider health in `ai status`.
 - Track token usage.
 - Automatically fall back to another healthy provider when the preferred provider is unavailable.
+- Manage Hermes robots that reuse AI Gateway providers and launch through Hermes CLI.
 
 ## Main User Workflow
 
@@ -64,6 +65,17 @@ ai session list
 ai session clear
 ai report
 ai web
+ai hermes
+ai hermes status
+ai hermes use <robot-name>
+ai hermes add
+ai hermes list
+ai hermes edit
+ai hermes clear
+ai hermes delete
+ai hermes import <file>
+ai hermes import-local
+ai hermes export <robot-name>
 ```
 
 ## Configuration Philosophy
@@ -106,7 +118,78 @@ Internal files:
 - `~/.ai-gateway/.ai-gateway.log`: JSONL operational logs for usage traces, errors, provider health checks, and strategy execution.
 - `~/.ai-gateway/sessions.json`: launch session records for tool/provider/model/project.
 - `~/.ai-gateway/reports/`: generated session handoff reports.
+- `~/.ai-gateway/hermes.json`: user-editable AI Gateway-managed Hermes robot definitions. This file must not contain API keys.
+- `~/.ai-gateway/hermes-state.json`: AI Gateway-managed Hermes robot runtime state.
+- `~/.ai-gateway/hermes/<robot-name>/`: AI Gateway-managed isolated Hermes runtime home for each robot.
 - `.ai-gateway/context.md`: generated project context package for Claude Code and Codex.
+
+## Hermes Robot Direction
+
+Hermes integration should focus on robot management.
+
+Hermes is not a provider. A Hermes robot references an existing AI Gateway provider and model. API keys stay in `providers.json` and are resolved only at launch time.
+
+Each robot must launch with an isolated `HERMES_HOME` under `~/.ai-gateway/hermes/<robot-name>/`. AI Gateway regenerates that robot's Hermes runtime config from the selected provider before launch, so the user's global `~/.hermes/config.yaml` cannot override the robot's API key.
+
+`hermes.json` should stay minimal and only include user-facing configuration fields. Do not write internal metadata such as source, created time, updated time, health, sessions, or runtime state into `hermes.json`.
+
+Interactive entry:
+
+```bash
+ai hermes
+```
+
+Menu:
+
+```text
+Hermes
+  status
+  use
+  add
+  list
+  edit
+  clear
+  delete
+  import
+  import-local
+  export
+  exit
+```
+
+Commands:
+
+```bash
+ai hermes status
+ai hermes use <robot-name>
+ai hermes add
+ai hermes list
+ai hermes edit
+ai hermes clear
+ai hermes delete
+ai hermes import <file>
+ai hermes import-local
+ai hermes export <robot-name>
+```
+
+Behavior rules:
+
+- `add` is interactive and selection-first: input robot name, select provider, select model, select mode, and optionally configure Telegram binding.
+- `edit` can update robot name, default provider, default model, mode, and Telegram binding.
+- Telegram binding is optional.
+- Hermes cron jobs are tasks that belong to a robot. They are not robots.
+- Task schedule is intentionally not stored in `hermes.json`; users should change schedules by chatting with the robot or through future task management commands.
+- `list` shows robot configuration only.
+- `status` checks Hermes CLI availability, provider existence, provider health, model cache, Telegram binding status, and recent robot state.
+- `use` launches Hermes CLI for the selected robot.
+- `clear` resets robot memory and AI Gateway-managed runtime state while keeping robot configuration.
+- `delete` removes the robot configuration and AI Gateway-managed robot state.
+- `import` and `export` move robot definitions between machines without API keys.
+- `import-local` scans local Hermes files and imports the default Hermes robot plus its cron jobs as tasks.
+- If an imported robot references a missing local provider, import should still succeed and status should report `provider missing`.
+
+Implementation must be reusable by future web and desktop surfaces.
+
+Detailed design lives in `docs/HERMES_INTEGRATION.md`.
 
 ## Release And CI
 
@@ -262,6 +345,7 @@ Planned features:
 - Drag-and-drop level ordering.
 - Default model switching.
 - Provider/model statistics.
+- Hermes robot list, status, provider/model, Telegram binding, edit, tasks, recent errors, usage share, import/export, clear, and delete.
 
 ## Extension Management Direction
 
@@ -420,13 +504,18 @@ Update `USAGE.html` when:
 - Added `.gitignore` to keep API keys and runtime files out of Git.
 - Added Chinese `README.md` with install, build, test, and local link instructions.
 - Added interactive release script: `npm run release`; script usage lives in `scripts/USAGE.md`.
+- Added GitLab CI release plan for tag-triggered npm publishing.
+- Implemented Hermes robot foundation: `ai hermes`, `ai hermes add/list/edit/status/use/clear/delete/import/import-local/export`, `ai use hermes <robot>`, user-editable `hermes.json`, robot store, state store, import/export, local Hermes import, and isolated Hermes runtime launch.
+- Hermes robot integration has been documented in `docs/HERMES_INTEGRATION.md`.
 - Product direction is CLI first, with web and Flutter desktop planned.
 
 ## Next Implementation Steps
 
-1. Harden Claude Code and Codex runner argument and permission mapping.
-2. Add CLI process-level tests for command parsing and terminal output.
-3. Add project-level profile support.
-4. Add sensitive file protection rules.
-5. Implement local server foundation for future `ai web`.
-6. Implement web control panel foundation.
+1. Add CLI process-level tests for Hermes command parsing and terminal output.
+2. Add Hermes robot usage aggregation once structured Hermes usage is available.
+3. Add optional Hermes native task/gateway management after robot launch flow is stable.
+4. Harden Claude Code and Codex runner argument and permission mapping.
+5. Add project-level profile support.
+6. Add sensitive file protection rules.
+7. Implement local server foundation for future `ai web`.
+8. Implement web control panel foundation, including Hermes robot management.

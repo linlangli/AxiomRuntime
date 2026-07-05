@@ -5,6 +5,9 @@ export function isModelCompatible(tool: ToolType, model: string): boolean {
   if (tool === "claude") {
     return value.includes("claude");
   }
+  if (tool === "hermes") {
+    return Boolean(value);
+  }
   return value.includes("gpt") || value.includes("codex") || /^o\d/.test(value) || value.includes("openai");
 }
 

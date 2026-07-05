@@ -4,6 +4,7 @@ import { runContextCommand } from "./commands/context.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runEditCommand } from "./commands/edit.js";
 import { runHelpCommand } from "./commands/help.js";
+import { runHermesCommand } from "./commands/hermes.js";
 import { runListCommand } from "./commands/list.js";
 import { runLogCommand } from "./commands/log.js";
 import { runReportCommand } from "./commands/report.js";
@@ -53,6 +54,9 @@ async function main(): Promise<void> {
       break;
     case "context":
       await runContextCommand(args);
+      break;
+    case "hermes":
+      await runHermesCommand(args);
       break;
     case "doctor":
       await runDoctorCommand(args);
@@ -104,6 +108,7 @@ async function runInteractive(): Promise<void> {
     { label: "add", value: "add" },
     { label: "edit", value: "edit" },
     { label: "provider list", value: "provider:list" },
+    { label: "hermes", value: "hermes" },
     { label: "status", value: "status" },
     { label: "session", value: "session" },
     { label: "report", value: "report" },
@@ -119,6 +124,7 @@ async function runInteractive(): Promise<void> {
   if (command === "add") await runAddCommand([]);
   if (command === "edit") await runEditCommand();
   if (command === "provider:list") await runListCommand();
+  if (command === "hermes") await runHermesCommand([]);
   if (command === "status") await runStatusCommand();
   if (command === "session") await runSessionCommand([]);
   if (command === "report") await runReportCommand([]);

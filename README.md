@@ -1,6 +1,6 @@
 # AI Gateway
 
-本地 AI Provider 管理工具，用一个 `ai` 命令统一管理 Claude Code 和 Codex CLI 的 provider、模型、优先级、健康度和诊断。
+本地 AI Provider 管理工具，用一个 `ai` 命令统一管理 Claude Code、Codex CLI 和 Hermes 机器人的 provider、模型、优先级、健康度和诊断。
 
 ## 安装开发依赖
 
@@ -33,6 +33,11 @@ ai
 ai help
 ai add
 ai provider list
+ai hermes
+ai hermes list
+ai hermes edit
+ai hermes status
+ai hermes import-local
 ai status
 ai log
 ai log --print
@@ -54,7 +59,11 @@ ai doctor
 ~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
 ~/.ai-gateway/sessions.json
+~/.ai-gateway/hermes.json
+~/.ai-gateway/hermes-state.json
+~/.ai-gateway/hermes/<机器人名称>/
 ~/.ai-gateway/reports/
+~/.ai-gateway/exports/
 ~/.ai-gateway/.ai-gateway.log
 ```
 

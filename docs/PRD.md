@@ -64,6 +64,17 @@ ai report
 ai web
 ai doctor
 ai last
+ai hermes
+ai hermes status
+ai hermes use <robot-name>
+ai hermes add
+ai hermes list
+ai hermes edit
+ai hermes clear
+ai hermes delete
+ai hermes import <file>
+ai hermes import-local
+ai hermes export <robot-name>
 ```
 
 ## 4. Configuration Files
@@ -214,6 +225,60 @@ Default path:
 Stores generated session handoff reports.
 
 Reports must not contain API keys or estimated token usage.
+
+### Hermes Robots: `hermes.json`
+
+Default path:
+
+```text
+~/.ai-gateway/hermes.json
+```
+
+Stores AI Gateway-managed Hermes robot definitions. This file is user-editable, similar to `providers.json`.
+
+`hermes.json` must only contain fields users need to configure directly. Internal metadata such as source, created time, updated time, health, sessions, and runtime state must not be written to this file.
+
+Hermes robots must reference providers from `providers.json` by name. They must not duplicate API keys.
+
+Example:
+
+```json
+[
+  {
+    "name": "spacex-monitor",
+    "provider": "51talk-cs",
+    "model": "claude-opus-4-6",
+    "mode": "auto",
+    "telegram": {
+      "enabled": true,
+      "chatId": "7476722078",
+      "name": "il gnalnil"
+    },
+    "tasks": [
+      {
+        "id": "baf2c13fbe76",
+        "name": "SpaceX SPCX 价格监控",
+        "type": "cron",
+        "enabled": true,
+        "state": "scheduled",
+        "provider": "51talk-plus",
+        "model": "claude-opus-4-6"
+      }
+    ]
+  }
+]
+```
+
+Rules:
+
+- `name` must be unique.
+- `provider` must reference an AI Gateway provider by name.
+- `model` is the robot default model.
+- `mode` is `ask` or `auto`.
+- Telegram binding is optional.
+- Hermes cron jobs are tasks that belong to a robot. They are not robots.
+- Task schedule is not stored in `hermes.json`; users should change schedules by chatting with the robot or through future task management commands.
+- Exported robot files must not contain API keys.
 
 ## 5. Add Flow
 
@@ -586,7 +651,102 @@ Rules for `--deep`:
 - If the provider does not return usage, report that usage was not returned and do not write a fake usage event.
 - Never run as part of `ai status`.
 
-## 15. Web Control Panel
+## 16. Hermes Robot Flow
+
+Hermes is integrated as robot management, not as another provider type.
+
+Interactive entry:
+
+```bash
+ai hermes
+```
+
+Interactive menu:
+
+```text
+Hermes
+  status
+  use
+  add
+  list
+  edit
+  clear
+  delete
+  import
+  import-local
+  export
+  exit
+```
+
+Direct commands:
+
+```bash
+ai hermes status
+ai hermes use <robot-name>
+ai hermes add
+ai hermes list
+ai hermes edit
+ai hermes clear
+ai hermes delete
+ai hermes import <file>
+ai hermes import-local
+ai hermes export <robot-name>
+```
+
+`ai hermes add` steps:
+
+1. Input robot name.
+2. Select provider from AI Gateway providers.
+3. Select model from the provider model cache.
+4. Select mode, defaulting to `auto`.
+5. Optionally configure Telegram binding.
+6. Save to `hermes.json`.
+
+`ai hermes edit` can update:
+
+- name
+- default provider
+- default model
+- mode
+- Telegram binding
+
+`ai hermes list` lists robot configuration only and does not refresh health.
+
+`ai hermes status` checks each robot:
+
+- Hermes CLI installed.
+- referenced provider exists.
+- provider health.
+- model exists in model cache when available.
+- Telegram binding status.
+- last robot session or error if tracked.
+
+`ai hermes use <robot-name>` starts Hermes CLI for the selected robot. It must resolve API credentials from the referenced AI Gateway provider at launch time.
+
+Launch rules:
+
+- Launch with an AI Gateway-managed isolated `HERMES_HOME` under `~/.ai-gateway/hermes/<robot-name>/`.
+- Regenerate that robot's Hermes runtime config from the selected provider before launch.
+- The user's global `~/.hermes/config.yaml` must not be able to override the selected robot provider API key.
+- Do not mutate `~/.hermes/config.yaml` by default.
+- Write AI Gateway logs and session records.
+- Mask all secrets.
+
+`ai hermes clear` resets robot memory and AI Gateway-managed robot runtime state while keeping robot configuration.
+
+`ai hermes delete` removes the robot configuration and AI Gateway-managed robot state.
+
+Import/export:
+
+- `ai hermes export <robot-name>` writes a portable JSON file.
+- `ai hermes import <file>` imports a portable robot definition.
+- `ai hermes import-local` scans local Hermes files and imports the default Hermes robot plus its cron jobs as tasks.
+- Import/export must never include API keys.
+- Import should succeed even if the referenced provider is missing locally; status should show `provider missing`.
+
+Detailed design lives in `docs/HERMES_INTEGRATION.md`.
+
+## 17. Web Control Panel
 
 Command:
 
@@ -607,8 +767,11 @@ Planned capabilities:
 - Refresh model list manually.
 - Switch current provider/model.
 - View provider and model statistics.
+- Manage Hermes robots.
+- Show Hermes robot status, usage share, token curves, provider/model, Telegram binding, and recent errors.
+- Import, export, clear, and delete Hermes robots visually.
 
-## 16. Architecture Requirements
+## 18. Architecture Requirements
 
 The first version must use an extensible architecture:
 

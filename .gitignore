@@ -5,6 +5,10 @@ providers.json
 .ai-cache.json
 usage.json
 sessions.json
+hermes.json
+hermes-robots.json
+hermes-state.json
+exports/
 .ai-gateway.log
 .ai-gateway/
 

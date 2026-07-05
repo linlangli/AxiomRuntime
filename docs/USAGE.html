@@ -194,7 +194,7 @@
     <header>
       <div class="wrap hero">
         <h1>AI Gateway 使用指南</h1>
-        <p class="subtitle">统一管理 Claude Code、Codex、Provider、模型、优先级和健康状态。</p>
+        <p class="subtitle">统一管理 Claude Code、Codex、Hermes 机器人、Provider、模型、优先级和健康状态。</p>
       </div>
     </header>
 
@@ -206,6 +206,7 @@
           <div class="command"><strong>打开帮助</strong><code>ai help</code></div>
           <div class="command"><strong>使用 Claude</strong><code>ai use claude</code></div>
           <div class="command"><strong>使用 Codex</strong><code>ai use codex</code></div>
+          <div class="command"><strong>管理 Hermes</strong><code>ai hermes</code></div>
           <div class="command"><strong>添加 Provider</strong><code>ai add</code></div>
           <div class="command"><strong>编辑 Provider</strong><code>ai edit</code></div>
           <div class="command"><strong>列出 Provider</strong><code>ai provider list</code></div>
@@ -237,6 +238,36 @@ ai use codex 51talk gpt-5.5</pre>
             <li>启动 Claude Code 时会使用临时 <code>--settings</code> 文件注入 <code>ANTHROPIC_API_KEY</code> 和 <code>ANTHROPIC_BASE_URL</code>，不会修改用户 settings，也不会使用 <code>--bare</code>。</li>
             <li>如果 provider 地址是 <code>https://icode.51talk.biz/v1</code>，Claude Code 会自动注入根地址 <code>https://icode.51talk.biz</code>；Codex 仍使用 <code>/v1</code>。</li>
             <li>启动记录会写入日志，包含 provider、baseUrl、模型、启动参数和 Key 指纹，不包含完整 Key。</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h2>管理 Hermes 机器人</h2>
+          <pre>ai hermes
+ai hermes add
+ai hermes list
+ai hermes edit
+ai hermes status
+ai hermes use robot-name
+ai use hermes robot-name</pre>
+          <h3>维护和迁移</h3>
+          <pre>ai hermes clear
+ai hermes delete
+ai hermes export robot-name
+ai hermes import-local
+ai hermes import ./hermes-robot.json</pre>
+          <ul>
+            <li><code>add</code> 通过交互选择 AI Gateway provider、模型、mode，并可选择是否绑定 Telegram。</li>
+            <li><code>edit</code> 可修改机器人名称、默认 provider、默认 model、mode 和 Telegram 绑定。</li>
+            <li>Telegram 不是必填项；Hermes cron job 只作为该机器人下面的 task。</li>
+            <li>task 的定时规则不写入 <code>hermes.json</code>，需要通过和机器人聊天或后续 task 管理功能修改。</li>
+            <li><code>list</code> 只列出机器人配置，不刷新健康度。</li>
+            <li><code>status</code> 检查 Hermes CLI、provider、模型缓存和 Telegram 绑定状态。</li>
+            <li><code>use</code> 使用 <code>~/.ai-gateway/hermes/&lt;机器人名称&gt;/</code> 独立运行目录启动 Hermes，不读取全局 <code>~/.hermes/config.yaml</code> 的 API Key。</li>
+            <li><code>clear</code> 清空机器人状态和记忆，保留配置。</li>
+            <li><code>delete</code> 删除机器人配置和 AI Gateway 管理状态。</li>
+            <li><code>export</code> 不导出 API Key，可复制到其他电脑后用 <code>import</code> 导入。</li>
+            <li><code>import-local</code> 自动扫描本机 <code>~/.hermes</code>，导入默认 Hermes 机器人和该机器人下面的 tasks。</li>
           </ul>
         </div>
 
@@ -332,7 +363,11 @@ ai doctor --deep</pre>
           <pre>~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
 ~/.ai-gateway/sessions.json
+~/.ai-gateway/hermes.json
+~/.ai-gateway/hermes-state.json
+~/.ai-gateway/hermes/&lt;机器人名称&gt;/
 ~/.ai-gateway/reports/
+~/.ai-gateway/exports/
 ~/.ai-gateway/.ai-gateway.log</pre>
           <p>除非调试问题，否则不要手动修改内部文件。</p>
         </div>
