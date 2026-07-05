@@ -72,6 +72,11 @@ ai doctor
 
 `providers.json` 含 API Key，不要提交到仓库。
 
+Hermes 集成说明：
+
+- `ai add/edit` 会自动把 AI Gateway provider 列表同步到本机 Hermes 原生配置。
+- `ai hermes add/edit/sync` 会同步当前机器人、刷新 provider 模型缓存，并自动重启 Hermes gateway。
+
 更多命令用法见：
 
 - [docs/USAGE.md](./docs/USAGE.md)

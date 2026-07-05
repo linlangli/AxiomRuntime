@@ -736,12 +736,15 @@ Launch rules:
 
 `ai hermes add` and `ai hermes edit` automatically write the selected robot and AI Gateway provider list into the native local Hermes config file at `~/.hermes/config.yaml`, then restart the local Hermes gateway when possible.
 
+`ai add` and `ai edit` also automatically sync the AI Gateway provider list into native local Hermes config. This provider-only sync must not replace the active native Hermes `model:` block.
+
 `ai hermes sync <robot-name>` keeps the same behavior as a manual repair command.
 
 Sync rules:
 
 - Replace only the top-level `model:` block.
 - Write AI Gateway providers into native Hermes `providers:` and `custom_providers:` so Telegram `/model` lists AI Gateway providers only.
+- Refresh all AI Gateway providers before sync, update the model cache, and write discovered model candidates into native Hermes provider entries. Do not write model lists into `providers.json`.
 - Clear native Hermes provider credential entry points in `.env` and `auth.json` that would otherwise make built-in providers appear in `/model`.
 - Preserve other native Hermes configuration such as Telegram, toolsets, terminal, cron, memory settings, and MCP servers.
 - Use the referenced AI Gateway provider from `providers.json`.

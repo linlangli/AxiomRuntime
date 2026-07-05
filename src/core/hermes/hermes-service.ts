@@ -8,9 +8,10 @@ import { readCache } from "../config/cache-store.js";
 import { readProviders } from "../config/providers-store.js";
 import { writeJsonFile } from "../config/json-store.js";
 import { writeLog } from "../logs/log-service.js";
+import { refreshAllProviders } from "../providers/provider-service.js";
 import { getSecretFingerprint, getToolBaseUrl } from "../runner/tool-runner.js";
 import { getProviderStatuses } from "../status/status-service.js";
-import type { Provider } from "../types.js";
+import type { Provider, ProviderCache } from "../types.js";
 import {
   clearHermesRobotState,
   deleteHermesRobotState,
@@ -129,19 +130,34 @@ export async function updateHermesRobot(name: string, patch: UpdateHermesRobotIn
   return updated;
 }
 
-export async function syncHermesRobotToLocalConfig(name: string): Promise<{ robot: HermesRobot; provider: Provider; configPath: string; envPath: string }> {
+type HermesSyncMetadata = {
+  providers: string[];
+  modelCounts: Record<string, number>;
+};
+
+export async function syncHermesRobotToLocalConfig(name: string): Promise<{
+  robot: HermesRobot;
+  provider: Provider;
+  configPath: string;
+  envPath: string;
+  metadata: HermesSyncMetadata;
+}> {
   const robot = await getHermesRobot(name);
   if (!robot) {
     throw new Error(`Hermes robot not found: ${name}`);
   }
-  const provider = await resolveRobotProvider(robot);
+  await refreshAllProviders();
   const providers = await readProviders();
+  const provider = resolveProviderFromList(robot, providers);
+  const cache = await readCache();
+  const providerModels = getProviderModelsFromCache(providers, cache.providers);
   const hermesDir = getLocalHermesDir();
   const configPath = path.join(hermesDir, "config.yaml");
   const envPath = path.join(hermesDir, ".env");
   const authPath = path.join(hermesDir, "auth.json");
-  const nextConfig = await buildLocalHermesConfig(configPath, robot, provider, providers);
+  const nextConfig = await buildLocalHermesConfig(configPath, robot, provider, providers, providerModels);
   const nextEnv = await buildLocalHermesEnv(envPath);
+  const metadata = buildHermesSyncMetadata(providers, providerModels);
 
   await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
   await fs.writeFile(configPath, nextConfig, { encoding: "utf8", mode: 0o600 });
@@ -160,11 +176,47 @@ export async function syncHermesRobotToLocalConfig(name: string): Promise<{ robo
       configPath,
       envPath,
       baseUrl: getHermesProviderBaseUrl(robot, provider),
-      providers: providers.map((item) => item.name),
+      providers: metadata.providers,
+      modelCounts: metadata.modelCounts,
       apiKeyFingerprint: getSecretFingerprint(provider.apiKey)
     }
   });
-  return { robot, provider, configPath, envPath };
+  return { robot, provider, configPath, envPath, metadata };
+}
+
+export async function syncHermesProvidersToLocalConfig(): Promise<{ configPath: string; envPath: string; metadata: HermesSyncMetadata }> {
+  await refreshAllProviders();
+  const providers = await readProviders();
+  const cache = await readCache();
+  const providerModels = getProviderModelsFromCache(providers, cache.providers);
+  const hermesDir = getLocalHermesDir();
+  const configPath = path.join(hermesDir, "config.yaml");
+  const envPath = path.join(hermesDir, ".env");
+  const authPath = path.join(hermesDir, "auth.json");
+  const existing = await readTextIfExists(configPath);
+  const withProviders = replaceTopLevelYamlBlock(existing, "providers", buildHermesProvidersBlock(providers, providerModels));
+  const nextConfig = replaceTopLevelYamlBlock(withProviders, "custom_providers", buildHermesCustomProvidersBlock(providers, providerModels));
+  const nextEnv = await buildLocalHermesEnv(envPath);
+  const metadata = buildHermesSyncMetadata(providers, providerModels);
+
+  await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(configPath, nextConfig, { encoding: "utf8", mode: 0o600 });
+  await fs.writeFile(envPath, nextEnv, { encoding: "utf8", mode: 0o600 });
+  await pruneNativeHermesAuthStore(authPath);
+  await fs.chmod(configPath, 0o600).catch(() => undefined);
+  await fs.chmod(envPath, 0o600).catch(() => undefined);
+  await writeLog({
+    category: "system",
+    action: "hermes_sync_providers",
+    message: "Synced AI Gateway providers to local Hermes config.",
+    metadata: {
+      configPath,
+      envPath,
+      providers: metadata.providers,
+      modelCounts: metadata.modelCounts
+    }
+  });
+  return { configPath, envPath, metadata };
 }
 
 export async function restartLocalHermesGateway(): Promise<{ restarted: boolean; method: string; message: string }> {
@@ -197,9 +249,21 @@ export async function syncHermesRobotToLocalConfigAndRestart(name: string): Prom
   provider: Provider;
   configPath: string;
   envPath: string;
+  metadata: HermesSyncMetadata;
   restart: { restarted: boolean; method: string; message: string };
 }> {
   const synced = await syncHermesRobotToLocalConfig(name);
+  const restart = await restartLocalHermesGateway();
+  return { ...synced, restart };
+}
+
+export async function syncHermesProvidersToLocalConfigAndRestart(): Promise<{
+  configPath: string;
+  envPath: string;
+  metadata: HermesSyncMetadata;
+  restart: { restarted: boolean; method: string; message: string };
+}> {
+  const synced = await syncHermesProvidersToLocalConfig();
   const restart = await restartLocalHermesGateway();
   return { ...synced, restart };
 }
@@ -395,7 +459,37 @@ async function resolveRobotProvider(robot: HermesRobot): Promise<Provider> {
   return provider;
 }
 
-async function buildLocalHermesConfig(configPath: string, robot: HermesRobot, provider: Provider, providers: Provider[]): Promise<string> {
+function resolveProviderFromList(robot: HermesRobot, providers: Provider[]): Provider {
+  const provider = providers.find((item) => item.name === robot.provider);
+  if (!provider) {
+    throw new Error(`Provider not found for Hermes robot ${robot.name}: ${robot.provider}`);
+  }
+  return provider;
+}
+
+function getProviderModelsFromCache(providers: Provider[], cache: Record<string, ProviderCache>): Record<string, string[]> {
+  return Object.fromEntries(
+    providers.map((provider) => [
+      provider.name,
+      Array.from(new Set([provider.model, ...(cache[provider.name]?.models ?? [])].filter(Boolean)))
+    ])
+  );
+}
+
+function buildHermesSyncMetadata(providers: Provider[], providerModels: Record<string, string[]>): HermesSyncMetadata {
+  return {
+    providers: providers.map((provider) => provider.name),
+    modelCounts: Object.fromEntries(providers.map((provider) => [provider.name, providerModels[provider.name]?.length ?? 0]))
+  };
+}
+
+async function buildLocalHermesConfig(
+  configPath: string,
+  robot: HermesRobot,
+  provider: Provider,
+  providers: Provider[],
+  providerModels: Record<string, string[]>
+): Promise<string> {
   const existing = await readTextIfExists(configPath);
   const modelBlock = [
     "model:",
@@ -405,8 +499,8 @@ async function buildLocalHermesConfig(configPath: string, robot: HermesRobot, pr
     `  api_key: ${yamlString(provider.apiKey)}`
   ];
   const withModel = replaceTopLevelYamlBlock(existing, "model", modelBlock);
-  const withProviders = replaceTopLevelYamlBlock(withModel, "providers", buildHermesProvidersBlock(providers));
-  return replaceTopLevelYamlBlock(withProviders, "custom_providers", buildHermesCustomProvidersBlock(providers));
+  const withProviders = replaceTopLevelYamlBlock(withModel, "providers", buildHermesProvidersBlock(providers, providerModels));
+  return replaceTopLevelYamlBlock(withProviders, "custom_providers", buildHermesCustomProvidersBlock(providers, providerModels));
 }
 
 async function buildLocalHermesEnv(envPath: string): Promise<string> {
@@ -426,29 +520,46 @@ async function buildLocalHermesEnv(envPath: string): Promise<string> {
   return replaceEnvValues(existing, updates);
 }
 
-function buildHermesProvidersBlock(providers: Provider[]): string[] {
+function buildHermesProvidersBlock(providers: Provider[], providerModels: Record<string, string[]>): string[] {
   const lines = ["providers:"];
   if (!providers.length) return [...lines, "  {}"];
   for (const provider of providers) {
+    const models = providerModels[provider.name] ?? [];
     lines.push(`  ${yamlKey(provider.name)}:`);
     lines.push(`    name: ${yamlString(provider.name)}`);
     lines.push(`    api: ${yamlString(getProviderDefaultBaseUrl(provider))}`);
     lines.push(`    api_key: ${yamlString(provider.apiKey)}`);
     lines.push(`    default_model: ${yamlString(provider.model)}`);
     lines.push(`    transport: ${yamlString(getProviderApiMode(provider))}`);
+    if (models.length) {
+      lines.push("    models:");
+      for (const model of models) lines.push(`      - ${yamlString(model)}`);
+    } else {
+      lines.push("    models: []");
+    }
   }
   return lines;
 }
 
-function buildHermesCustomProvidersBlock(providers: Provider[]): string[] {
+function buildHermesCustomProvidersBlock(providers: Provider[], providerModels: Record<string, string[]>): string[] {
   const lines = ["custom_providers:"];
   if (!providers.length) return [...lines, "  []"];
   for (const provider of providers) {
+    const models = providerModels[provider.name] ?? [];
     lines.push(`  - name: ${yamlString(provider.name)}`);
     lines.push(`    base_url: ${yamlString(getProviderDefaultBaseUrl(provider))}`);
     lines.push(`    api_key: ${yamlString(provider.apiKey)}`);
     lines.push(`    model: ${yamlString(provider.model)}`);
     lines.push(`    api_mode: ${yamlString(getProviderApiMode(provider))}`);
+    if (models.length) {
+      lines.push("    models:");
+      for (const model of models) {
+        lines.push(`      ${yamlKey(model)}:`);
+        lines.push("        context_length: null");
+      }
+    } else {
+      lines.push("    models: {}");
+    }
   }
   return lines;
 }

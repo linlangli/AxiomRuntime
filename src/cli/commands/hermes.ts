@@ -274,6 +274,7 @@ async function syncAndRestartLocalHermes(robotName: string): Promise<void> {
   const result = await syncHermesRobotToLocalConfigAndRestart(robotName);
   console.log(`Synced local Hermes config: ${result.configPath}`);
   console.log(`Active Hermes default: ${result.robot.name} / ${result.provider.name} / ${result.robot.model}`);
+  console.log(`Synced providers: ${formatProviderModelCounts(result.metadata.modelCounts)}`);
   console.log(result.restart.message);
 }
 
@@ -411,4 +412,10 @@ function printTasks(robot: HermesRobot): void {
   if (robot.tasks.length > preview.length) {
     console.log(`    ... ${robot.tasks.length - preview.length} more task(s)`);
   }
+}
+
+function formatProviderModelCounts(modelCounts: Record<string, number>): string {
+  return Object.entries(modelCounts)
+    .map(([provider, count]) => `${provider}(${count})`)
+    .join(", ");
 }

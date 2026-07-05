@@ -253,13 +253,19 @@ Purpose:
 Behavior:
 
 1. Load the robot from `hermes.json`.
-2. Resolve the referenced provider from `providers.json`.
-3. Write the robot's model, provider kind, base URL, and API key into the top-level `model:` block in `~/.hermes/config.yaml` or `AI_GATEWAY_HERMES_HOME/config.yaml`.
-4. Write all AI Gateway providers into native Hermes `providers:` and `custom_providers:` so gateway `/model` lists AI Gateway providers only.
-5. Clear native Hermes provider credential entry points in `.env` and `auth.json` that would otherwise make built-in providers appear in `/model`.
-6. Preserve unrelated native Hermes config blocks.
-7. Restart the local Hermes gateway when possible.
-8. Log only the API key fingerprint, not the full key.
+2. Refresh all AI Gateway providers and update the model cache.
+3. Resolve the referenced provider from `providers.json`.
+4. Write the robot's model, provider kind, base URL, and API key into the top-level `model:` block in `~/.hermes/config.yaml` or `AI_GATEWAY_HERMES_HOME/config.yaml`.
+5. Write all AI Gateway providers and discovered model candidates into native Hermes `providers:` and `custom_providers:` so gateway `/model` lists AI Gateway providers only.
+6. Clear native Hermes provider credential entry points in `.env` and `auth.json` that would otherwise make built-in providers appear in `/model`.
+7. Preserve unrelated native Hermes config blocks.
+8. Restart the local Hermes gateway when possible.
+9. Log only the API key fingerprint, not the full key.
+
+Provider-only sync:
+
+- `ai add` and `ai edit` must refresh all providers, write the AI Gateway provider list and discovered model candidates into native Hermes config, clear native Hermes credential entry points, and restart the local gateway.
+- Provider-only sync must preserve the existing native Hermes top-level `model:` block so Telegram keeps using the currently selected robot/model until `ai hermes add/edit/sync` changes it.
 
 Rules:
 

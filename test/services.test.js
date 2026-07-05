@@ -22,6 +22,7 @@ import {
   listHermesRobots,
   syncHermesRobotToLocalConfigAndRestart,
   syncHermesRobotToLocalConfig,
+  syncHermesProvidersToLocalConfig,
   updateHermesRobot
 } from "../dist/core/hermes/hermes-service.js";
 import { readHermesState, upsertHermesRobotState } from "../dist/core/hermes/hermes-store.js";
@@ -397,6 +398,7 @@ test("syncHermesRobotToLocalConfig updates native Hermes model config", async ()
       }
     ]);
     await addHermesRobot({ name: "telegram-bot", provider: "51talk-cs", model: "claude-sonnet-4-6" });
+    mockFetchModels(["claude-sonnet-4-6", "claude-opus-4-6"]);
 
     const result = await syncHermesRobotToLocalConfig("telegram-bot");
     const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
@@ -412,7 +414,9 @@ test("syncHermesRobotToLocalConfig updates native Hermes model config", async ()
     assert.match(config, /base_url: "https:\/\/icode\.51talk\.biz"/);
     assert.match(config, /api_key: "sk-selected-native"/);
     assert.match(config, /providers:\n  51talk-cs:/);
+    assert.match(config, /models:\n      - "claude-sonnet-4-6"\n      - "claude-opus-4-6"/);
     assert.match(config, /custom_providers:\n  - name: "51talk-cs"/);
+    assert.match(config, /claude-opus-4-6:\n        context_length: null/);
     assert.doesNotMatch(config, /old-key|old-model|https:\/\/old\.example/);
     assert.match(env, /^ANTHROPIC_API_KEY=$/m);
     assert.match(env, /^ANTHROPIC_BASE_URL=$/m);
@@ -423,6 +427,59 @@ test("syncHermesRobotToLocalConfig updates native Hermes model config", async ()
     assert.deepEqual(auth.providers, {});
     assert.deepEqual(auth.credential_pool, {});
     assert.equal(auth.active_provider, "");
+    assert.equal(result.metadata.modelCounts["51talk-cs"], 2);
+  });
+});
+
+test("syncHermesProvidersToLocalConfig refreshes models without changing active Hermes model", async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "native-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    await fs.mkdir(hermesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(hermesDir, "config.yaml"),
+      [
+        "model:",
+        "  default: claude-opus-4-6",
+        "  provider: 51talk-cs",
+        "  base_url: https://icode.51talk.biz",
+        "  api_key: sk-active",
+        "terminal:",
+        "  backend: local"
+      ].join("\n")
+    );
+    await writeProviders([
+      {
+        name: "51talk-cs",
+        baseUrl: "https://icode.51talk.biz",
+        apiKey: "sk-selected-native",
+        mode: "auto",
+        level: 1,
+        model: "claude-sonnet-4-6"
+      },
+      {
+        name: "51talk-codex",
+        baseUrl: "https://icode.51talk.biz/v1",
+        apiKey: "sk-codex",
+        mode: "auto",
+        level: 2,
+        model: "gpt-5.5"
+      }
+    ]);
+    mockFetchModels(["claude-sonnet-4-6", "gpt-5.5"]);
+
+    const result = await syncHermesProvidersToLocalConfig();
+    const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
+
+    assert.equal(result.configPath, path.join(hermesDir, "config.yaml"));
+    assert.match(config, /default: claude-opus-4-6/);
+    assert.match(config, /provider: 51talk-cs/);
+    assert.match(config, /providers:\n  51talk-cs:/);
+    assert.match(config, /  51talk-codex:/);
+    assert.match(config, /- "claude-sonnet-4-6"/);
+    assert.match(config, /- "gpt-5.5"/);
+    assert.equal(result.metadata.modelCounts["51talk-cs"], 2);
+    assert.equal(result.metadata.modelCounts["51talk-codex"], 2);
   });
 });
 
@@ -442,6 +499,7 @@ test("syncHermesRobotToLocalConfigAndRestart can skip gateway restart in tests",
       }
     ]);
     await addHermesRobot({ name: "telegram-bot", provider: "51talk-cs", model: "claude-sonnet-4-6" });
+    mockFetchModels(["claude-sonnet-4-6"]);
 
     const result = await syncHermesRobotToLocalConfigAndRestart("telegram-bot");
 

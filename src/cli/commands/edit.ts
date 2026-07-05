@@ -2,6 +2,7 @@ import { readCache } from "../../core/config/cache-store.js";
 import { writeLog } from "../../core/logs/log-service.js";
 import { listProviders, updateProvider } from "../../core/providers/provider-service.js";
 import type { Provider, ProviderMode } from "../../core/types.js";
+import { autoSyncHermesProviders } from "./hermes-sync.js";
 import { promptSelect, promptText } from "../prompts/prompt.js";
 
 type EditableField = "name" | "baseUrl" | "apiKey" | "mode" | "level" | "model";
@@ -31,6 +32,7 @@ export async function runEditCommand(): Promise<void> {
   const patch = await buildPatch(provider, providers, field);
   const updated = await updateProvider(provider.name, patch);
   console.log(`Updated provider: ${updated.name}`);
+  await autoSyncHermesProviders();
   await writeLog({
     category: "provider",
     action: "provider_edit",

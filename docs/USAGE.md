@@ -120,10 +120,11 @@ ai hermes add
 - 启动时会从 `providers.json` 读取 provider 的 `apiKey`、`baseUrl` 和模型信息。
 - 启动 Hermes 时会使用 AI Gateway 管理的独立机器人运行目录，例如 `~/.ai-gateway/hermes/<机器人名称>/`。
 - 每次启动都会从 `providers.json` 读取当前 provider，生成该机器人专用的 Hermes 运行配置，避免读取全局 `~/.hermes/config.yaml` 后串用其它 API Key。
-- 不会默认修改你的全局 `~/.hermes/config.yaml`。
-- `ai hermes add/edit` 保存后会自动把该机器人的 provider/model 同步到本机 Hermes 原生配置，并自动重启 Hermes gateway。
-- `sync` 会把 AI Gateway 的 provider 列表写入本机 Hermes 原生配置，让 Telegram 中的 `/model` 只显示 AI Gateway 配置过的 provider。
+- `ai hermes use` 不会读取你的全局 `~/.hermes/config.yaml`，会使用独立机器人运行目录。
+- `ai add/edit` 修改 provider 后，会自动把 AI Gateway 的 provider 列表同步到本机 Hermes 原生配置，并自动重启 Hermes gateway。
+- `ai hermes add/edit/sync` 会把 AI Gateway 的 provider 列表写入本机 Hermes 原生配置，让 Telegram 中的 `/model` 只显示 AI Gateway 配置过的 provider。
 - `sync` 会把该机器人的 provider/model/baseUrl/apiKey 写入本机 Hermes 原生配置 `~/.hermes/config.yaml`，并保留其它 Hermes 配置。
+- 同步前会刷新所有 provider 的可用模型，并把模型候选写入 Hermes 原生配置；模型列表不会写进 `providers.json`。
 - 同步时会清空 Hermes 原生 provider 凭证入口，避免 `anthropic`、`copilot`、`openai-codex` 等原生 provider 继续出现在 `/model`。
 - `sync` 是手动补救命令；正常修改 provider/model 不需要单独执行。
 - `list` 只列出机器人配置，不刷新健康度。
