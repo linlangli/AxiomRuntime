@@ -457,6 +457,35 @@ test("syncHermesRobotToLocalConfig updates native Hermes model config", async ()
   });
 });
 
+test("syncHermesRobotToLocalConfig writes OpenAI v1 base URL for chat completions providers", async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "native-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    await writeProviders([
+      {
+        name: "51talk-codex",
+        baseUrl: "https://icode.51talk.biz",
+        apiKey: "sk-codex",
+        mode: "auto",
+        level: 1,
+        model: "gpt-5.5"
+      }
+    ]);
+    await addHermesRobot({ name: "telegram-bot", provider: "51talk-codex", model: "gpt-5.5" });
+    mockFetchModels(["gpt-5.5"]);
+
+    await syncHermesRobotToLocalConfig("telegram-bot");
+    const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
+
+    assert.match(config, /provider: "51talk-codex"/);
+    assert.match(config, /base_url: "https:\/\/icode\.51talk\.biz\/v1"/);
+    assert.match(config, /api: "https:\/\/icode\.51talk\.biz\/v1"/);
+    assert.match(config, /base_url: "https:\/\/icode\.51talk\.biz\/v1"/);
+    assert.match(config, /transport: "chat_completions"/);
+    assert.match(config, /api_mode: "chat_completions"/);
+  });
+});
+
 test("syncHermesProvidersToLocalConfig refreshes providers and syncs active Hermes credentials", async () => {
   await withTempHome(async (tempDir) => {
     const hermesDir = path.join(tempDir, "native-hermes");

@@ -155,5 +155,5 @@ export function getToolBaseUrl(tool: ToolType, provider: Provider): string {
   if (tool === "claude") {
     return normalized.replace(/\/v1$/i, "");
   }
-  return normalized;
+  return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
 }

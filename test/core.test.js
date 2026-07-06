@@ -91,3 +91,16 @@ test("normalizes base URL per downstream tool", () => {
   assert.equal(getToolBaseUrl("claude", provider), "https://icode.51talk.biz");
   assert.equal(getToolBaseUrl("codex", provider), "https://icode.51talk.biz/v1");
 });
+
+test("adds OpenAI v1 path for codex runtime base URL", () => {
+  const provider = {
+    name: "api",
+    baseUrl: "https://icode.51talk.biz/",
+    apiKey: "key",
+    mode: "auto",
+    level: 1,
+    model: "gpt-5.5"
+  };
+
+  assert.equal(getToolBaseUrl("codex", provider), "https://icode.51talk.biz/v1");
+});
