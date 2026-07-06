@@ -136,6 +136,7 @@ ai hermes add
 - `export` 默认导出所有机器人完整复刻包，包含机器人配置、Telegram 绑定、tasks schedule、关联 provider 配置、API Key 和模型缓存；该文件需要私密保存。传入机器人名称时只导出单个机器人。
 - `import` 导入完整复刻包时会同步写入关联 provider，并立即同步本机 Hermes 配置、重启 gateway；旧版不含 provider 的导出文件仍可导入，但目标机器需要已有同名 provider。
 - `import-local` 会自动扫描本机 `~/.hermes/config.yaml`、`~/.hermes/channel_directory.json` 和 `~/.hermes/cron/jobs.json`，先把本机 Hermes provider 导入 AI Gateway provider 配置，再导入 Hermes 默认机器人和该机器人下面的 tasks，并立即同步本机 Hermes 配置、重启 gateway。
+- 已导入后即使把 `hermes-default` 改名，再执行 `import-local` 也会按 Telegram chatId 或 task id 识别为同一个机器人，不会重复新增。
 - `import-local --overwrite` 会用本机 Hermes 配置覆盖同名 provider 和同名机器人。
 
 ## 添加 Provider

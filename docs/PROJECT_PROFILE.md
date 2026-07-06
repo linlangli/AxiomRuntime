@@ -190,6 +190,7 @@ Behavior rules:
 - `delete` removes the robot configuration and AI Gateway-managed robot state.
 - `export` defaults to all robots and writes a complete replication bundle with referenced provider API keys and model cache. Keep export files private.
 - `import-local` scans local Hermes files and imports the default Hermes robot plus its cron jobs as tasks.
+- `import-local` must be idempotent after users rename imported robots; match the local Hermes robot by name, source, Telegram chatId, or cron task ids before creating `hermes-default`.
 - If an imported robot references a missing local provider, import should still succeed and status should report `provider missing`.
 
 Implementation must be reusable by future web and desktop surfaces.

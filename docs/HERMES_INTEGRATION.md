@@ -367,6 +367,7 @@ Local import rules:
 - Scan `~/.hermes/cron/jobs.json` for local Hermes cron jobs and import them as robot tasks.
 - Import local Hermes provider credentials into AI Gateway providers so future provider changes are managed through `ai provider`.
 - Match local Hermes models to existing AI Gateway providers when possible.
+- Re-running `import-local` after the imported robot has been renamed must not create another `hermes-default`; match existing robots by name, source, Telegram chatId, or imported cron task ids.
 - If no matching AI Gateway provider exists, keep the local provider name and show `provider missing` in status.
 
 ## Web Management Direction

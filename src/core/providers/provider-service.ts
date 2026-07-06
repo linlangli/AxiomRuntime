@@ -143,6 +143,12 @@ export async function refreshProvider(provider: Provider, options: RefreshProvid
 
 export async function refreshAllProviders(options: RefreshProviderOptions = {}): Promise<void> {
   const providers = await readProviders();
+  if (options.verifyCallableModels) {
+    for (const provider of providers) {
+      await refreshProvider(provider, options);
+    }
+    return;
+  }
   await Promise.all(providers.map((provider) => refreshProvider(provider, options)));
 }
 

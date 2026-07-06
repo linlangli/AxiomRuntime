@@ -537,15 +537,17 @@ export async function importLocalHermesRobots(options: { overwrite?: boolean } =
       })),
       updatedAt: now
     };
-    const existingIndex = nextRobots.findIndex((item) => item.name === robot.name);
+    const existingIndex = findExistingLocalHermesRobotIndex(nextRobots, robot);
     if (existingIndex >= 0 && !options.overwrite) {
-      skipped.push(robot);
+      skipped.push(nextRobots[existingIndex]!);
       continue;
     }
     if (existingIndex >= 0) {
+      const existing = nextRobots[existingIndex]!;
       nextRobots[existingIndex] = {
         ...robot,
-        createdAt: nextRobots[existingIndex]!.createdAt
+        name: existing.name,
+        createdAt: existing.createdAt
       };
     } else {
       nextRobots.push(robot);
@@ -567,6 +569,25 @@ export async function importLocalHermesRobots(options: { overwrite?: boolean } =
     }
   });
   return { imported, skipped, importedProviders, skippedProviders, sourceDir };
+}
+
+function findExistingLocalHermesRobotIndex(robots: HermesRobot[], candidate: HermesRobot): number {
+  return robots.findIndex((robot) => isSameLocalHermesRobot(robot, candidate));
+}
+
+function isSameLocalHermesRobot(robot: HermesRobot, candidate: HermesRobot): boolean {
+  if (robot.name === candidate.name) return true;
+  if (robot.source?.type === "hermes-config" && robot.source.id === candidate.source?.id) return true;
+
+  const robotChatId = robot.telegram?.chatId?.trim();
+  const candidateChatId = candidate.telegram?.chatId?.trim();
+  if (robotChatId && candidateChatId && robotChatId === candidateChatId) return true;
+
+  const robotTaskIds = new Set(robot.tasks.map((task) => task.id).filter(Boolean));
+  const candidateTaskIds = candidate.tasks.map((task) => task.id).filter(Boolean);
+  if (candidateTaskIds.length && candidateTaskIds.some((id) => robotTaskIds.has(id))) return true;
+
+  return false;
 }
 
 async function resolveRobotProvider(robot: HermesRobot): Promise<Provider> {

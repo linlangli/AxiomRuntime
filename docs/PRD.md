@@ -761,6 +761,7 @@ Import/export:
 - `ai hermes export` writes a complete replication bundle for all Hermes robots by default; `ai hermes export <robot-name>` exports one robot.
 - `ai hermes import <file>` imports a complete robot bundle and referenced providers.
 - `ai hermes import-local` scans local Hermes files and imports the default Hermes robot plus its cron jobs as tasks.
+- Re-running `import-local` after renaming the imported robot must not create a duplicate `hermes-default`; match existing robots by name, local source, Telegram chatId, or task ids.
 - Full export bundles include referenced provider API keys and model cache. Keep export files private.
 - Legacy providerless imports require the referenced provider to exist locally before sync can succeed.
 

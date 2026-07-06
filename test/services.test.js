@@ -969,6 +969,16 @@ test("imports local Hermes config and cron jobs as robots", async () => {
     assert.doesNotMatch(raw, /sk-secret/);
     assert.doesNotMatch(raw, /createdAt|updatedAt|source/);
     assert.match(raw, /"schedule": "0 9 \* \* \*"/);
+
+    await updateHermesRobot("hermes-default", { name: "capital-sentinel" });
+    const secondImport = await importLocalHermesRobots();
+    const robotsAfterRename = await listHermesRobots();
+
+    assert.equal(secondImport.imported.length, 0);
+    assert.equal(secondImport.skipped.length, 1);
+    assert.equal(secondImport.skipped[0].name, "capital-sentinel");
+    assert.equal(robotsAfterRename.length, 1);
+    assert.equal(robotsAfterRename[0].name, "capital-sentinel");
   });
 });
 
