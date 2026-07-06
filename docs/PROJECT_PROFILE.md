@@ -185,6 +185,7 @@ Behavior rules:
 - `use` launches Hermes CLI for the selected robot.
 - `add` and `edit` automatically sync the selected robot plus all AI Gateway providers into native local Hermes config at `~/.hermes/config.yaml`, refresh discovered provider models, preserve unrelated Hermes settings, clear native Hermes provider credential entry points, and restart the local Hermes gateway when possible. Telegram `/model` should show only AI Gateway-configured providers. `sync` remains available as a manual repair command.
 - Provider `add` and provider `edit` also auto-sync the AI Gateway provider list into native Hermes config without changing the active native Hermes model block.
+- Native Hermes sync patches local Hermes `model_switch.py` when needed so Telegram `/model` reads AI Gateway's discovered model list for user-defined providers, not only `default_model`. Keep a `.ai-gateway.bak` backup before patching.
 - `clear` resets robot memory and AI Gateway-managed runtime state while keeping robot configuration.
 - `delete` removes the robot configuration and AI Gateway-managed robot state.
 - `import` and `export` move robot definitions between machines without API keys.
@@ -509,7 +510,7 @@ Update `USAGE.html` when:
 - Added Chinese `README.md` with install, build, test, and local link instructions.
 - Added interactive release script: `npm run release`; script usage lives in `scripts/USAGE.md`.
 - Added GitLab CI release plan for tag-triggered npm publishing.
-- Implemented Hermes robot foundation: `ai hermes`, `ai hermes add/list/edit/status/use/sync/clear/delete/import/import-local/export`, `ai use hermes <robot>`, user-editable `hermes.json`, robot store, state store, import/export, local Hermes import, native local config sync with model refresh, provider add/edit auto-sync, and isolated Hermes runtime launch.
+- Implemented Hermes robot foundation: `ai hermes`, `ai hermes add/list/edit/status/use/sync/clear/delete/import/import-local/export`, `ai use hermes <robot>`, user-editable `hermes.json`, robot store, state store, import/export, local Hermes import, native local config sync with model refresh, provider add/edit auto-sync, Hermes `/model` compatibility patching, and isolated Hermes runtime launch.
 - Hermes robot integration has been documented in `docs/HERMES_INTEGRATION.md`.
 - Product direction is CLI first, with web and Flutter desktop planned.
 

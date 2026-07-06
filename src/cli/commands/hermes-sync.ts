@@ -5,6 +5,7 @@ export async function autoSyncHermesProviders(): Promise<void> {
   try {
     const result = await syncHermesProvidersToLocalConfigAndRestart();
     console.log(`Synced Hermes providers: ${result.configPath}`);
+    console.log(`Hermes /model support: ${result.metadata.hermesModelListPatch.status}`);
     console.log(result.restart.message);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -125,6 +125,7 @@ ai hermes add
 - `ai hermes add/edit/sync` 会把 AI Gateway 的 provider 列表写入本机 Hermes 原生配置，让 Telegram 中的 `/model` 只显示 AI Gateway 配置过的 provider。
 - `sync` 会把该机器人的 provider/model/baseUrl/apiKey 写入本机 Hermes 原生配置 `~/.hermes/config.yaml`，并保留其它 Hermes 配置。
 - 同步前会刷新所有 provider 的可用模型，并把模型候选写入 Hermes 原生配置；模型列表不会写进 `providers.json`。
+- 如果本机 Hermes 版本的 Telegram `/model` 只读取 `default_model`，同步时会自动给 Hermes 的 `model_switch.py` 打兼容补丁，让 `/model` 读取 AI Gateway 写入的完整模型列表；补丁前会保留 `.ai-gateway.bak` 备份。
 - 同步时会清空 Hermes 原生 provider 凭证入口，避免 `anthropic`、`copilot`、`openai-codex` 等原生 provider 继续出现在 `/model`。
 - `sync` 是手动补救命令；正常修改 provider/model 不需要单独执行。
 - `list` 只列出机器人配置，不刷新健康度。

@@ -266,6 +266,7 @@ Provider-only sync:
 
 - `ai add` and `ai edit` must refresh all providers, write the AI Gateway provider list and discovered model candidates into native Hermes config, clear native Hermes credential entry points, and restart the local gateway.
 - Provider-only sync must preserve the existing native Hermes top-level `model:` block so Telegram keeps using the currently selected robot/model until `ai hermes add/edit/sync` changes it.
+- If the installed Hermes `model_switch.py` only reads `default_model` for user-defined providers, sync applies a small compatibility patch so Telegram `/model` reads `providers.<name>.models` from native Hermes config. A `.ai-gateway.bak` backup is kept before patching.
 
 Rules:
 

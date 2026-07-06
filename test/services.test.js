@@ -434,8 +434,11 @@ test("syncHermesRobotToLocalConfig updates native Hermes model config", async ()
 test("syncHermesProvidersToLocalConfig refreshes models without changing active Hermes model", async () => {
   await withTempHome(async (tempDir) => {
     const hermesDir = path.join(tempDir, "native-hermes");
+    const hermesAgentDir = path.join(tempDir, "hermes-agent");
     process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    process.env.AI_GATEWAY_HERMES_AGENT_DIR = hermesAgentDir;
     await fs.mkdir(hermesDir, { recursive: true });
+    await writeHermesModelSwitchFixture(hermesAgentDir);
     await fs.writeFile(
       path.join(hermesDir, "config.yaml"),
       [
@@ -470,6 +473,8 @@ test("syncHermesProvidersToLocalConfig refreshes models without changing active 
 
     const result = await syncHermesProvidersToLocalConfig();
     const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
+    const modelSwitch = await fs.readFile(path.join(hermesAgentDir, "hermes_cli", "model_switch.py"), "utf8");
+    const backup = await fs.readFile(path.join(hermesAgentDir, "hermes_cli", "model_switch.py.ai-gateway.bak"), "utf8");
 
     assert.equal(result.configPath, path.join(hermesDir, "config.yaml"));
     assert.match(config, /default: claude-opus-4-6/);
@@ -480,6 +485,10 @@ test("syncHermesProvidersToLocalConfig refreshes models without changing active 
     assert.match(config, /- "gpt-5.5"/);
     assert.equal(result.metadata.modelCounts["51talk-cs"], 2);
     assert.equal(result.metadata.modelCounts["51talk-codex"], 2);
+    assert.equal(result.metadata.hermesModelListPatch.status, "patched");
+    assert.match(modelSwitch, /AI Gateway: include user-config model candidates/);
+    assert.match(modelSwitch, /configured_models = ep_cfg.get\("models", \[\]\)/);
+    assert.doesNotMatch(backup, /configured_models = ep_cfg/);
   });
 });
 
@@ -677,9 +686,11 @@ test("imports local Hermes config and cron jobs as robots", async () => {
 async function withTempHome(fn) {
   const previousHome = process.env.AI_GATEWAY_HOME;
   const previousHermesHome = process.env.AI_GATEWAY_HERMES_HOME;
+  const previousHermesAgentDir = process.env.AI_GATEWAY_HERMES_AGENT_DIR;
   const previousSkipHermesRestart = process.env.AI_GATEWAY_SKIP_HERMES_RESTART;
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-test-"));
   process.env.AI_GATEWAY_HOME = tempDir;
+  process.env.AI_GATEWAY_HERMES_AGENT_DIR = path.join(tempDir, "missing-hermes-agent");
   try {
     await fn(tempDir);
   } finally {
@@ -692,6 +703,11 @@ async function withTempHome(fn) {
       delete process.env.AI_GATEWAY_HERMES_HOME;
     } else {
       process.env.AI_GATEWAY_HERMES_HOME = previousHermesHome;
+    }
+    if (previousHermesAgentDir === undefined) {
+      delete process.env.AI_GATEWAY_HERMES_AGENT_DIR;
+    } else {
+      process.env.AI_GATEWAY_HERMES_AGENT_DIR = previousHermesAgentDir;
     }
     if (previousSkipHermesRestart === undefined) {
       delete process.env.AI_GATEWAY_SKIP_HERMES_RESTART;
@@ -721,4 +737,33 @@ function jsonResponse(value, init = {}) {
     status: init.status ?? 200,
     headers: { "content-type": "application/json" }
   });
+}
+
+async function writeHermesModelSwitchFixture(hermesAgentDir) {
+  const filePath = path.join(hermesAgentDir, "hermes_cli", "model_switch.py");
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(
+    filePath,
+    [
+      "def list_authenticated_providers(user_providers=None):",
+      "    results = []",
+      "    if user_providers and isinstance(user_providers, dict):",
+      "        for ep_name, ep_cfg in user_providers.items():",
+      "            if not isinstance(ep_cfg, dict):",
+      "                continue",
+      "            display_name = ep_cfg.get(\"name\", \"\") or ep_name",
+      "            api_url = ep_cfg.get(\"api\", \"\") or ep_cfg.get(\"url\", \"\") or \"\"",
+      "            default_model = ep_cfg.get(\"default_model\", \"\")",
+      "",
+      "            models_list = []",
+      "            if default_model:",
+      "                models_list.append(default_model)",
+      "",
+      "            # Try to probe /v1/models if URL is set (but don't block on it)",
+      "            # For now just show what we know from config",
+      "            results.append({\"slug\": ep_name, \"models\": models_list, \"api_url\": api_url, \"name\": display_name})",
+      "    return results",
+      ""
+    ].join("\n")
+  );
 }

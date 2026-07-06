@@ -76,6 +76,7 @@ Hermes 集成说明：
 
 - `ai add/edit` 会自动把 AI Gateway provider 列表同步到本机 Hermes 原生配置。
 - `ai hermes add/edit/sync` 会同步当前机器人、刷新 provider 模型缓存，并自动重启 Hermes gateway。
+- 如果本机 Hermes `/model` 只显示默认模型，同步时会自动打兼容补丁让它读取完整模型列表。
 
 更多命令用法见：
 

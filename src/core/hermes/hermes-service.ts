@@ -21,6 +21,7 @@ import {
   writeHermesRobots
 } from "./hermes-store.js";
 import { isHermesInstalled, runHermesRobot } from "./hermes-runner.js";
+import { ensureLocalHermesModelListSupport, type HermesModelListPatchResult } from "./hermes-compat.js";
 import type {
   AddHermesRobotInput,
   HermesRobot,
@@ -133,6 +134,7 @@ export async function updateHermesRobot(name: string, patch: UpdateHermesRobotIn
 type HermesSyncMetadata = {
   providers: string[];
   modelCounts: Record<string, number>;
+  hermesModelListPatch: HermesModelListPatchResult;
 };
 
 export async function syncHermesRobotToLocalConfig(name: string): Promise<{
@@ -157,7 +159,8 @@ export async function syncHermesRobotToLocalConfig(name: string): Promise<{
   const authPath = path.join(hermesDir, "auth.json");
   const nextConfig = await buildLocalHermesConfig(configPath, robot, provider, providers, providerModels);
   const nextEnv = await buildLocalHermesEnv(envPath);
-  const metadata = buildHermesSyncMetadata(providers, providerModels);
+  const hermesModelListPatch = await ensureLocalHermesModelListSupport();
+  const metadata = buildHermesSyncMetadata(providers, providerModels, hermesModelListPatch);
 
   await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
   await fs.writeFile(configPath, nextConfig, { encoding: "utf8", mode: 0o600 });
@@ -178,6 +181,7 @@ export async function syncHermesRobotToLocalConfig(name: string): Promise<{
       baseUrl: getHermesProviderBaseUrl(robot, provider),
       providers: metadata.providers,
       modelCounts: metadata.modelCounts,
+      hermesModelListPatch: metadata.hermesModelListPatch,
       apiKeyFingerprint: getSecretFingerprint(provider.apiKey)
     }
   });
@@ -197,7 +201,8 @@ export async function syncHermesProvidersToLocalConfig(): Promise<{ configPath: 
   const withProviders = replaceTopLevelYamlBlock(existing, "providers", buildHermesProvidersBlock(providers, providerModels));
   const nextConfig = replaceTopLevelYamlBlock(withProviders, "custom_providers", buildHermesCustomProvidersBlock(providers, providerModels));
   const nextEnv = await buildLocalHermesEnv(envPath);
-  const metadata = buildHermesSyncMetadata(providers, providerModels);
+  const hermesModelListPatch = await ensureLocalHermesModelListSupport();
+  const metadata = buildHermesSyncMetadata(providers, providerModels, hermesModelListPatch);
 
   await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
   await fs.writeFile(configPath, nextConfig, { encoding: "utf8", mode: 0o600 });
@@ -213,7 +218,8 @@ export async function syncHermesProvidersToLocalConfig(): Promise<{ configPath: 
       configPath,
       envPath,
       providers: metadata.providers,
-      modelCounts: metadata.modelCounts
+      modelCounts: metadata.modelCounts,
+      hermesModelListPatch: metadata.hermesModelListPatch
     }
   });
   return { configPath, envPath, metadata };
@@ -476,10 +482,15 @@ function getProviderModelsFromCache(providers: Provider[], cache: Record<string,
   );
 }
 
-function buildHermesSyncMetadata(providers: Provider[], providerModels: Record<string, string[]>): HermesSyncMetadata {
+function buildHermesSyncMetadata(
+  providers: Provider[],
+  providerModels: Record<string, string[]>,
+  hermesModelListPatch: HermesModelListPatchResult
+): HermesSyncMetadata {
   return {
     providers: providers.map((provider) => provider.name),
-    modelCounts: Object.fromEntries(providers.map((provider) => [provider.name, providerModels[provider.name]?.length ?? 0]))
+    modelCounts: Object.fromEntries(providers.map((provider) => [provider.name, providerModels[provider.name]?.length ?? 0])),
+    hermesModelListPatch
   };
 }
 

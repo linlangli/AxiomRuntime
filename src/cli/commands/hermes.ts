@@ -275,6 +275,7 @@ async function syncAndRestartLocalHermes(robotName: string): Promise<void> {
   console.log(`Synced local Hermes config: ${result.configPath}`);
   console.log(`Active Hermes default: ${result.robot.name} / ${result.provider.name} / ${result.robot.model}`);
   console.log(`Synced providers: ${formatProviderModelCounts(result.metadata.modelCounts)}`);
+  console.log(`Hermes /model support: ${result.metadata.hermesModelListPatch.status}`);
   console.log(result.restart.message);
 }
 
