@@ -555,6 +555,52 @@ test("syncHermesProvidersToLocalConfig refreshes providers and syncs active Herm
   });
 });
 
+test("syncHermesProvidersToLocalConfig replaces inline and duplicate provider blocks", async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "native-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    await fs.mkdir(hermesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(hermesDir, "config.yaml"),
+      [
+        "model:",
+        "  default: gpt-5.5",
+        "  provider: 51talk-codex",
+        "  base_url: https://old.test",
+        "  api_key: old-key",
+        "providers: {}",
+        "terminal:",
+        "  backend: local",
+        "providers:",
+        "  stale:",
+        "    api_key: stale-key",
+        "custom_providers: []"
+      ].join("\n")
+    );
+    await writeProviders([
+      {
+        name: "51talk-codex",
+        baseUrl: "https://icode.51talk.biz",
+        apiKey: "sk-codex",
+        mode: "auto",
+        level: 1,
+        model: "gpt-5.5"
+      }
+    ]);
+    mockFetchModels(["gpt-5.5"]);
+
+    await syncHermesProvidersToLocalConfig();
+    const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
+
+    assert.equal([...config.matchAll(/^providers:/gm)].length, 1);
+    assert.equal([...config.matchAll(/^custom_providers:/gm)].length, 1);
+    assert.match(config, /providers:\n  51talk-codex:/);
+    assert.match(config, /api: "https:\/\/icode\.51talk\.biz\/v1"/);
+    assert.match(config, /api_key: "sk-codex"/);
+    assert.doesNotMatch(config, /providers: \{\}|stale-key|old-key/);
+  });
+});
+
 test("syncHermesProvidersToLocalConfig writes only callable models", async () => {
   await withTempHome(async (tempDir) => {
     const hermesDir = path.join(tempDir, "native-hermes");

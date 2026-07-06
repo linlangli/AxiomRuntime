@@ -124,6 +124,7 @@ ai hermes add
 - `ai provider add/edit/delete` 修改 provider 后，会自动把 AI Gateway 的 provider 列表同步到本机 Hermes 原生配置，并自动重启 Hermes gateway。
 - `ai hermes add/edit/import-local` 会把 AI Gateway 的 provider 列表写入本机 Hermes 原生配置，让 Telegram 中的 `/model` 只显示 AI Gateway 配置过的 provider。
 - 自动同步会把该机器人的 provider/model/baseUrl/apiKey 写入本机 Hermes 原生配置 `~/.hermes/config.yaml`，并保留其它 Hermes 配置。
+- 自动同步会替换 Hermes 原生配置里旧的 `providers` / `custom_providers` 块，并清理重复块，避免 `/model` 能选中但实际执行时报 `Unknown provider`。
 - 同步前会刷新所有 provider 的模型，并用最小请求验证每个模型是否真的能调用；Telegram `/model` 只展示验证通过的模型，没有可调用模型的 provider 不会显示。
 - 可调用性验证使用 `max_tokens: 1` 的轻量请求，产生的 token 会记录到使用量中；模型列表不会写进 `providers.json`。
 - 如果本机 Hermes 版本的 Telegram `/model` 只读取 `default_model`，同步时会自动给 Hermes 的 `model_switch.py` 打兼容补丁，让 `/model` 读取 AI Gateway 写入的完整模型列表；补丁前会保留 `.ai-gateway.bak` 备份。

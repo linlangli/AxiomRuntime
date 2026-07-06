@@ -685,6 +685,7 @@ ai hermes import ./hermes-robot.json</pre>
                   <li>本机 Hermes provider 会先导入 AI Gateway provider 配置，再统一由 <code>ai provider</code> 管理。</li>
                   <li>已导入后即使把 <code>hermes-default</code> 改名，再执行 <code>import-local</code> 也会按 Telegram chatId 或 task id 识别为同一个机器人，不会重复新增。</li>
                   <li>导入后会立即同步 <code>~/.hermes/config.yaml</code> 并重启 Hermes gateway；不需要单独执行 sync。</li>
+                  <li>同步会替换旧的 <code>providers</code> / <code>custom_providers</code> 配置块，并清理重复块，避免 <code>/model</code> 可选但执行时报 <code>Unknown provider</code>。</li>
                   <li>Telegram <code>/model</code> 只展示 AI Gateway 管理且验证可调用的 provider/model。</li>
                   <li>同步时会清空 Hermes 原生 provider 凭证入口，避免 MoA、Copilot、openai-codex 等原生 provider 混入列表。</li>
                 </ul>

@@ -847,18 +847,44 @@ async function readTextIfExists(filePath: string): Promise<string> {
 
 function replaceTopLevelYamlBlock(raw: string, key: string, replacement: string[]): string {
   const lines = raw ? raw.split(/\r?\n/) : [];
-  const start = lines.findIndex((line) => line.trim() === `${key}:` && !line.startsWith(" "));
-  if (start < 0) {
+  const matchingBlocks = findTopLevelYamlBlocks(lines, key);
+  if (!matchingBlocks.length) {
     const prefix = raw.trim() ? `${raw.replace(/\s*$/, "")}\n\n` : "";
     return `${prefix}${replacement.join("\n")}\n`;
   }
 
-  let end = start + 1;
-  while (end < lines.length && (lines[end]!.trim() === "" || /^\s/.test(lines[end]!))) {
-    end += 1;
+  const nextLines: string[] = [];
+  let cursor = 0;
+  for (const [index, block] of matchingBlocks.entries()) {
+    nextLines.push(...lines.slice(cursor, block.start));
+    if (index === 0) {
+      nextLines.push(...replacement);
+    }
+    cursor = block.end;
   }
-  const nextLines = [...lines.slice(0, start), ...replacement, ...lines.slice(end)];
+  nextLines.push(...lines.slice(cursor));
   return `${nextLines.join("\n").replace(/\s*$/, "")}\n`;
+}
+
+function findTopLevelYamlBlocks(lines: string[], key: string): Array<{ start: number; end: number }> {
+  const blocks: Array<{ start: number; end: number }> = [];
+  const pattern = new RegExp(`^${escapeRegExp(key)}:(?:\\s.*)?$`);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (line.startsWith(" ") || !pattern.test(line.trim())) continue;
+
+    let end = index + 1;
+    while (end < lines.length && (lines[end]!.trim() === "" || /^\s/.test(lines[end]!))) {
+      end += 1;
+    }
+    blocks.push({ start: index, end });
+    index = end - 1;
+  }
+  return blocks;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function replaceEnvValues(raw: string, updates: Record<string, string>): string {

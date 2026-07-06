@@ -252,9 +252,10 @@ Behavior:
 4. Write the robot's model, provider kind, base URL, and API key into the top-level `model:` block in `~/.hermes/config.yaml` or `AI_GATEWAY_HERMES_HOME/config.yaml`.
 5. Write all AI Gateway providers and discovered model candidates into native Hermes `providers:` and `custom_providers:` so gateway `/model` lists AI Gateway providers only.
 6. Clear native Hermes provider credential entry points in `.env` and `auth.json` that would otherwise make built-in providers appear in `/model`.
-7. Preserve unrelated native Hermes config blocks.
-8. Restart the local Hermes gateway when possible.
-9. Log only the API key fingerprint, not the full key.
+7. Replace existing native `providers` and `custom_providers` blocks, including inline empty blocks such as `providers: {}`, and remove duplicate top-level provider blocks.
+8. Preserve unrelated native Hermes config blocks.
+9. Restart the local Hermes gateway when possible.
+10. Log only the API key fingerprint, not the full key.
 
 Provider-only sync:
 
