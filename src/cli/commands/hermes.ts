@@ -279,7 +279,10 @@ export async function runHermesUseCommand(name?: string): Promise<void> {
 
 async function runHermesClearCommand(name?: string): Promise<void> {
   const robotName = name ?? (await selectRobotName("Select robot to clear"));
-  const confirmed = await promptConfirm(`Clear Hermes robot ${robotName}? This keeps configuration and resets AI Gateway-managed robot state.`, false);
+  const confirmed = await promptConfirm(
+    `Clear Hermes robot ${robotName}? This resets memory/runtime state and keeps provider, model, Telegram, and tasks.`,
+    false
+  );
   if (!confirmed) return;
   await clearHermesRobot(robotName);
   console.log(`Cleared Hermes robot: ${robotName}`);
