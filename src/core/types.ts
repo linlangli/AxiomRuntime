@@ -34,7 +34,7 @@ export type UsageEvent = {
   provider: string;
   tool: ToolType;
   model: string;
-  source: "doctor_deep" | "proxy" | "cli";
+  source: "doctor_deep" | "model_probe" | "proxy" | "cli";
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;

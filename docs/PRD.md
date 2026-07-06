@@ -744,7 +744,9 @@ Sync rules:
 
 - Replace only the top-level `model:` block.
 - Write AI Gateway providers into native Hermes `providers:` and `custom_providers:` so Telegram `/model` lists AI Gateway providers only.
-- Refresh all AI Gateway providers before sync, update the model cache, and write discovered model candidates into native Hermes provider entries. Do not write model lists into `providers.json`.
+- Refresh all AI Gateway providers before sync, verify each discovered model with the smallest practical call (`max_tokens: 1`), update the model cache with only callable models, and write only callable model candidates into native Hermes provider entries. Do not write model lists into `providers.json`.
+- Providers with no callable models must not appear in the Telegram `/model` listing.
+- Record model probe token usage with source `model_probe`.
 - Apply a compatibility patch to local Hermes when its `/model` provider listing only reads `default_model` for user-defined providers. The patch must make Hermes read the discovered `models` list written by AI Gateway and must keep a `.ai-gateway.bak` backup.
 - Clear native Hermes provider credential entry points in `.env` and `auth.json` that would otherwise make built-in providers appear in `/model`.
 - Preserve other native Hermes configuration such as Telegram, toolsets, terminal, cron, memory settings, and MCP servers.

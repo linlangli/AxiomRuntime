@@ -148,7 +148,7 @@ export async function syncHermesRobotToLocalConfig(name: string): Promise<{
   if (!robot) {
     throw new Error(`Hermes robot not found: ${name}`);
   }
-  await refreshAllProviders();
+  await refreshAllProviders({ verifyCallableModels: true });
   const providers = await readProviders();
   const provider = resolveProviderFromList(robot, providers);
   const cache = await readCache();
@@ -189,7 +189,7 @@ export async function syncHermesRobotToLocalConfig(name: string): Promise<{
 }
 
 export async function syncHermesProvidersToLocalConfig(): Promise<{ configPath: string; envPath: string; metadata: HermesSyncMetadata }> {
-  await refreshAllProviders();
+  await refreshAllProviders({ verifyCallableModels: true });
   const providers = await readProviders();
   const cache = await readCache();
   const providerModels = getProviderModelsFromCache(providers, cache.providers);
@@ -477,7 +477,7 @@ function getProviderModelsFromCache(providers: Provider[], cache: Record<string,
   return Object.fromEntries(
     providers.map((provider) => [
       provider.name,
-      Array.from(new Set([provider.model, ...(cache[provider.name]?.models ?? [])].filter(Boolean)))
+      cache[provider.name]?.models ?? []
     ])
   );
 }

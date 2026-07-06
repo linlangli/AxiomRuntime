@@ -1,8 +1,10 @@
 import { readCache, renameProviderCache, upsertProviderCache } from "../config/cache-store.js";
+import { appendUsageEvent } from "../config/usage-store.js";
 import { writeLog } from "../logs/log-service.js";
 import { readProviders, swapProviderLevel, writeProviders } from "../config/providers-store.js";
-import { checkProvider } from "../models/model-discovery.js";
-import type { Provider, ProviderMode } from "../types.js";
+import { checkCallableModels, checkProvider } from "../models/model-discovery.js";
+import { buildUsageEvent } from "../usage/usage-service.js";
+import type { Provider, ProviderMode, TokenUsage } from "../types.js";
 
 export type AddProviderInput = {
   name: string;
@@ -89,29 +91,84 @@ export async function updateProvider(providerName: string, patch: Partial<Provid
   return updated;
 }
 
-export async function refreshProvider(provider: Provider): Promise<void> {
+type RefreshProviderOptions = {
+  verifyCallableModels?: boolean;
+};
+
+export async function refreshProvider(provider: Provider, options: RefreshProviderOptions = {}): Promise<void> {
   const result = await checkProvider(provider);
+  const callable = options.verifyCallableModels && result.models.length
+    ? await filterCallableModels(provider, result.models)
+    : { models: result.models, failed: 0 };
+  const models = callable.models;
+  const status = result.status === "ok" && options.verifyCallableModels && !models.length ? "error" : result.status;
+  const lastError = status === "error" && options.verifyCallableModels && !models.length
+    ? `No callable models found. ${result.error ?? ""}`.trim()
+    : result.error;
+
   await upsertProviderCache(provider.name, {
-    status: result.status,
-    models: result.models,
+    status,
+    models,
     lastCheckedAt: result.checkedAt,
-    lastError: result.error
+    lastError
   });
   await writeLog({
-    level: result.status === "ok" ? "info" : "error",
+    level: status === "ok" ? "info" : "error",
     category: "provider",
     action: "provider_health_check",
-    message: `${provider.name}: ${result.status}${result.error ? ` (${result.error})` : ""}`,
-    metadata: { provider: provider.name, status: result.status, models: result.models.length, checkedAt: result.checkedAt }
+    message: `${provider.name}: ${status}${lastError ? ` (${lastError})` : ""}`,
+    metadata: {
+      provider: provider.name,
+      status,
+      models: models.length,
+      discoveredModels: result.models.length,
+      failedCallableModels: callable.failed,
+      checkedAt: result.checkedAt,
+      verifyCallableModels: Boolean(options.verifyCallableModels)
+    }
   });
 }
 
-export async function refreshAllProviders(): Promise<void> {
+export async function refreshAllProviders(options: RefreshProviderOptions = {}): Promise<void> {
   const providers = await readProviders();
-  await Promise.all(providers.map((provider) => refreshProvider(provider)));
+  await Promise.all(providers.map((provider) => refreshProvider(provider, options)));
 }
 
 export async function getCachedModels(providerName: string): Promise<string[]> {
   const cache = await readCache();
   return cache.providers[providerName]?.models ?? [];
+}
+
+async function filterCallableModels(provider: Provider, models: string[]): Promise<{ models: string[]; failed: number }> {
+  const results = await checkCallableModels(provider, models);
+  for (const result of results) {
+    if (result.status === "ok" && result.usage) {
+      await recordModelProbeUsage(provider, result.model, result.usage);
+    }
+  }
+  const callableModels = results.filter((result) => result.status === "ok").map((result) => result.model);
+  await writeLog({
+    level: callableModels.length ? "info" : "warn",
+    category: "provider",
+    action: "provider_model_probe",
+    message: `${provider.name}: ${callableModels.length}/${models.length} callable model(s).`,
+    metadata: {
+      provider: provider.name,
+      callableModels,
+      failedModels: results.filter((result) => result.status === "error").map((result) => ({ model: result.model, error: result.error }))
+    }
+  });
+  return { models: callableModels, failed: results.length - callableModels.length };
+}
+
+async function recordModelProbeUsage(provider: Provider, model: string, usage: TokenUsage): Promise<void> {
+  await appendUsageEvent(buildUsageEvent({
+    provider: provider.name,
+    tool: "hermes",
+    model,
+    source: "model_probe",
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens
+  }));
 }

@@ -414,7 +414,8 @@ test("syncHermesRobotToLocalConfig updates native Hermes model config", async ()
     assert.match(config, /base_url: "https:\/\/icode\.51talk\.biz"/);
     assert.match(config, /api_key: "sk-selected-native"/);
     assert.match(config, /providers:\n  51talk-cs:/);
-    assert.match(config, /models:\n      - "claude-sonnet-4-6"\n      - "claude-opus-4-6"/);
+    assert.match(config, /- "claude-sonnet-4-6"/);
+    assert.match(config, /- "claude-opus-4-6"/);
     assert.match(config, /custom_providers:\n  - name: "51talk-cs"/);
     assert.match(config, /claude-opus-4-6:\n        context_length: null/);
     assert.doesNotMatch(config, /old-key|old-model|https:\/\/old\.example/);
@@ -486,9 +487,52 @@ test("syncHermesProvidersToLocalConfig refreshes models without changing active 
     assert.equal(result.metadata.modelCounts["51talk-cs"], 2);
     assert.equal(result.metadata.modelCounts["51talk-codex"], 2);
     assert.equal(result.metadata.hermesModelListPatch.status, "patched");
-    assert.match(modelSwitch, /AI Gateway: include user-config model candidates/);
+    assert.match(modelSwitch, /AI Gateway: include callable-only user-config model candidates v2/);
     assert.match(modelSwitch, /configured_models = ep_cfg.get\("models", \[\]\)/);
+    assert.match(modelSwitch, /has_configured_models = "models" in ep_cfg/);
+    assert.match(modelSwitch, /not has_configured_models or str\(default_model\) in models_list/);
+    assert.match(modelSwitch, /has_configured_models and not models_list/);
     assert.doesNotMatch(backup, /configured_models = ep_cfg/);
+  });
+});
+
+test("syncHermesProvidersToLocalConfig writes only callable models", async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "native-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    await writeProviders([
+      {
+        name: "api",
+        baseUrl: "https://api.test",
+        apiKey: "key",
+        mode: "auto",
+        level: 1,
+        model: "claude-good"
+      }
+    ]);
+    mockFetch((url, init) => {
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "claude-good" }, { id: "claude-bad" }] });
+      }
+      if (init?.method === "POST" && String(url).endsWith("/v1/messages")) {
+        const body = JSON.parse(String(init.body));
+        if (body.model === "claude-good") {
+          return jsonResponse({ usage: { input_tokens: 1, output_tokens: 1 } });
+        }
+        return jsonResponse({ error: { message: "model unavailable" } }, { status: 400 });
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    const result = await syncHermesProvidersToLocalConfig();
+    const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
+    const usage = JSON.parse(await fs.readFile(path.join(process.env.AI_GATEWAY_HOME, "usage.json"), "utf8"));
+
+    assert.equal(result.metadata.modelCounts.api, 1);
+    assert.match(config, /- "claude-good"/);
+    assert.doesNotMatch(config, /claude-bad/);
+    assert.equal(usage.events[0].source, "model_probe");
+    assert.equal(usage.events[0].totalTokens, 2);
   });
 });
 
@@ -720,9 +764,19 @@ async function withTempHome(fn) {
 }
 
 function mockFetchModels(models) {
-  mockFetch((url) => {
+  mockFetch((url, init) => {
     if (String(url).endsWith("/models")) {
       return jsonResponse({ data: models.map((id) => ({ id })) });
+    }
+    if (init?.method === "POST" && (String(url).endsWith("/chat/completions") || String(url).endsWith("/v1/messages"))) {
+      return jsonResponse({
+        id: "probe",
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          total_tokens: 2
+        }
+      });
     }
     return jsonResponse({}, { status: 404 });
   });
