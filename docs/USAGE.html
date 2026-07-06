@@ -688,6 +688,7 @@ ai hermes import ./hermes-robot.json</pre>
                   <li>导入后会立即同步 <code>~/.hermes/config.yaml</code> 并重启 Hermes gateway；不需要单独执行 sync。</li>
                   <li>同步会替换旧的 <code>providers</code> / <code>custom_providers</code> 配置块，并清理重复块，避免 <code>/model</code> 可选但执行时报 <code>Unknown provider</code>。</li>
                   <li>如果 Hermes 网关点击 <code>/model</code> 选项时没有读取 <code>providers</code> 配置，同步会自动打兼容补丁。</li>
+                  <li>同步/自愈也会补 Hermes 请求兼容逻辑：如果历史对话里出现空工具名，会在发送给 OpenAI 兼容接口前清理，避免 <code>Invalid input[*].name</code> 这类 400 错误。</li>
                   <li>Telegram <code>/model</code> 选择 AI Gateway provider/model 后，会保存为本机 Hermes 默认配置；下次执行 <code>ai hermes status/list</code> 会自动同步回 <code>hermes.json</code>。</li>
                   <li>Telegram <code>/model</code> 只展示 AI Gateway 管理且验证可调用的 provider/model。</li>
                   <li>同步时会清空 Hermes 原生 provider 凭证入口，避免 MoA、Copilot、openai-codex 等原生 provider 混入列表。</li>

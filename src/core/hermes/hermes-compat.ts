@@ -12,6 +12,7 @@ const PATCH_MARKER = "# AI Gateway: include callable-only user-config model cand
 const PICKER_RESTRICT_MARKER = "# AI Gateway: restrict picker to managed user providers v1";
 const GATEWAY_USER_PROVIDERS_MARKER = "# AI Gateway: pass gateway user providers into model switch v1";
 const GATEWAY_PERSIST_PICKER_MARKER = "# AI Gateway: persist Telegram picker model switch v1";
+const RUN_AGENT_EMPTY_TOOL_NAME_MARKER = "# AI Gateway: drop empty tool call names before chat completions v1";
 const CALLABLE_ONLY_PATCH_MARKER = "# AI Gateway: include callable-only user-config model candidates";
 const CALLABLE_PATCH_MARKER = "# AI Gateway: include callable user-config model candidates";
 const LEGACY_PATCH_MARKER = "# AI Gateway: include user-config model candidates";
@@ -151,6 +152,80 @@ const PATCHED_GATEWAY_PICKER_OVERRIDE_BLOCK = `                        _self._se
 
                         # Build confirmation text`;
 
+const RUN_AGENT_METHOD_INSERT_ANCHOR = `    def _supports_reasoning_extra_body(self) -> bool:`;
+
+const RUN_AGENT_EMPTY_TOOL_NAME_METHOD = `    @staticmethod
+    def _ai_gateway_drop_empty_tool_call_names(messages):
+        """Remove invalid empty-name tool calls before strict chat-completions requests."""
+        if not isinstance(messages, list):
+            return messages
+
+        changed = False
+        removed_call_ids = set()
+        cleaned = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                cleaned.append(msg)
+                continue
+
+            role = msg.get("role")
+            if role == "tool":
+                tool_call_id = msg.get("tool_call_id")
+                if not isinstance(tool_call_id, str) or not tool_call_id.strip() or tool_call_id in removed_call_ids:
+                    changed = True
+                    continue
+                cleaned.append(msg)
+                continue
+
+            tool_calls = msg.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                cleaned.append(msg)
+                continue
+
+            valid_tool_calls = []
+            for tool_call in tool_calls:
+                if not isinstance(tool_call, dict):
+                    valid_tool_calls.append(tool_call)
+                    continue
+                function = tool_call.get("function")
+                name = function.get("name") if isinstance(function, dict) else None
+                if isinstance(name, str) and name.strip():
+                    valid_tool_calls.append(tool_call)
+                    continue
+                call_id = tool_call.get("id")
+                if isinstance(call_id, str) and call_id:
+                    removed_call_ids.add(call_id)
+                changed = True
+
+            if len(valid_tool_calls) == len(tool_calls):
+                cleaned.append(msg)
+                continue
+
+            next_msg = dict(msg)
+            if valid_tool_calls:
+                next_msg["tool_calls"] = valid_tool_calls
+                cleaned.append(next_msg)
+            else:
+                next_msg.pop("tool_calls", None)
+                content = next_msg.get("content")
+                if isinstance(content, str) and content.strip():
+                    cleaned.append(next_msg)
+                elif content and not isinstance(content, str):
+                    cleaned.append(next_msg)
+
+        return cleaned if changed else messages
+
+`;
+
+const RUN_AGENT_SANITIZE_CALL_ANCHOR = `        # Qwen portal: normalize content to list-of-dicts, inject cache_control.
+        # Must run AFTER codex sanitization so we transform the final messages.`;
+
+const RUN_AGENT_SANITIZE_CALL_BLOCK = `        ${RUN_AGENT_EMPTY_TOOL_NAME_MARKER}
+        sanitized_messages = self._ai_gateway_drop_empty_tool_call_names(sanitized_messages)
+
+        # Qwen portal: normalize content to list-of-dicts, inject cache_control.
+        # Must run AFTER codex sanitization so we transform the final messages.`;
+
 export async function ensureLocalHermesModelListSupport(): Promise<HermesModelListPatchResult> {
   const filePath = getLocalHermesModelSwitchPath();
   let source: string;
@@ -175,13 +250,24 @@ export async function ensureLocalHermesModelListSupport(): Promise<HermesModelLi
   }
   nextSource = applyPickerRestrictionPatch(nextSource);
   const gatewayPatch = await ensureLocalHermesGatewayModelSwitchSupport();
+  const runAgentPatch = await ensureLocalHermesRunAgentRequestSanitizerSupport();
+  const runAgentCompatible = runAgentPatch.status === "already-supported"
+    || (runAgentPatch.status === "skipped" && runAgentPatch.message.includes("not found"));
 
   if (nextSource === source) {
-    if (source.includes(PATCH_MARKER) && source.includes(PICKER_RESTRICT_MARKER) && gatewayPatch.status === "already-supported") {
+    if (
+      source.includes(PATCH_MARKER)
+      && source.includes(PICKER_RESTRICT_MARKER)
+      && gatewayPatch.status === "already-supported"
+      && runAgentCompatible
+    ) {
       return { status: "already-supported", filePath, message: "Hermes AI Gateway /model support is already present." };
     }
     if (gatewayPatch.status === "patched") {
       return { status: "patched", filePath: gatewayPatch.filePath, message: gatewayPatch.message };
+    }
+    if (runAgentPatch.status === "patched") {
+      return { status: "patched", filePath: runAgentPatch.filePath, message: runAgentPatch.message };
     }
     return { status: "skipped", filePath, message: "Hermes model_switch.py did not match the known AI Gateway compatibility blocks." };
   }
@@ -240,6 +326,41 @@ async function ensureLocalHermesGatewayModelSwitchSupport(): Promise<HermesModel
   return { status: "patched", filePath, message: "Patched Hermes gateway /model switching to resolve AI Gateway providers." };
 }
 
+async function ensureLocalHermesRunAgentRequestSanitizerSupport(): Promise<HermesModelListPatchResult> {
+  const filePath = getLocalHermesRunAgentPath();
+  let source: string;
+  try {
+    source = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return { status: "skipped", filePath, message: "Hermes run_agent.py not found." };
+    }
+    throw error;
+  }
+
+  if (source.includes(RUN_AGENT_EMPTY_TOOL_NAME_MARKER)) {
+    return { status: "already-supported", filePath, message: "Hermes chat-completions request sanitizer is already present." };
+  }
+
+  let nextSource = source;
+  if (!nextSource.includes("def _ai_gateway_drop_empty_tool_call_names(")) {
+    nextSource = nextSource.replace(RUN_AGENT_METHOD_INSERT_ANCHOR, `${RUN_AGENT_EMPTY_TOOL_NAME_METHOD}${RUN_AGENT_METHOD_INSERT_ANCHOR}`);
+  }
+  nextSource = nextSource.replace(RUN_AGENT_SANITIZE_CALL_ANCHOR, RUN_AGENT_SANITIZE_CALL_BLOCK);
+
+  if (nextSource === source) {
+    return { status: "skipped", filePath, message: "Hermes run_agent.py did not match the known AI Gateway request sanitizer blocks." };
+  }
+
+  const backupPath = `${filePath}.ai-gateway.bak`;
+  await fs.copyFile(filePath, backupPath).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  });
+  await fs.writeFile(filePath, nextSource, "utf8");
+  return { status: "patched", filePath, message: "Patched Hermes chat-completions requests to drop empty tool call names." };
+}
+
 function getLocalHermesModelSwitchPath(): string {
   const root = process.env.AI_GATEWAY_HERMES_AGENT_DIR
     ? path.resolve(process.env.AI_GATEWAY_HERMES_AGENT_DIR)
@@ -252,4 +373,11 @@ function getLocalHermesGatewayRunPath(): string {
     ? path.resolve(process.env.AI_GATEWAY_HERMES_AGENT_DIR)
     : path.join(os.homedir(), ".hermes", "hermes-agent");
   return path.join(root, "gateway", "run.py");
+}
+
+function getLocalHermesRunAgentPath(): string {
+  const root = process.env.AI_GATEWAY_HERMES_AGENT_DIR
+    ? path.resolve(process.env.AI_GATEWAY_HERMES_AGENT_DIR)
+    : path.join(os.homedir(), ".hermes", "hermes-agent");
+  return path.join(root, "run_agent.py");
 }

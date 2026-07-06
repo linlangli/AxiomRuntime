@@ -496,6 +496,7 @@ test("syncHermesProvidersToLocalConfig refreshes providers and syncs active Herm
     await fs.mkdir(hermesDir, { recursive: true });
     await writeHermesModelSwitchFixture(hermesAgentDir);
     await writeHermesGatewayRunFixture(hermesAgentDir);
+    await writeHermesRunAgentFixture(hermesAgentDir);
     await fs.writeFile(
       path.join(hermesDir, "config.yaml"),
       [
@@ -532,6 +533,7 @@ test("syncHermesProvidersToLocalConfig refreshes providers and syncs active Herm
     const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
     const modelSwitch = await fs.readFile(path.join(hermesAgentDir, "hermes_cli", "model_switch.py"), "utf8");
     const gatewayRun = await fs.readFile(path.join(hermesAgentDir, "gateway", "run.py"), "utf8");
+    const runAgent = await fs.readFile(path.join(hermesAgentDir, "run_agent.py"), "utf8");
     const backup = await fs.readFile(path.join(hermesAgentDir, "hermes_cli", "model_switch.py.ai-gateway.bak"), "utf8");
 
     assert.equal(result.configPath, path.join(hermesDir, "config.yaml"));
@@ -557,6 +559,8 @@ test("syncHermesProvidersToLocalConfig refreshes providers and syncs active Herm
     assert.match(gatewayRun, /AI Gateway: pass gateway user providers into model switch v1/);
     assert.match(gatewayRun, /AI Gateway: persist Telegram picker model switch v1/);
     assert.equal([...gatewayRun.matchAll(/user_providers=user_provs/g)].length, 2);
+    assert.match(runAgent, /AI Gateway: drop empty tool call names before chat completions v1/);
+    assert.match(runAgent, /def _ai_gateway_drop_empty_tool_call_names/);
     assert.doesNotMatch(backup, /configured_models = ep_cfg/);
   });
 });
@@ -617,6 +621,7 @@ test("repairLocalHermesIntegration patches gateway and refreshes native config w
     await fs.mkdir(hermesDir, { recursive: true });
     await writeHermesModelSwitchFixture(hermesAgentDir);
     await writeHermesGatewayRunFixture(hermesAgentDir);
+    await writeHermesRunAgentFixture(hermesAgentDir);
     await fs.writeFile(
       path.join(hermesDir, "config.yaml"),
       [
@@ -653,6 +658,7 @@ test("repairLocalHermesIntegration patches gateway and refreshes native config w
     const result = await repairLocalHermesIntegration();
     const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
     const gatewayRun = await fs.readFile(path.join(hermesAgentDir, "gateway", "run.py"), "utf8");
+    const runAgent = await fs.readFile(path.join(hermesAgentDir, "run_agent.py"), "utf8");
 
     assert.equal(result.configUpdated, true);
     assert.equal(result.hermesModelListPatch.status, "patched");
@@ -662,6 +668,7 @@ test("repairLocalHermesIntegration patches gateway and refreshes native config w
     assert.match(config, /providers:\n  51talk-codex:/);
     assert.doesNotMatch(config, /providers: \{\}|stale-key|old-model/);
     assert.equal([...gatewayRun.matchAll(/user_providers=user_provs/g)].length, 2);
+    assert.match(runAgent, /AI Gateway: drop empty tool call names before chat completions v1/);
 
     await upsertProviderCache("51talk-codex", {
       health: "ok",
@@ -1331,6 +1338,30 @@ async function writeHermesGatewayRunFixture(hermesAgentDir) {
       "            is_global=persist_global,",
       "            explicit_provider=explicit_provider,",
       "        )"
+    ].join("\n")
+  );
+}
+
+async function writeHermesRunAgentFixture(hermesAgentDir) {
+  const filePath = path.join(hermesAgentDir, "run_agent.py");
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(
+    filePath,
+    [
+      "class AIAgent:",
+      "    def _build_api_kwargs(self, api_messages):",
+      "        sanitized_messages = api_messages",
+      "        needs_sanitization = False",
+      "",
+      "        # Qwen portal: normalize content to list-of-dicts, inject cache_control.",
+      "        # Must run AFTER codex sanitization so we transform the final messages.",
+      "        if self._is_qwen_portal():",
+      "            pass",
+      "        return {\"messages\": sanitized_messages}",
+      "",
+      "    def _supports_reasoning_extra_body(self) -> bool:",
+      "        return False",
+      ""
     ].join("\n")
   );
 }

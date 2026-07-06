@@ -128,6 +128,7 @@ ai hermes add
 - 同步前会刷新所有 provider 的模型，并用最小请求验证每个模型是否真的能调用；Telegram `/model` 只展示验证通过的模型，没有可调用模型的 provider 不会显示。
 - 可调用性验证使用 `max_tokens: 1` 的轻量请求，产生的 token 会记录到使用量中；模型列表不会写进 `providers.json`。
 - 如果本机 Hermes 版本的 Telegram `/model` 只读取 `default_model`，或点击 AI Gateway provider 后没有把 `providers` 配置传给切换逻辑，同步时会自动给 Hermes 打兼容补丁；补丁前会保留 `.ai-gateway.bak` 备份。
+- 同步/自愈也会补 Hermes 请求兼容逻辑：如果历史对话里出现空工具名，会在发送给 OpenAI 兼容接口前清理，避免 `Invalid input[*].name` 这类 400 错误。
 - Telegram `/model` 选择 AI Gateway provider/model 后，会保存到本机 Hermes 默认配置；下次执行 `ai hermes status/list` 会自动同步回 `hermes.json`。
 - 同步时会清空 Hermes 原生 provider 凭证入口，避免 `anthropic`、`copilot`、`openai-codex` 等原生 provider 继续出现在 `/model`。
 - `list` 会先做轻量自愈，再列出机器人配置；轻量自愈只使用本地配置和模型缓存，不做模型可调用性探测，不额外消耗 token。

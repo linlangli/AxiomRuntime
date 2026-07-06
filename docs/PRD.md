@@ -746,6 +746,7 @@ Sync rules:
 - Providers with no callable models must not appear in the Telegram `/model` listing.
 - Record model probe token usage with source `model_probe`.
 - Apply a compatibility patch to local Hermes when its `/model` provider listing only reads `default_model` for user-defined providers. The patch must make Hermes read the discovered `models` list written by AI Gateway and must keep a `.ai-gateway.bak` backup.
+- Apply a compatibility patch to local Hermes request construction when needed so chat-completions requests remove empty-name tool calls and matching empty tool results before sending, preventing OpenAI-compatible providers from rejecting Telegram history with `Invalid input[*].name`.
 - Clear native Hermes provider credential entry points in `.env` and `auth.json` that would otherwise make built-in providers appear in `/model`.
 - Preserve other native Hermes configuration such as Telegram, toolsets, terminal, cron, memory settings, and MCP servers.
 - Use the referenced AI Gateway provider from `providers.json`.
