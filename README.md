@@ -71,13 +71,14 @@ ai doctor
 
 可通过 `AI_GATEWAY_HOME` 覆盖配置目录。
 
-`providers.json` 含 API Key，不要提交到仓库。
+`providers.json` 和 `ai hermes export` 生成的迁移包含 API Key，不要提交到仓库。
 
 Hermes 集成说明：
 
 - `ai provider add/edit/delete` 会自动把 AI Gateway provider 列表同步到本机 Hermes 原生配置。
 - `ai hermes import-local` 会把本机 Hermes 配置里的 provider 导入 AI Gateway provider 配置后统一管理，并立即同步本机 Hermes 配置。
-- `ai hermes add/edit/sync` 会同步当前机器人、用最小请求验证可调用模型，并自动重启 Hermes gateway。
+- `ai hermes export` 默认导出所有机器人完整复刻包；传入机器人名称时只导出单个机器人。
+- `ai hermes add/edit/import` 会同步当前机器人、用最小请求验证可调用模型，并自动重启 Hermes gateway。
 - 如果本机 Hermes `/model` 只显示默认模型，同步时会自动打兼容补丁让它读取完整模型列表。
 
 更多命令用法见：

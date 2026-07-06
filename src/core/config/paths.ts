@@ -47,6 +47,10 @@ export function getHermesExportPath(robotName: string): string {
   return path.join(getExportsDir(), `hermes-${robotName}.json`);
 }
 
+export function getHermesAllExportPath(): string {
+  return path.join(getExportsDir(), "hermes-all.json");
+}
+
 export function getReportsDir(): string {
   return path.join(getConfigRoot(), "reports");
 }

@@ -273,9 +273,9 @@ async function syncAndRestartLocalHermes(robotName: string): Promise<void> {
 }
 
 async function runHermesExportCommand(name?: string): Promise<void> {
-  const robotName = name ?? (await selectRobotName("Select robot to export"));
-  const outputPath = await exportHermesRobot(robotName);
-  console.log(`Exported Hermes robot: ${outputPath}`);
+  const outputPath = await exportHermesRobot(name);
+  console.log(name ? `Exported Hermes robot: ${outputPath}` : `Exported all Hermes robots: ${outputPath}`);
+  console.log("Export includes referenced provider credentials. Keep this file private.");
 }
 
 async function runHermesImportCommand(filePath?: string): Promise<void> {
@@ -284,7 +284,8 @@ async function runHermesImportCommand(filePath?: string): Promise<void> {
 
   try {
     const result = await importHermesRobot(absolutePath);
-    console.log(`Imported Hermes robot: ${result.robot.name}`);
+    printImportedHermesRobots(result);
+    await syncImportedHermesRobot(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.includes("already exists")) {
@@ -299,12 +300,34 @@ async function runHermesImportCommand(filePath?: string): Promise<void> {
     if (action === "cancel") return;
     if (action === "overwrite") {
       const result = await importHermesRobot(absolutePath, { onConflict: "overwrite" });
-      console.log(`Overwrote Hermes robot: ${result.robot.name}`);
+      printImportedHermesRobots(result);
+      await syncImportedHermesRobot(result);
       return;
     }
     const renameTo = await promptText("New robot name");
     const result = await importHermesRobot(absolutePath, { onConflict: "rename", renameTo });
-    console.log(`Imported Hermes robot as: ${result.robot.name}`);
+    printImportedHermesRobots(result);
+    await syncImportedHermesRobot(result);
+  }
+}
+
+async function syncImportedHermesRobot(result: Awaited<ReturnType<typeof importHermesRobot>>): Promise<void> {
+  const robot = result.robots[0]?.robot;
+  if (result.importedProviders.length) {
+    console.log(`Imported ${result.importedProviders.length} provider(s): ${result.importedProviders.map((provider) => provider.name).join(", ")}`);
+  }
+  if (robot) {
+    console.log("");
+    console.log(`Syncing local Hermes config for: ${robot.name}`);
+    await syncAndRestartLocalHermes(robot.name);
+  }
+}
+
+function printImportedHermesRobots(result: Awaited<ReturnType<typeof importHermesRobot>>): void {
+  for (const item of result.robots) {
+    const verb = item.action === "overwritten" ? "Overwrote" : item.action === "renamed" ? "Imported" : "Imported";
+    const suffix = item.action === "renamed" ? " as" : "";
+    console.log(`${verb} Hermes robot${suffix}: ${item.robot.name}`);
   }
 }
 

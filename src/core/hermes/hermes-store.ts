@@ -154,6 +154,7 @@ function toUserEditableRobot(robot: HermesRobot): Record<string, unknown> {
       id: task.id,
       name: task.name,
       type: task.type,
+      schedule: task.schedule,
       enabled: task.enabled,
       state: task.state,
       provider: task.provider,

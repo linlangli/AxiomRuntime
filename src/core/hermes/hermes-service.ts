@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { getHermesExportPath } from "../config/paths.js";
+import { getHermesAllExportPath, getHermesExportPath } from "../config/paths.js";
 import { readCache, upsertProviderCache } from "../config/cache-store.js";
 import { readProviders, writeProviders } from "../config/providers-store.js";
 import { writeJsonFile } from "../config/json-store.js";
@@ -223,6 +223,8 @@ export async function syncHermesRobotToLocalConfig(name: string): Promise<{
   const configPath = path.join(hermesDir, "config.yaml");
   const envPath = path.join(hermesDir, ".env");
   const authPath = path.join(hermesDir, "auth.json");
+  const telegramPath = path.join(hermesDir, "channel_directory.json");
+  const cronJobsPath = path.join(hermesDir, "cron", "jobs.json");
   const nextConfig = await buildLocalHermesConfig(configPath, robot, provider, providers, providerModels);
   const nextEnv = await buildLocalHermesEnv(envPath);
   const hermesModelListPatch = await ensureLocalHermesModelListSupport();
@@ -231,6 +233,8 @@ export async function syncHermesRobotToLocalConfig(name: string): Promise<{
   await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
   await fs.writeFile(configPath, nextConfig, { encoding: "utf8", mode: 0o600 });
   await fs.writeFile(envPath, nextEnv, { encoding: "utf8", mode: 0o600 });
+  await writeLocalHermesTelegramBinding(telegramPath, robot);
+  await writeLocalHermesCronJobs(cronJobsPath, robot);
   await pruneNativeHermesAuthStore(authPath);
   await fs.chmod(configPath, 0o600).catch(() => undefined);
   await fs.chmod(envPath, 0o600).catch(() => undefined);
@@ -434,12 +438,32 @@ export async function deleteHermesRobot(name: string): Promise<void> {
   });
 }
 
-export async function exportHermesRobot(name: string, outputPath = getHermesExportPath(name)): Promise<string> {
-  const robot = await getHermesRobot(name);
-  if (!robot) {
+export async function exportHermesRobot(name?: string, outputPath = name ? getHermesExportPath(name) : getHermesAllExportPath()): Promise<string> {
+  const robots = name ? [await getHermesRobot(name)] : await listHermesRobots();
+  const exportedRobots = robots.filter((robot): robot is HermesRobot => Boolean(robot));
+  if (name && !exportedRobots.length) {
     throw new Error(`Hermes robot not found: ${name}`);
   }
-  await writeJsonFile(outputPath, { robot: toPortableRobot(robot), exportedAt: new Date().toISOString(), format: "ai-gateway.hermes-robot.v1" });
+  if (!exportedRobots.length) {
+    throw new Error("No Hermes robots configured. Run `ai hermes add` first.");
+  }
+  const providers = await readProviders();
+  const cache = await readCache();
+  const providerNames = getHermesRobotProviderNames(exportedRobots);
+  const exportedProviders = providers.filter((provider) => providerNames.has(provider.name));
+  const providerCache = Object.fromEntries(
+    exportedProviders
+      .map((provider) => [provider.name, cache.providers[provider.name]])
+      .filter((entry): entry is [string, ProviderCache] => Boolean(entry[1]))
+  );
+
+  await writeJsonFile(outputPath, {
+    robots: exportedRobots.map(toPortableRobot),
+    providers: exportedProviders,
+    providerCache,
+    exportedAt: new Date().toISOString(),
+    format: "ai-gateway.hermes-robots.v2"
+  });
   return outputPath;
 }
 
@@ -448,31 +472,44 @@ export async function importHermesRobot(
   options: { onConflict?: "overwrite" | "rename" | "error"; renameTo?: string } = {}
 ): Promise<ImportHermesRobotResult> {
   const raw = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
-  const robot = normalizeImport(raw);
+  const bundle = normalizeHermesImport(raw);
+  const importedRobotResults: ImportHermesRobotResult["robots"] = [];
   const robots = await listHermesRobots();
-  const existing = robots.find((item) => item.name === robot.name);
-  let action: ImportHermesRobotResult["action"] = "created";
-  let nextRobot = robot;
+  const nextRobots = [...robots];
 
-  if (existing) {
-    if (options.onConflict === "overwrite") {
-      action = "overwritten";
-    } else if (options.onConflict === "rename" && options.renameTo) {
-      nextRobot = { ...robot, name: options.renameTo.trim(), updatedAt: new Date().toISOString() };
-      action = "renamed";
-      if (robots.some((item) => item.name === nextRobot.name)) {
-        throw new Error(`Hermes robot already exists: ${nextRobot.name}`);
+  for (const robot of bundle.robots) {
+    const existingIndex = nextRobots.findIndex((item) => item.name === robot.name);
+    let action: ImportHermesRobotResult["robots"][number]["action"] = "created";
+    let nextRobot = robot;
+
+    if (existingIndex >= 0) {
+      if (options.onConflict === "overwrite") {
+        action = "overwritten";
+        nextRobot = { ...robot, createdAt: nextRobots[existingIndex]!.createdAt, updatedAt: new Date().toISOString() };
+      } else if (options.onConflict === "rename" && options.renameTo && bundle.robots.length === 1) {
+        nextRobot = { ...robot, name: options.renameTo.trim(), updatedAt: new Date().toISOString() };
+        action = "renamed";
+        if (nextRobots.some((item) => item.name === nextRobot.name)) {
+          throw new Error(`Hermes robot already exists: ${nextRobot.name}`);
+        }
+      } else if (options.onConflict === "rename") {
+        throw new Error("Rename is only supported when importing one Hermes robot.");
+      } else {
+        throw new Error(`Hermes robot already exists: ${robot.name}`);
       }
-    } else {
-      throw new Error(`Hermes robot already exists: ${robot.name}`);
     }
+
+    if (existingIndex >= 0 && action === "overwritten") {
+      nextRobots[existingIndex] = nextRobot;
+    } else {
+      nextRobots.push(nextRobot);
+    }
+    importedRobotResults.push({ robot: nextRobot, action });
   }
 
-  const nextRobots = existing && action === "overwritten"
-    ? robots.map((item) => (item.name === robot.name ? { ...robot, updatedAt: new Date().toISOString() } : item))
-    : [...robots, nextRobot];
+  const importedProviders = await importHermesBundleProviders(bundle.providers, bundle.providerCache);
   await writeHermesRobots({ robots: nextRobots });
-  return { robot: nextRobot, action };
+  return { robots: importedRobotResults, importedProviders };
 }
 
 export async function importLocalHermesRobots(options: { overwrite?: boolean } = {}): Promise<ImportLocalHermesResult> {
@@ -604,6 +641,60 @@ async function buildLocalHermesEnv(envPath: string): Promise<string> {
     GH_TOKEN: ""
   };
   return replaceEnvValues(existing, updates);
+}
+
+async function writeLocalHermesTelegramBinding(filePath: string, robot: HermesRobot): Promise<void> {
+  if (!robot.telegram.enabled || !robot.telegram.chatId) return;
+  const raw = await readJsonIfExists(filePath);
+  const next: Record<string, unknown> = isRecord(raw) ? { ...raw } : {};
+  const platforms: Record<string, unknown> = isRecord(next.platforms) ? { ...next.platforms } : {};
+  const existingTelegram = Array.isArray(platforms.telegram) ? platforms.telegram.filter(isRecord) : [];
+  const entry = {
+    id: robot.telegram.chatId,
+    name: robot.telegram.name || robot.name,
+    type: "dm",
+    ai_gateway_managed: true,
+    ai_gateway_robot: robot.name
+  };
+  const index = existingTelegram.findIndex((item) => String(item.id ?? "") === robot.telegram.chatId);
+  const telegram = index >= 0
+    ? existingTelegram.map((item, itemIndex) => (itemIndex === index ? { ...item, ...entry } : item))
+    : [...existingTelegram, entry];
+
+  platforms.telegram = telegram;
+  next.platforms = platforms;
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(filePath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(filePath, 0o600).catch(() => undefined);
+}
+
+async function writeLocalHermesCronJobs(filePath: string, robot: HermesRobot): Promise<void> {
+  if (!robot.tasks.length) return;
+  const raw = await readJsonIfExists(filePath);
+  const next: Record<string, unknown> = isRecord(raw) ? { ...raw } : {};
+  const taskIds = new Set(robot.tasks.map((task) => task.id).filter(Boolean));
+  const existingJobs = Array.isArray(next.jobs)
+    ? next.jobs.filter((job) => !isRecord(job) || !taskIds.has(String(job.id ?? "")))
+    : [];
+  const jobs = [
+    ...existingJobs,
+    ...robot.tasks.map((task) => ({
+      id: task.id,
+      name: task.name,
+      enabled: task.enabled,
+      state: task.state,
+      model: task.model || robot.model,
+      provider: task.provider || robot.provider,
+      schedule_display: task.schedule,
+      ai_gateway_managed: true,
+      ai_gateway_robot: robot.name
+    }))
+  ];
+
+  next.jobs = jobs;
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(filePath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(filePath, 0o600).catch(() => undefined);
 }
 
 function buildHermesProvidersBlock(providers: Provider[], providerModels: Record<string, string[]>): string[] {
@@ -810,10 +901,55 @@ async function restartHermesCliGateway(): Promise<{ restarted: boolean; method: 
   }
 }
 
-function normalizeImport(value: unknown): HermesRobot {
-  if (containsSecretField(value)) {
-    throw new Error("Import file must not contain API keys or secrets.");
+type HermesImportBundle = {
+  robots: HermesRobot[];
+  providers: Provider[];
+  providerCache: Record<string, ProviderCache>;
+};
+
+function normalizeHermesImport(value: unknown): HermesImportBundle {
+  if (!isHermesRobotBundle(value) && containsSecretField(value)) {
+    throw new Error("Legacy Hermes robot import files must not contain API keys or secrets.");
   }
+  const container = isRecord(value) && isRecord(value.robot) ? value.robot : value;
+  const providers = isRecord(value) && Array.isArray(value.providers)
+    ? value.providers.map(normalizeBundleProvider)
+    : [];
+  const providerCache = isRecord(value) && isRecord(value.providerCache)
+    ? normalizeBundleProviderCache(value.providerCache)
+    : {};
+
+  return {
+    robots: normalizeImportedRobots(container),
+    providers,
+    providerCache
+  };
+}
+
+function normalizeImportedRobots(value: unknown): HermesRobot[] {
+  const rawRobots = isRecord(value) && Array.isArray(value.robots)
+    ? value.robots
+    : Array.isArray(value)
+      ? value
+      : [value];
+  const robots = rawRobots.map(normalizeImportedRobot);
+  if (!robots.length) {
+    throw new Error("Invalid Hermes robot import file.");
+  }
+  const names = new Set<string>();
+  for (const robot of robots) {
+    if (!robot.name) {
+      throw new Error("Hermes robot name cannot be empty.");
+    }
+    if (names.has(robot.name)) {
+      throw new Error(`Duplicate Hermes robot name in import file: ${robot.name}`);
+    }
+    names.add(robot.name);
+  }
+  return robots;
+}
+
+function normalizeImportedRobot(value: unknown): HermesRobot {
   const container = isRecord(value) && isRecord(value.robot) ? value.robot : value;
   if (!isRecord(container)) {
     throw new Error("Invalid Hermes robot import file.");
@@ -837,7 +973,7 @@ function normalizeImport(value: unknown): HermesRobot {
             id: String(value.id ?? ""),
             name: String(value.name ?? value.id ?? "task"),
             type: "cron",
-            schedule: "",
+            schedule: String(value.schedule ?? ""),
             enabled: Boolean(value.enabled),
             state: String(value.state ?? ""),
             provider: value.provider === undefined || value.provider === null ? "" : String(value.provider),
@@ -862,9 +998,92 @@ function toPortableRobot(robot: HermesRobot): Record<string, unknown> {
     value.telegram = robot.telegram;
   }
   if (robot.tasks.length) {
-    value.tasks = robot.tasks;
+    value.tasks = robot.tasks.map((task) => ({
+      id: task.id,
+      name: task.name,
+      type: task.type,
+      schedule: task.schedule,
+      enabled: task.enabled,
+      state: task.state,
+      provider: task.provider,
+      model: task.model
+    }));
+  }
+  if (robot.source) {
+    value.source = robot.source;
+  }
+  if (robot.createdAt) {
+    value.createdAt = robot.createdAt;
+  }
+  if (robot.updatedAt) {
+    value.updatedAt = robot.updatedAt;
   }
   return value;
+}
+
+function isHermesRobotBundle(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.format === "string"
+    && (value.format.startsWith("ai-gateway.hermes-robot.") || value.format.startsWith("ai-gateway.hermes-robots."))
+    && Array.isArray(value.providers);
+}
+
+function normalizeBundleProvider(value: unknown): Provider {
+  const provider = isRecord(value) ? value : {};
+  return {
+    name: String(provider.name ?? "").trim(),
+    baseUrl: String(provider.baseUrl ?? "").trim().replace(/\/+$/, ""),
+    apiKey: String(provider.apiKey ?? "").trim(),
+    mode: provider.mode === "ask" ? "ask" : "auto",
+    level: Number(provider.level ?? Number.MAX_SAFE_INTEGER),
+    model: String(provider.model ?? "").trim()
+  };
+}
+
+function normalizeBundleProviderCache(value: Record<string, unknown>): Record<string, ProviderCache> {
+  const result: Record<string, ProviderCache> = {};
+  for (const [name, raw] of Object.entries(value)) {
+    if (!isRecord(raw)) continue;
+    result[name] = {
+      status: raw.status === "ok" || raw.status === "error" ? raw.status : "unknown",
+      models: Array.isArray(raw.models) ? raw.models.map((model) => String(model)).filter(Boolean) : [],
+      lastCheckedAt: raw.lastCheckedAt === null || raw.lastCheckedAt === undefined ? null : String(raw.lastCheckedAt),
+      lastError: raw.lastError === null || raw.lastError === undefined ? null : String(raw.lastError)
+    };
+  }
+  return result;
+}
+
+function getHermesRobotProviderNames(robots: HermesRobot[]): Set<string> {
+  return new Set(robots.flatMap((robot) => [
+    robot.provider,
+    ...robot.tasks.map((task) => task.provider)
+  ]).filter(Boolean));
+}
+
+async function importHermesBundleProviders(
+  incomingProviders: Provider[],
+  incomingCache: Record<string, ProviderCache>
+): Promise<Provider[]> {
+  if (!incomingProviders.length) return [];
+  const current = await readProviders();
+  const incomingNames = new Set(incomingProviders.map((provider) => provider.name).filter(Boolean));
+  const nextProviders = [
+    ...current.filter((provider) => !incomingNames.has(provider.name)),
+    ...incomingProviders.filter((provider) => provider.name)
+  ];
+  await writeProviders(nextProviders);
+  const normalizedProviders = await readProviders();
+  const imported = normalizedProviders.filter((provider) => incomingNames.has(provider.name));
+
+  for (const provider of imported) {
+    const providerCache = incomingCache[provider.name];
+    if (providerCache) {
+      await upsertProviderCache(provider.name, providerCache);
+    }
+  }
+
+  return imported;
 }
 
 async function discoverLocalHermesRobots(sourceDir: string): Promise<HermesRobot> {

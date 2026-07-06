@@ -70,11 +70,11 @@ ai hermes use <robot-name>
 ai hermes add
 ai hermes list
 ai hermes edit
-ai hermes sync <robot-name>
 ai hermes clear
 ai hermes delete
 ai hermes import <file>
 ai hermes import-local
+ai hermes export
 ai hermes export <robot-name>
 ```
 
@@ -278,8 +278,8 @@ Rules:
 - `mode` is `ask` or `auto`.
 - Telegram binding is optional.
 - Hermes cron jobs are tasks that belong to a robot. They are not robots.
-- Task schedule is not stored in `hermes.json`; users should change schedules by chatting with the robot or through future task management commands.
-- Exported robot files must not contain API keys.
+- Task schedule is stored in `hermes.json` so robots can be fully exported and restored on another machine.
+- `hermes.json` must not contain API keys. Full export bundles intentionally include referenced provider API keys and must be treated as private secret files.
 
 ## 5. Add Flow
 
@@ -687,11 +687,11 @@ ai hermes use <robot-name>
 ai hermes add
 ai hermes list
 ai hermes edit
-ai hermes sync <robot-name>
 ai hermes clear
 ai hermes delete
 ai hermes import <file>
 ai hermes import-local
+ai hermes export
 ai hermes export <robot-name>
 ```
 
@@ -738,8 +738,6 @@ Launch rules:
 
 `ai add` and `ai edit` also automatically sync the AI Gateway provider list into native local Hermes config. This provider-only sync must not replace the active native Hermes `model:` block.
 
-`ai hermes sync <robot-name>` keeps the same behavior as a manual repair command.
-
 Sync rules:
 
 - Replace only the top-level `model:` block.
@@ -760,11 +758,11 @@ Sync rules:
 
 Import/export:
 
-- `ai hermes export <robot-name>` writes a portable JSON file.
-- `ai hermes import <file>` imports a portable robot definition.
+- `ai hermes export` writes a complete replication bundle for all Hermes robots by default; `ai hermes export <robot-name>` exports one robot.
+- `ai hermes import <file>` imports a complete robot bundle and referenced providers.
 - `ai hermes import-local` scans local Hermes files and imports the default Hermes robot plus its cron jobs as tasks.
-- Import/export must never include API keys.
-- Import should succeed even if the referenced provider is missing locally; status should show `provider missing`.
+- Full export bundles include referenced provider API keys and model cache. Keep export files private.
+- Legacy providerless imports require the referenced provider to exist locally before sync can succeed.
 
 Detailed design lives in `docs/HERMES_INTEGRATION.md`.
 

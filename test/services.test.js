@@ -797,23 +797,83 @@ test("legacy hermes-robots.json is still readable", async () => {
   });
 });
 
-test("hermes robot import and export omit secrets and support rename", async () => {
+test("hermes export defaults to full replication bundle and import restores robots and providers", async () => {
   await withTempHome(async (tempDir) => {
+    mockFetchModels(["claude-opus-4-6"]);
     await writeProviders([
       { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" }
     ]);
-    await addHermesRobot({ name: "robot-a", provider: "api", model: "claude-opus-4-6" });
+    await upsertProviderCache("api", { status: "ok", models: ["claude-opus-4-6"], lastCheckedAt: "now", lastError: null });
+    await fs.writeFile(
+      path.join(process.env.AI_GATEWAY_HOME, "hermes.json"),
+      JSON.stringify([
+        {
+          name: "robot-a",
+          provider: "api",
+          model: "claude-opus-4-6",
+          mode: "auto",
+          telegram: { enabled: true, chatId: "123", name: "tester" },
+          tasks: [
+            {
+              id: "job-1",
+              name: "Morning job",
+              type: "cron",
+              schedule: "0 9 * * *",
+              enabled: true,
+              state: "scheduled",
+              provider: "api",
+              model: "claude-opus-4-6"
+            }
+          ]
+        },
+        {
+          name: "robot-b",
+          provider: "api",
+          model: "claude-opus-4-6",
+          mode: "auto",
+          telegram: { enabled: false, chatId: "", name: "" },
+          tasks: []
+        }
+      ])
+    );
 
-    const exportedPath = await exportHermesRobot("robot-a");
+    const exportedPath = await exportHermesRobot();
     const exported = await fs.readFile(exportedPath, "utf8");
-    assert.doesNotMatch(exported, /apiKey|key/);
+    assert.match(exported, /"format": "ai-gateway\.hermes-robots\.v2"/);
     assert.match(exported, /robot-a/);
+    assert.match(exported, /robot-b/);
+    assert.match(exported, /"apiKey": "key"/);
+    assert.match(exported, /"providerCache"/);
+    assert.match(exported, /"schedule": "0 9 \* \* \*"/);
 
-    const imported = await importHermesRobot(exportedPath, { onConflict: "rename", renameTo: "robot-b" });
+    process.env.AI_GATEWAY_HOME = path.join(tempDir, "target-home");
+    const imported = await importHermesRobot(exportedPath);
     const robots = await listHermesRobots();
-    assert.equal(imported.action, "renamed");
+    const providers = await readProviders();
+    const cache = await readCache();
+    assert.equal(imported.robots.length, 2);
+    assert.equal(imported.robots[0].action, "created");
+    assert.equal(imported.importedProviders.length, 1);
     assert.equal(robots.length, 2);
+    assert.equal(robots.some((robot) => robot.name === "robot-a"), true);
     assert.equal(robots.some((robot) => robot.name === "robot-b"), true);
+    assert.equal(robots.find((robot) => robot.name === "robot-a").tasks[0].schedule, "0 9 * * *");
+    assert.equal(providers.find((provider) => provider.name === "api").apiKey, "key");
+    assert.deepEqual(cache.providers.api.models, ["claude-opus-4-6"]);
+
+    const targetHermesDir = path.join(tempDir, "target-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = targetHermesDir;
+    await syncHermesRobotToLocalConfig("robot-a");
+    const telegram = JSON.parse(await fs.readFile(path.join(targetHermesDir, "channel_directory.json"), "utf8"));
+    const cronJobs = JSON.parse(await fs.readFile(path.join(targetHermesDir, "cron", "jobs.json"), "utf8"));
+    assert.equal(telegram.platforms.telegram[0].id, "123");
+    assert.equal(cronJobs.jobs[0].schedule_display, "0 9 * * *");
+    assert.equal(cronJobs.jobs[0].provider, "api");
+
+    const singleExportPath = await exportHermesRobot("robot-a");
+    const renamed = await importHermesRobot(singleExportPath, { onConflict: "rename", renameTo: "robot-c" });
+    assert.equal(renamed.robots[0].action, "renamed");
+    assert.equal(renamed.robots[0].robot.name, "robot-c");
 
     const badImport = path.join(tempDir, "bad-hermes.json");
     await fs.writeFile(badImport, JSON.stringify({ robot: { name: "bad", provider: "api", model: "x", apiKey: "secret" } }));
@@ -908,7 +968,7 @@ test("imports local Hermes config and cron jobs as robots", async () => {
     assert.equal(robots[0].tasks[0].type, "cron");
     assert.doesNotMatch(raw, /sk-secret/);
     assert.doesNotMatch(raw, /createdAt|updatedAt|source/);
-    assert.doesNotMatch(raw, /"schedule"\s*:/);
+    assert.match(raw, /"schedule": "0 9 \* \* \*"/);
   });
 });
 

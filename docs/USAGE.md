@@ -82,6 +82,7 @@ ai hermes clear
 ai hermes delete
 ai hermes import <文件路径>
 ai hermes import-local
+ai hermes export
 ai hermes export <机器人名称>
 ```
 
@@ -132,8 +133,8 @@ ai hermes add
 - `status` 会检查 Hermes CLI、provider 是否存在、provider 健康度、模型缓存和 Telegram 绑定状态。
 - `clear` 会清空该机器人的 AI Gateway 管理状态和记忆，保留机器人配置。
 - `delete` 会删除机器人配置和 AI Gateway 管理状态。
-- `export` 导出的文件不包含 API Key，可复制到其他电脑。
-- `import` 导入时如果本机没有同名 provider，也会导入成功，但 `status` 会提示 provider 缺失。
+- `export` 默认导出所有机器人完整复刻包，包含机器人配置、Telegram 绑定、tasks schedule、关联 provider 配置、API Key 和模型缓存；该文件需要私密保存。传入机器人名称时只导出单个机器人。
+- `import` 导入完整复刻包时会同步写入关联 provider，并立即同步本机 Hermes 配置、重启 gateway；旧版不含 provider 的导出文件仍可导入，但目标机器需要已有同名 provider。
 - `import-local` 会自动扫描本机 `~/.hermes/config.yaml`、`~/.hermes/channel_directory.json` 和 `~/.hermes/cron/jobs.json`，先把本机 Hermes provider 导入 AI Gateway provider 配置，再导入 Hermes 默认机器人和该机器人下面的 tasks，并立即同步本机 Hermes 配置、重启 gateway。
 - `import-local --overwrite` 会用本机 Hermes 配置覆盖同名 provider 和同名机器人。
 

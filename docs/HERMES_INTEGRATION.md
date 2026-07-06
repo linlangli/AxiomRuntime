@@ -75,11 +75,11 @@ Rules:
 - `mode` follows AI Gateway provider mode semantics: `ask` or `auto`.
 - Telegram binding is optional.
 - Hermes cron jobs are tasks that belong to a robot. They are not robots.
-- Task schedule is intentionally not stored in `hermes.json`; users should change schedules by chatting with the robot or through future task management commands.
+- Task schedule is stored in `hermes.json` so robots can be fully exported and restored on another machine.
 - API keys are resolved at launch time from `providers.json`.
 - Each robot launches with an AI Gateway-managed isolated `HERMES_HOME` under `~/.ai-gateway/hermes/<robot-name>/`.
 - The isolated Hermes runtime config is regenerated from the selected AI Gateway provider before launch, so global `~/.hermes/config.yaml` cannot override the robot's provider API key.
-- Import/export files must not include API keys.
+- `hermes.json` must not include API keys. Full export bundles intentionally include referenced provider API keys and must be treated as private secret files.
 
 ## CLI Commands
 
@@ -114,11 +114,11 @@ ai hermes use <robot-name>
 ai hermes add
 ai hermes list
 ai hermes edit
-ai hermes sync <robot-name>
 ai hermes clear
 ai hermes delete
 ai hermes import <file>
 ai hermes import-local
+ai hermes export
 ai hermes export <robot-name>
 ```
 
@@ -238,16 +238,10 @@ Runtime injection:
 
 ## Native Local Config Sync
 
-Command:
-
-```bash
-ai hermes sync <robot-name>
-```
-
 Purpose:
 
 - Make native local Hermes surfaces, especially Telegram-backed Hermes, use the same provider/model selected in AI Gateway.
-- This command is a manual repair path. Normal add/edit flows sync and restart automatically.
+- Normal add/edit/import and provider changes sync and restart automatically.
 - This is separate from `ai hermes use`, which launches Hermes with an isolated AI Gateway-managed `HERMES_HOME`.
 
 Behavior:
@@ -336,12 +330,14 @@ Interactive only in the first version:
 Export:
 
 ```bash
+ai hermes export
 ai hermes export <robot-name>
 ```
 
 Default output:
 
 ```text
+~/.ai-gateway/exports/hermes-all.json
 ~/.ai-gateway/exports/hermes-<robot-name>.json
 ```
 
@@ -360,8 +356,8 @@ ai hermes import-local --overwrite
 
 Import rules:
 
-- Import files must not contain API keys.
-- If the referenced provider does not exist locally, import succeeds but status should show `provider missing`.
+- Full export bundles include referenced provider API keys and model cache so another machine can fully restore the robots. Keep these files private.
+- Legacy providerless files can still import, but the referenced provider must already exist locally before sync can succeed.
 - If a robot with the same name already exists, prompt to overwrite, rename, or cancel.
 
 Local import rules:
@@ -369,7 +365,7 @@ Local import rules:
 - Scan `~/.hermes/config.yaml` for the default model/provider/base URL.
 - Scan `~/.hermes/channel_directory.json` for Telegram binding.
 - Scan `~/.hermes/cron/jobs.json` for local Hermes cron jobs and import them as robot tasks.
-- Do not import or persist Hermes API keys.
+- Import local Hermes provider credentials into AI Gateway providers so future provider changes are managed through `ai provider`.
 - Match local Hermes models to existing AI Gateway providers when possible.
 - If no matching AI Gateway provider exists, keep the local provider name and show `provider missing` in status.
 
@@ -431,6 +427,7 @@ Implemented foundation:
 - `ai use hermes <robot-name>`
 - `ai hermes import <file>`
 - `ai hermes import-local`
+- `ai hermes export`
 - `ai hermes export <robot-name>`
 - `ai hermes clear`
 - `ai hermes delete`
@@ -468,7 +465,7 @@ Add tests for:
 ## Safety Rules
 
 - Never write API keys to `hermes.json`.
-- Never export API keys.
+- Never write API keys to `hermes.json`; full export bundles may include provider API keys and must be kept private.
 - Never mutate `~/.hermes/config.yaml` by default.
 - Mask secrets in logs.
 - Make destructive operations interactive first.

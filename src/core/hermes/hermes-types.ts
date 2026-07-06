@@ -101,8 +101,11 @@ export type HermesConfiguredProvidersResult = {
 };
 
 export type ImportHermesRobotResult = {
-  robot: HermesRobot;
-  action: "created" | "overwritten" | "renamed";
+  robots: Array<{
+    robot: HermesRobot;
+    action: "created" | "overwritten" | "renamed";
+  }>;
+  importedProviders: Provider[];
 };
 
 export type ImportLocalHermesResult = {
