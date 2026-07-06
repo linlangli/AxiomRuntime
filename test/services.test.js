@@ -21,6 +21,7 @@ import {
   importLocalHermesRobots,
   listHermesConfiguredProviders,
   listHermesRobots,
+  repairLocalHermesIntegration,
   switchHermesRobotsProvider,
   syncHermesRobotToLocalConfigAndRestart,
   syncHermesRobotToLocalConfig,
@@ -494,6 +495,7 @@ test("syncHermesProvidersToLocalConfig refreshes providers and syncs active Herm
     process.env.AI_GATEWAY_HERMES_AGENT_DIR = hermesAgentDir;
     await fs.mkdir(hermesDir, { recursive: true });
     await writeHermesModelSwitchFixture(hermesAgentDir);
+    await writeHermesGatewayRunFixture(hermesAgentDir);
     await fs.writeFile(
       path.join(hermesDir, "config.yaml"),
       [
@@ -529,6 +531,7 @@ test("syncHermesProvidersToLocalConfig refreshes providers and syncs active Herm
     const result = await syncHermesProvidersToLocalConfig();
     const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
     const modelSwitch = await fs.readFile(path.join(hermesAgentDir, "hermes_cli", "model_switch.py"), "utf8");
+    const gatewayRun = await fs.readFile(path.join(hermesAgentDir, "gateway", "run.py"), "utf8");
     const backup = await fs.readFile(path.join(hermesAgentDir, "hermes_cli", "model_switch.py.ai-gateway.bak"), "utf8");
 
     assert.equal(result.configPath, path.join(hermesDir, "config.yaml"));
@@ -551,6 +554,9 @@ test("syncHermesProvidersToLocalConfig refreshes providers and syncs active Herm
     assert.match(modelSwitch, /not has_configured_models or str\(default_model\) in models_list/);
     assert.match(modelSwitch, /has_configured_models and not models_list/);
     assert.match(modelSwitch, /if include_moa and not _ai_gateway_managed_user_providers\(user_providers\):/);
+    assert.match(gatewayRun, /AI Gateway: pass gateway user providers into model switch v1/);
+    assert.match(gatewayRun, /AI Gateway: persist Telegram picker model switch v1/);
+    assert.equal([...gatewayRun.matchAll(/user_providers=user_provs/g)].length, 2);
     assert.doesNotMatch(backup, /configured_models = ep_cfg/);
   });
 });
@@ -598,6 +604,126 @@ test("syncHermesProvidersToLocalConfig replaces inline and duplicate provider bl
     assert.match(config, /api: "https:\/\/icode\.51talk\.biz\/v1"/);
     assert.match(config, /api_key: "sk-codex"/);
     assert.doesNotMatch(config, /providers: \{\}|stale-key|old-key/);
+  });
+});
+
+test("repairLocalHermesIntegration patches gateway and refreshes native config without model probes", async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "native-hermes");
+    const hermesAgentDir = path.join(tempDir, "hermes-agent");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    process.env.AI_GATEWAY_HERMES_AGENT_DIR = hermesAgentDir;
+    process.env.AI_GATEWAY_SKIP_HERMES_RESTART = "1";
+    await fs.mkdir(hermesDir, { recursive: true });
+    await writeHermesModelSwitchFixture(hermesAgentDir);
+    await writeHermesGatewayRunFixture(hermesAgentDir);
+    await fs.writeFile(
+      path.join(hermesDir, "config.yaml"),
+      [
+        "model:",
+        "  default: old-model",
+        "  provider: stale-provider",
+        "  base_url: https://stale.test",
+        "  api_key: stale-key",
+        "providers: {}",
+        "terminal:",
+        "  backend: local"
+      ].join("\n")
+    );
+    await writeProviders([
+      {
+        name: "51talk-codex",
+        baseUrl: "https://icode.51talk.biz",
+        apiKey: "sk-codex",
+        mode: "auto",
+        level: 1,
+        model: "gpt-5.5"
+      }
+    ]);
+    await upsertProviderCache("51talk-codex", {
+      health: "ok",
+      models: ["gpt-5.5"],
+      checkedAt: new Date().toISOString()
+    });
+    await addHermesRobot({ name: "telegram-bot", provider: "51talk-codex", model: "gpt-5.5" });
+    mockFetch(() => {
+      throw new Error("repair must not probe models");
+    });
+
+    const result = await repairLocalHermesIntegration();
+    const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
+    const gatewayRun = await fs.readFile(path.join(hermesAgentDir, "gateway", "run.py"), "utf8");
+
+    assert.equal(result.configUpdated, true);
+    assert.equal(result.hermesModelListPatch.status, "patched");
+    assert.equal(result.restart?.method, "skipped");
+    assert.match(config, /provider: "51talk-codex"/);
+    assert.match(config, /api_key: "sk-codex"/);
+    assert.match(config, /providers:\n  51talk-codex:/);
+    assert.doesNotMatch(config, /providers: \{\}|stale-key|old-model/);
+    assert.equal([...gatewayRun.matchAll(/user_providers=user_provs/g)].length, 2);
+
+    await upsertProviderCache("51talk-codex", {
+      health: "ok",
+      models: ["gpt-5.5", "new-cache-only-model"],
+      checkedAt: new Date().toISOString()
+    });
+    const second = await repairLocalHermesIntegration();
+    const secondConfig = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
+    assert.equal(second.configUpdated, false);
+    assert.doesNotMatch(secondConfig, /new-cache-only-model/);
+  });
+});
+
+test("repairLocalHermesIntegration adopts local Hermes default model into hermes robot config", async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "native-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    process.env.AI_GATEWAY_SKIP_HERMES_RESTART = "1";
+    await fs.mkdir(hermesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(hermesDir, "config.yaml"),
+      [
+        "model:",
+        "  default: gpt-5.5",
+        "  provider: 51talk-codex",
+        "  base_url: https://icode.51talk.biz/v1",
+        "  api_key: sk-codex",
+        "providers:",
+        "  51talk-codex:",
+        "    name: 51talk-codex",
+        "    api: https://icode.51talk.biz/v1",
+        "    api_key: sk-codex",
+        "    default_model: gpt-5.5",
+        "    transport: chat_completions"
+      ].join("\n")
+    );
+    await writeProviders([
+      {
+        name: "51talk-cs",
+        baseUrl: "https://icode.51talk.biz",
+        apiKey: "sk-cs",
+        mode: "auto",
+        level: 1,
+        model: "claude-opus-4-6"
+      },
+      {
+        name: "51talk-codex",
+        baseUrl: "https://icode.51talk.biz",
+        apiKey: "sk-codex",
+        mode: "auto",
+        level: 2,
+        model: "gpt-5.5"
+      }
+    ]);
+    await addHermesRobot({ name: "telegram-bot", provider: "51talk-cs", model: "claude-opus-4-6" });
+
+    const result = await repairLocalHermesIntegration();
+    const robots = await listHermesRobots();
+
+    assert.equal(result.robotUpdated, true);
+    assert.equal(robots[0].provider, "51talk-codex");
+    assert.equal(robots[0].model, "gpt-5.5");
   });
 });
 
@@ -1165,6 +1291,46 @@ async function writeHermesModelSwitchFixture(hermesAgentDir) {
       "        providers = _prepend_moa_picker_provider(providers)",
       "    return providers",
       ""
+    ].join("\n")
+  );
+}
+
+async function writeHermesGatewayRunFixture(hermesAgentDir) {
+  const filePath = path.join(hermesAgentDir, "gateway", "run.py");
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(
+    filePath,
+    [
+      "async def _handle_model_command(self, event):",
+      "    user_provs = {'provider': {}}",
+      "    async def _on_model_selected(_chat_id, model_id, provider_slug):",
+      "                        result = _switch_model(",
+      "                            raw_input=model_id,",
+      "                            current_provider=_cur_provider,",
+      "                            current_model=_cur_model,",
+      "                            current_base_url=_cur_base_url,",
+      "                            current_api_key=_cur_api_key,",
+      "                            is_global=False,",
+      "                            explicit_provider=provider_slug,",
+      "                        )",
+      "                        _self._session_model_overrides[_session_key] = {",
+      "                            \"model\": result.new_model,",
+      "                            \"provider\": result.target_provider,",
+      "                            \"api_key\": result.api_key,",
+      "                            \"base_url\": result.base_url,",
+      "                            \"api_mode\": result.api_mode,",
+      "                        }",
+      "",
+      "                        # Build confirmation text",
+      "        result = _switch_model(",
+      "            raw_input=model_input,",
+      "            current_provider=current_provider,",
+      "            current_model=current_model,",
+      "            current_base_url=current_base_url,",
+      "            current_api_key=current_api_key,",
+      "            is_global=persist_global,",
+      "            explicit_provider=explicit_provider,",
+      "        )"
     ].join("\n")
   );
 }

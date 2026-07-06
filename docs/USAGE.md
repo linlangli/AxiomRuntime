@@ -127,11 +127,12 @@ ai hermes add
 - 自动同步会替换 Hermes 原生配置里旧的 `providers` / `custom_providers` 块，并清理重复块，避免 `/model` 能选中但实际执行时报 `Unknown provider`。
 - 同步前会刷新所有 provider 的模型，并用最小请求验证每个模型是否真的能调用；Telegram `/model` 只展示验证通过的模型，没有可调用模型的 provider 不会显示。
 - 可调用性验证使用 `max_tokens: 1` 的轻量请求，产生的 token 会记录到使用量中；模型列表不会写进 `providers.json`。
-- 如果本机 Hermes 版本的 Telegram `/model` 只读取 `default_model`，同步时会自动给 Hermes 的 `model_switch.py` 打兼容补丁，让 `/model` 读取 AI Gateway 写入的完整模型列表；补丁前会保留 `.ai-gateway.bak` 备份。
+- 如果本机 Hermes 版本的 Telegram `/model` 只读取 `default_model`，或点击 AI Gateway provider 后没有把 `providers` 配置传给切换逻辑，同步时会自动给 Hermes 打兼容补丁；补丁前会保留 `.ai-gateway.bak` 备份。
+- Telegram `/model` 选择 AI Gateway provider/model 后，会保存到本机 Hermes 默认配置；下次执行 `ai hermes status/list` 会自动同步回 `hermes.json`。
 - 同步时会清空 Hermes 原生 provider 凭证入口，避免 `anthropic`、`copilot`、`openai-codex` 等原生 provider 继续出现在 `/model`。
-- `list` 只列出机器人配置，不刷新健康度。
+- `list` 会先做轻量自愈，再列出机器人配置；轻量自愈只使用本地配置和模型缓存，不做模型可调用性探测，不额外消耗 token。
 - `edit` 可修改机器人名称、默认 provider、默认 model、mode 和 Telegram 绑定。
-- `status` 会检查 Hermes CLI、provider 是否存在、provider 健康度、模型缓存和 Telegram 绑定状态。
+- `status` 会先做轻量自愈，再检查 Hermes CLI、provider 是否存在、provider 健康度、模型缓存和 Telegram 绑定状态。
 - `clear` 会清空该机器人的 AI Gateway 管理状态、记忆、tasks 和本机 Hermes cron jobs 中属于该机器人的条目，保留机器人名称、provider、model、mode 和 Telegram 绑定。
 - `delete` 会删除机器人配置和 AI Gateway 管理状态。
 - `export` 默认导出所有机器人完整复刻包，包含机器人配置、Telegram 绑定、tasks schedule、关联 provider 配置、API Key 和模型缓存；该文件需要私密保存。传入机器人名称时只导出单个机器人。

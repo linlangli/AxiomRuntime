@@ -264,6 +264,9 @@ Provider-only sync:
 - Model probe token usage must be recorded with source `model_probe`.
 - Provider-only sync must preserve the existing native Hermes top-level `model:` block so Telegram keeps using the currently selected robot/model until `ai hermes add/edit/sync` changes it.
 - If the installed Hermes `model_switch.py` only reads `default_model` for user-defined providers, sync applies a small compatibility patch so Telegram `/model` reads `providers.<name>.models` from native Hermes config. A `.ai-gateway.bak` backup is kept before patching.
+- If the installed Hermes gateway calls `switch_model()` without passing the native `providers` dict, sync applies a compatibility patch to `gateway/run.py` so Telegram picker selections can resolve AI Gateway provider slugs instead of failing with `Unknown provider`.
+- If the installed Hermes gateway treats Telegram picker selections as session-only, sync patches `gateway/run.py` so picker selections are persisted into native Hermes `model:` defaults. The next `ai hermes status/list` lightweight self-repair adopts that native default back into the matching AI Gateway robot in `hermes.json`.
+- `ai hermes list` and `ai hermes status` run lightweight local self-repair before output. This self-repair patches Hermes compatibility files, rewrites native provider blocks from `providers.json` plus cached models, and restarts the gateway only when something changed. It must not refresh providers with callable model probes or consume token usage.
 
 Rules:
 

@@ -203,6 +203,22 @@ type HermesSyncMetadata = {
   hermesModelListPatch: HermesModelListPatchResult;
 };
 
+export type HermesRepairResult = {
+  configPath: string;
+  envPath: string;
+  robot: HermesRobot | null;
+  provider: Provider | null;
+  robotUpdated: boolean;
+  configUpdated: boolean;
+  envUpdated: boolean;
+  hermesModelListPatch: HermesModelListPatchResult;
+  restart: { restarted: boolean; method: string; message: string } | null;
+};
+
+type HermesRepairOptions = {
+  syncCachedModels?: boolean;
+};
+
 export async function syncHermesRobotToLocalConfig(name: string): Promise<{
   robot: HermesRobot;
   provider: Provider;
@@ -294,6 +310,77 @@ export async function syncHermesProvidersToLocalConfig(): Promise<{ configPath: 
     }
   });
   return { configPath, envPath, metadata };
+}
+
+export async function repairLocalHermesIntegration(options: HermesRepairOptions = {}): Promise<HermesRepairResult> {
+  const [storedRobots, providers, cache] = await Promise.all([
+    listHermesRobots(),
+    readProviders(),
+    readCache()
+  ]);
+  const hermesDir = getLocalHermesDir();
+  const configPath = path.join(hermesDir, "config.yaml");
+  const envPath = path.join(hermesDir, ".env");
+  const authPath = path.join(hermesDir, "auth.json");
+  const telegramPath = path.join(hermesDir, "channel_directory.json");
+  const cronJobsPath = path.join(hermesDir, "cron", "jobs.json");
+  const hermesModelListPatch = await ensureLocalHermesModelListSupport();
+  const localModel = await readLocalHermesConfig(configPath);
+  const adoption = await adoptLocalHermesModel(storedRobots, localModel, providers);
+  const robots = adoption.robots;
+  const robot = selectLocalHermesRepairRobot(robots, localModel.provider, providers);
+  const provider = robot ? resolveProviderFromList(robot, providers) : null;
+  let configUpdated = false;
+  let envUpdated = false;
+
+  if (robot && provider) {
+    const [existingConfig, existingEnv] = await Promise.all([
+      readTextIfExists(configPath),
+      readTextIfExists(envPath)
+    ]);
+    const providerModels = getProviderModelsForRepair(providers, cache.providers, existingConfig, Boolean(options.syncCachedModels));
+    const nextConfig = await buildLocalHermesConfig(configPath, robot, provider, providers, providerModels);
+    const nextEnv = await buildLocalHermesEnv(envPath);
+
+    await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
+    if (nextConfig !== existingConfig) {
+      await fs.writeFile(configPath, nextConfig, { encoding: "utf8", mode: 0o600 });
+      await fs.chmod(configPath, 0o600).catch(() => undefined);
+      configUpdated = true;
+    }
+    if (nextEnv !== existingEnv) {
+      await fs.writeFile(envPath, nextEnv, { encoding: "utf8", mode: 0o600 });
+      await fs.chmod(envPath, 0o600).catch(() => undefined);
+      envUpdated = true;
+    }
+    await writeLocalHermesTelegramBinding(telegramPath, robot);
+    await writeLocalHermesCronJobs(cronJobsPath, robot);
+    await pruneNativeHermesAuthStore(authPath);
+  }
+
+  const shouldRestart = hermesModelListPatch.status === "patched" || configUpdated || envUpdated;
+  const restart = shouldRestart ? await restartLocalHermesGateway() : null;
+  await writeLog({
+    category: "system",
+    action: "hermes_self_repair",
+    message: shouldRestart
+      ? "Repaired local Hermes integration."
+      : "Checked local Hermes integration.",
+    metadata: {
+      configPath,
+      envPath,
+      robot: robot?.name ?? null,
+      provider: provider?.name ?? null,
+      robotUpdated: adoption.updated,
+      configUpdated,
+      envUpdated,
+      hermesModelListPatch,
+      restarted: restart?.restarted ?? false,
+      restartMethod: restart?.method ?? null
+    }
+  });
+
+  return { configPath, envPath, robot, provider, robotUpdated: adoption.updated, configUpdated, envUpdated, hermesModelListPatch, restart };
 }
 
 export async function restartLocalHermesGateway(): Promise<{ restarted: boolean; method: string; message: string }> {
@@ -618,6 +705,74 @@ function getProviderModelsFromCache(providers: Provider[], cache: Record<string,
       cache[provider.name]?.models ?? []
     ])
   );
+}
+
+function getProviderModelsForRepair(
+  providers: Provider[],
+  cache: Record<string, ProviderCache>,
+  existingConfig: string,
+  syncCachedModels: boolean
+): Record<string, string[]> {
+  if (syncCachedModels) return getProviderModelsFromCache(providers, cache);
+  const localProviders = parseLocalHermesProviderRecords(existingConfig).providers;
+  const localModels = new Map(localProviders.map((provider) => [provider.name, provider.models]));
+  return Object.fromEntries(
+    providers.map((provider) => [
+      provider.name,
+      localModels.get(provider.name) ?? cache[provider.name]?.models ?? []
+    ])
+  );
+}
+
+async function adoptLocalHermesModel(
+  robots: HermesRobot[],
+  localModel: { model: string; provider: string; baseUrl: string },
+  providers: Provider[]
+): Promise<{ robots: HermesRobot[]; updated: boolean }> {
+  if (!robots.length || !localModel.provider || !localModel.model) {
+    return { robots, updated: false };
+  }
+  if (!providers.some((provider) => provider.name === localModel.provider)) {
+    return { robots, updated: false };
+  }
+
+  const target = robots.find((robot) => robot.provider === localModel.provider)
+    ?? robots.find((robot) => robot.telegram.enabled && robot.telegram.chatId)
+    ?? robots[0]!;
+  if (target.provider === localModel.provider && target.model === localModel.model) {
+    return { robots, updated: false };
+  }
+
+  const updatedRobot: HermesRobot = {
+    ...target,
+    provider: localModel.provider,
+    model: localModel.model,
+    updatedAt: new Date().toISOString()
+  };
+  const nextRobots = robots.map((robot) => (robot.name === target.name ? updatedRobot : robot));
+  await writeHermesRobots({ robots: nextRobots });
+  await writeLog({
+    category: "system",
+    action: "hermes_robot_adopt_local_model",
+    message: `Updated Hermes robot ${target.name} from local Hermes default model.`,
+    metadata: {
+      robot: target.name,
+      provider: localModel.provider,
+      model: localModel.model,
+      baseUrl: localModel.baseUrl
+    }
+  });
+  return { robots: nextRobots, updated: true };
+}
+
+function selectLocalHermesRepairRobot(robots: HermesRobot[], activeProviderName: string, providers: Provider[]): HermesRobot | null {
+  if (!robots.length || !providers.length) return null;
+  const providerNames = new Set(providers.map((provider) => provider.name));
+  const validRobots = robots.filter((robot) => providerNames.has(robot.provider));
+  if (!validRobots.length) return null;
+  return validRobots.find((robot) => robot.provider === activeProviderName)
+    ?? validRobots.find((robot) => robot.telegram.enabled && robot.telegram.chatId)
+    ?? validRobots[0]!;
 }
 
 function buildHermesSyncMetadata(

@@ -9,11 +9,13 @@ import {
   importLocalHermesRobots,
   importHermesRobot,
   listHermesRobots,
+  repairLocalHermesIntegration,
   restartLocalHermesGateway,
   syncHermesRobotToLocalConfigAndRestart,
   updateHermesRobot,
   useHermesRobot
 } from "../../core/hermes/hermes-service.js";
+import type { HermesRepairResult } from "../../core/hermes/hermes-service.js";
 import { getCachedModels, listProviders } from "../../core/providers/provider-service.js";
 import type { HermesRobot, HermesRobotStatus } from "../../core/hermes/hermes-types.js";
 import type { Provider, ProviderMode } from "../../core/types.js";
@@ -198,6 +200,7 @@ async function runHermesEditCommand(name?: string): Promise<void> {
 }
 
 async function runHermesListCommand(): Promise<void> {
+  await runHermesSelfRepair();
   const robots = await listHermesRobots();
   if (!robots.length) {
     console.log("No Hermes robots configured. Run `ai hermes add` first.");
@@ -215,6 +218,7 @@ async function runHermesListCommand(): Promise<void> {
 }
 
 async function runHermesStatusCommand(): Promise<void> {
+  await runHermesSelfRepair();
   const statuses = await getHermesRobotStatuses({ refreshProviders: true });
   if (!statuses.length) {
     console.log("No Hermes robots configured. Run `ai hermes add` first.");
@@ -228,6 +232,34 @@ async function runHermesStatusCommand(): Promise<void> {
     printStatusCard(status);
     if (index < statuses.length - 1) console.log("");
   });
+}
+
+async function runHermesSelfRepair(): Promise<void> {
+  const result = await repairLocalHermesIntegration();
+  if (!shouldPrintRepairResult(result)) return;
+
+  const actions = [
+    result.robotUpdated ? "robot" : "",
+    result.configUpdated ? "config" : "",
+    result.envUpdated ? "env" : "",
+    result.hermesModelListPatch.status === "patched" ? "compat" : "",
+    result.restart?.restarted ? "restart" : ""
+  ].filter(Boolean);
+  console.log(`Hermes self-repair: ${actions.join(", ")}`);
+  if (result.hermesModelListPatch.status === "patched") {
+    console.log(`  Patched: ${result.hermesModelListPatch.filePath}`);
+  }
+  if (result.restart && !result.restart.restarted) {
+    console.log(`  ${result.restart.message}`);
+  }
+}
+
+function shouldPrintRepairResult(result: HermesRepairResult): boolean {
+  return result.configUpdated
+    || result.robotUpdated
+    || result.envUpdated
+    || result.hermesModelListPatch.status === "patched"
+    || Boolean(result.restart && !result.restart.restarted);
 }
 
 export async function runHermesUseCommand(name?: string): Promise<void> {

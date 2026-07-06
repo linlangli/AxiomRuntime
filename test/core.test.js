@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { readJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
 import { normalizeProviders, swapProviderLevel } from "../dist/core/config/providers-store.js";
 import { extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
@@ -103,4 +107,20 @@ test("adds OpenAI v1 path for codex runtime base URL", () => {
   };
 
   assert.equal(getToolBaseUrl("codex", provider), "https://icode.51talk.biz/v1");
+});
+
+test("json store recovers trailing duplicate content and rewrites clean json", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-json-"));
+  try {
+    const filePath = path.join(tempDir, "cache.json");
+    await fs.writeFile(filePath, '{ "ok": true, "items": [1, 2] }\n{ "tail": true }\n', "utf8");
+
+    const recovered = await readJsonFile(filePath, { ok: false, items: [] });
+    assert.deepEqual(recovered, { ok: true, items: [1, 2] });
+
+    await writeJsonFile(filePath, { ok: true, items: [3] });
+    assert.deepEqual(JSON.parse(await fs.readFile(filePath, "utf8")), { ok: true, items: [3] });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 });

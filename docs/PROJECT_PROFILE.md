@@ -112,6 +112,8 @@ Rules:
 
 Internal runtime data should not pollute `providers.json`.
 
+JSON runtime stores should tolerate a complete JSON value followed by accidental trailing duplicate content, then rewrite clean JSON on the next save. Writes should use temp-file plus rename semantics to reduce corruption from concurrent CLI processes.
+
 Internal files:
 
 - `~/.ai-gateway/.ai-cache.json`: provider health, model discovery cache, last checked time, last error.
@@ -180,13 +182,14 @@ Behavior rules:
 - Telegram binding is optional.
 - Hermes cron jobs are tasks that belong to a robot. They are not robots.
 - Task schedule is stored in `hermes.json` so robots can be fully exported and restored on another machine.
-- `list` shows robot configuration only.
-- `status` checks Hermes CLI availability, provider existence, provider health, model cache, Telegram binding status, and recent robot state.
+- `list` runs lightweight local Hermes self-repair, then shows robot configuration. It must not run callable model probes or consume token usage.
+- `status` runs lightweight local Hermes self-repair, then checks Hermes CLI availability, provider existence, provider health, model cache, Telegram binding status, and recent robot state.
 - `use` launches Hermes CLI for the selected robot.
 - `add`, `edit`, and `import` automatically sync the selected robot plus all AI Gateway providers into native local Hermes config at `~/.hermes/config.yaml`, refresh discovered provider models, verify callable models with minimal `max_tokens: 1` probes, preserve unrelated Hermes settings, clear native Hermes provider credential entry points, and restart the local Hermes gateway when possible. Telegram `/model` should show only callable models from AI Gateway-configured providers and omit providers with no callable models.
 - Native Hermes sync must replace inline empty provider blocks such as `providers: {}` / `custom_providers: []` and remove duplicate top-level provider blocks, otherwise Telegram `/model` can show a provider that native execution later rejects as `Unknown provider`.
+- Lightweight self-repair should adopt a native Hermes top-level `model.provider/default` back into the matching AI Gateway robot when that provider exists in `providers.json`. This prevents AI Gateway from overwriting a Telegram `/model` change on the next command.
 - Provider `add` and provider `edit` also auto-sync the AI Gateway provider list into native Hermes config without changing the active native Hermes model block.
-- Native Hermes sync patches local Hermes `model_switch.py` when needed so Telegram `/model` reads AI Gateway's discovered model list for user-defined providers, not only `default_model`. Keep a `.ai-gateway.bak` backup before patching.
+- Native Hermes sync patches local Hermes `model_switch.py` when needed so Telegram `/model` reads AI Gateway's discovered model list for user-defined providers, not only `default_model`. It also patches `gateway/run.py` when the Telegram picker calls `switch_model()` without passing the native `providers` dict or treats picker selections as session-only; otherwise provider selection can still fail with `Unknown provider` or revert after restart. Keep a `.ai-gateway.bak` backup before patching.
 - `clear` resets robot memory, AI Gateway-managed runtime state, robot tasks, and native Hermes cron jobs owned by that robot while keeping the main robot configuration.
 - `delete` removes the robot configuration and AI Gateway-managed robot state.
 - `export` defaults to all robots and writes a complete replication bundle with referenced provider API keys and model cache. Keep export files private.
