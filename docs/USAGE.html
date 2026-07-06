@@ -3,23 +3,32 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Gateway 使用指南</title>
+    <title>AI Gateway 命令参考</title>
     <style>
       :root {
         color-scheme: light;
-        --bg: #f6f7f9;
-        --panel: #ffffff;
-        --text: #1f2937;
-        --muted: #64748b;
+        --bg: #f5f6f8;
+        --surface: #ffffff;
+        --surface-soft: #f9fafb;
+        --text: #172033;
+        --muted: #687386;
         --line: #d9dee7;
+        --line-strong: #c7ceda;
         --code: #0f172a;
-        --code-bg: #eef2f7;
+        --code-bg: #eef2f6;
         --accent: #2563eb;
+        --accent-soft: #e8f0ff;
         --ok: #0f766e;
+        --warn: #b45309;
+        --shadow: 0 12px 36px rgba(15, 23, 42, 0.08);
       }
 
       * {
         box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
       }
 
       body {
@@ -30,75 +39,23 @@
         line-height: 1.55;
       }
 
-      header {
-        background: var(--panel);
-        border-bottom: 1px solid var(--line);
-      }
-
-      .wrap {
-        width: min(1120px, calc(100% - 32px));
-        margin: 0 auto;
-      }
-
-      .hero {
-        padding: 40px 0 28px;
-      }
-
-      h1 {
-        margin: 0 0 8px;
-        font-size: 34px;
-        line-height: 1.15;
-      }
-
-      .subtitle {
-        margin: 0;
-        color: var(--muted);
-        font-size: 16px;
-      }
-
-      main {
-        padding: 28px 0 48px;
-      }
-
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 16px;
-      }
-
-      .card {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 18px;
-      }
-
-      .wide {
-        grid-column: 1 / -1;
-      }
-
-      h2 {
-        margin: 0 0 12px;
-        font-size: 18px;
-      }
-
-      h3 {
-        margin: 18px 0 8px;
-        font-size: 15px;
-      }
-
-      p {
-        margin: 0 0 10px;
-      }
-
-      ul {
-        margin: 10px 0 0;
-        padding-left: 20px;
+      a {
+        color: inherit;
+        text-decoration: none;
       }
 
       code,
       pre {
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      code {
+        color: var(--code);
+        background: var(--code-bg);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 1px 5px;
+        font-size: 0.92em;
       }
 
       pre {
@@ -111,27 +68,203 @@
         border-radius: 6px;
       }
 
-      .command-list {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 10px;
+      header {
+        background: var(--surface);
+        border-bottom: 1px solid var(--line);
       }
 
-      .command {
-        padding: 12px;
+      .topbar {
+        width: min(1280px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 24px 0 20px;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: 28px;
+        line-height: 1.2;
+      }
+
+      .subtitle {
+        margin: 0;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 248px minmax(0, 1fr);
+        gap: 20px;
+        width: min(1280px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 20px 0 48px;
+      }
+
+      nav {
+        position: sticky;
+        top: 16px;
+        align-self: start;
+        background: var(--surface);
         border: 1px solid var(--line);
         border-radius: 8px;
-        background: #fbfcfe;
+        box-shadow: var(--shadow);
+        overflow: hidden;
       }
 
-      .command strong {
-        display: block;
-        margin-bottom: 4px;
+      .nav-title {
+        padding: 13px 14px 8px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .nav-link {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 9px 14px;
+        border-top: 1px solid var(--line);
+        font-size: 14px;
+      }
+
+      .nav-link:hover {
+        background: var(--surface-soft);
+      }
+
+      .nav-count {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      main {
+        min-width: 0;
+      }
+
+      .panel {
+        min-width: 0;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+      }
+
+      .finder {
+        padding: 16px;
+      }
+
+      .finder-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 12px;
+      }
+
+      h2 {
+        margin: 0 0 4px;
+        font-size: 18px;
+        line-height: 1.35;
+      }
+
+      h3 {
+        margin: 0 0 10px;
+        font-size: 16px;
+      }
+
+      p {
+        margin: 0 0 10px;
+      }
+
+      .hint {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .search {
+        width: min(420px, 100%);
+      }
+
+      .search input {
+        width: 100%;
+        height: 38px;
+        padding: 0 12px;
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        color: var(--text);
+        background: var(--surface-soft);
+        font: inherit;
+      }
+
+      .search input:focus {
+        border-color: var(--accent);
+        outline: 3px solid var(--accent-soft);
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 0 0 14px;
+      }
+
+      .chip {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 5px 10px;
+        color: var(--muted);
+        background: var(--surface-soft);
+        font-size: 13px;
+      }
+
+      .command-table {
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .command-table th,
+      .command-table td {
+        padding: 10px 12px;
+        text-align: left;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+
+      .command-table th {
+        background: #eef2f7;
+        color: #374151;
+        font-size: 13px;
+      }
+
+      .command-table tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .command-table tbody tr:hover {
+        background: var(--surface-soft);
+      }
+
+      .cmd {
+        display: inline-block;
+        white-space: nowrap;
+      }
+
+      .group-label {
+        display: inline-block;
+        min-width: 70px;
+        color: var(--muted);
+        font-size: 13px;
       }
 
       .tag {
-        display: inline-block;
-        padding: 2px 8px;
+        display: inline-flex;
+        align-items: center;
+        height: 22px;
+        padding: 0 8px;
         border-radius: 999px;
         color: var(--ok);
         background: #e6f5f3;
@@ -139,243 +272,518 @@
         font-weight: 600;
       }
 
-      .flow {
+      .tag.warn {
+        color: var(--warn);
+        background: #fff4e5;
+      }
+
+      .sections {
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 8px;
+        gap: 14px;
+        min-width: 0;
+        margin-top: 18px;
       }
 
-      .step {
-        padding: 10px;
-        text-align: center;
+      section.panel {
+        padding: 16px;
+        scroll-margin-top: 18px;
+      }
+
+      .section-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .note {
+        min-width: 0;
+        padding: 12px;
         border: 1px solid var(--line);
         border-radius: 8px;
-        background: #fbfcfe;
-        font-size: 14px;
+        background: var(--surface-soft);
       }
 
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        overflow: hidden;
+      .note p:last-child {
+        margin-bottom: 0;
+      }
+
+      details {
         border: 1px solid var(--line);
         border-radius: 8px;
+        background: var(--surface-soft);
       }
 
-      th,
-      td {
-        padding: 10px;
-        text-align: left;
+      details + details {
+        margin-top: 8px;
+      }
+
+      summary {
+        cursor: pointer;
+        padding: 10px 12px;
+        font-weight: 700;
+      }
+
+      details[open] summary {
         border-bottom: 1px solid var(--line);
       }
 
-      th {
-        background: #eef2f7;
+      .detail-body {
+        padding: 12px;
       }
 
-      tr:last-child td {
-        border-bottom: 0;
+      ul {
+        margin: 8px 0 0;
+        padding-left: 20px;
       }
 
-      @media (max-width: 800px) {
-        .grid,
-        .command-list,
-        .flow {
+      li + li {
+        margin-top: 4px;
+      }
+
+      .empty {
+        display: none;
+        padding: 18px;
+        text-align: center;
+        color: var(--muted);
+        border: 1px dashed var(--line-strong);
+        border-radius: 8px;
+        background: var(--surface-soft);
+      }
+
+      @media (max-width: 940px) {
+        .layout {
           grid-template-columns: 1fr;
         }
 
+        nav {
+          position: static;
+        }
+
+        .finder-header {
+          display: block;
+        }
+
+        .search {
+          width: 100%;
+          margin-top: 12px;
+        }
+
+        .section-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .topbar,
+        .layout {
+          width: min(100% - 24px, 1280px);
+        }
+
         h1 {
-          font-size: 28px;
+          font-size: 24px;
+        }
+
+        .command-table,
+        .command-table thead,
+        .command-table tbody,
+        .command-table tr,
+        .command-table th,
+        .command-table td {
+          display: block;
+        }
+
+        .command-table thead {
+          display: none;
+        }
+
+        .command-table tr {
+          border-bottom: 1px solid var(--line);
+          padding: 10px 0;
+        }
+
+        .command-table tr:last-child {
+          border-bottom: 0;
+        }
+
+        .command-table td {
+          border-bottom: 0;
+          padding: 4px 12px;
+        }
+
+        .group-label {
+          min-width: 0;
+        }
+
+        .cmd {
+          white-space: normal;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+
+        code {
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+
+        pre {
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
         }
       }
     </style>
   </head>
   <body>
     <header>
-      <div class="wrap hero">
-        <h1>AI Gateway 使用指南</h1>
-        <p class="subtitle">统一管理 Claude Code、Codex、Hermes 机器人、Provider、模型、优先级和健康状态。</p>
+      <div class="topbar">
+        <h1>AI Gateway 命令参考</h1>
+        <p class="subtitle">面向查阅的命令索引：先搜索命令，再跳到对应场景说明。</p>
       </div>
     </header>
 
-    <main class="wrap">
-      <section class="card wide">
-        <h2>命令速查</h2>
-        <div class="command-list">
-          <div class="command"><strong>进入交互</strong><code>ai</code></div>
-          <div class="command"><strong>打开帮助</strong><code>ai help</code></div>
-          <div class="command"><strong>使用 Claude</strong><code>ai use claude</code></div>
-          <div class="command"><strong>使用 Codex</strong><code>ai use codex</code></div>
-          <div class="command"><strong>管理 Hermes</strong><code>ai hermes</code></div>
-          <div class="command"><strong>添加 Provider</strong><code>ai add</code></div>
-          <div class="command"><strong>编辑 Provider</strong><code>ai edit</code></div>
-          <div class="command"><strong>列出 Provider</strong><code>ai provider list</code></div>
-          <div class="command"><strong>查看状态</strong><code>ai status</code></div>
-          <div class="command"><strong>查看日志</strong><code>ai log</code></div>
-          <div class="command"><strong>项目上下文</strong><code>ai context</code></div>
-          <div class="command"><strong>检查环境</strong><code>ai doctor</code></div>
-          <div class="command"><strong>打开面板</strong><code>ai web</code></div>
-        </div>
-      </section>
+    <div class="layout">
+      <nav aria-label="页面导航">
+        <div class="nav-title">分类</div>
+        <a class="nav-link" href="#commands"><span>命令索引</span><span class="nav-count">常用入口</span></a>
+        <a class="nav-link" href="#use"><span>使用模型</span><span class="nav-count">use / last</span></a>
+        <a class="nav-link" href="#providers"><span>Provider</span><span class="nav-count">add / edit / delete</span></a>
+        <a class="nav-link" href="#hermes"><span>Hermes</span><span class="nav-count">机器人 / Telegram</span></a>
+        <a class="nav-link" href="#status"><span>状态诊断</span><span class="nav-count">status / doctor</span></a>
+        <a class="nav-link" href="#sessions"><span>会话报告</span><span class="nav-count">session / report</span></a>
+        <a class="nav-link" href="#files"><span>配置文件</span><span class="nav-count">路径</span></a>
+      </nav>
 
-      <section class="grid">
-        <div class="card">
-          <h2>使用 Claude Code 或 Codex</h2>
-          <h3>默认 provider 和默认模型</h3>
-          <pre>ai use claude
-ai use codex</pre>
-          <h3>指定 provider</h3>
-          <pre>ai use claude 51talk
-ai use codex 51talk</pre>
-          <h3>指定 provider 和模型</h3>
-          <pre>ai use claude 51talk claude-opus-4-6
+      <main>
+        <section id="commands" class="panel finder">
+          <div class="finder-header">
+            <div>
+              <h2>命令索引</h2>
+              <p class="hint">输入命令、场景或关键字过滤；点击左侧分类查看详细规则。</p>
+            </div>
+            <label class="search">
+              <input id="commandSearch" type="search" placeholder="搜索：provider、hermes、doctor、telegram..." />
+            </label>
+          </div>
+
+          <div class="chips" aria-label="常用筛选提示">
+            <span class="chip">Provider 统一在 <code>ai provider</code></span>
+            <span class="chip">Hermes 不再需要手动 sync</span>
+            <span class="chip">Telegram /model 只显示 AI Gateway 管理的 provider</span>
+          </div>
+
+          <table class="command-table" id="commandTable">
+            <thead>
+              <tr>
+                <th>分类</th>
+                <th>命令</th>
+                <th>用途</th>
+                <th>备注</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr data-search="interactive ai help usage">
+                <td><span class="group-label">基础</span></td>
+                <td><code class="cmd">ai</code></td>
+                <td>进入交互模式。</td>
+                <td><span class="tag">推荐入口</span></td>
+              </tr>
+              <tr data-search="help usage html docs">
+                <td><span class="group-label">基础</span></td>
+                <td><code class="cmd">ai help</code></td>
+                <td>打开本页面。</td>
+                <td></td>
+              </tr>
+              <tr data-search="use claude codex provider model fallback">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai use claude</code><br /><code class="cmd">ai use codex</code></td>
+                <td>用默认 provider 和默认模型启动 Claude Code 或 Codex。</td>
+                <td>不指定时使用 <code>level: 1</code>。</td>
+              </tr>
+              <tr data-search="use provider model named">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai use claude 51talk claude-opus-4-6</code><br /><code class="cmd">ai use codex 51talk gpt-5.5</code></td>
+                <td>指定 provider 和模型启动工具。</td>
+                <td>provider 不可用时按 level 降级。</td>
+              </tr>
+              <tr data-search="last resume previous selection">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai last</code></td>
+                <td>继续上次选择的工具、provider 和模型。</td>
+                <td></td>
+              </tr>
+              <tr data-search="provider add create import key">
+                <td><span class="group-label">Provider</span></td>
+                <td><code class="cmd">ai provider add</code><br /><code class="cmd">ai provider add 51talk https://example.com sk-xxx</code></td>
+                <td>添加 provider，探测连通性和模型。</td>
+                <td>也可用旧入口 <code>ai add</code>。</td>
+              </tr>
+              <tr data-search="provider list">
+                <td><span class="group-label">Provider</span></td>
+                <td><code class="cmd">ai provider list</code></td>
+                <td>列出 provider 配置。</td>
+                <td>只读配置，不刷新健康度。</td>
+              </tr>
+              <tr data-search="provider edit rename baseUrl apiKey level model mode">
+                <td><span class="group-label">Provider</span></td>
+                <td><code class="cmd">ai provider edit</code><br /><code class="cmd">ai provider edit 51talk</code></td>
+                <td>修改 name、baseUrl、apiKey、mode、level、model。</td>
+                <td>修改后自动同步 Hermes。</td>
+              </tr>
+              <tr data-search="provider delete remove fallback hermes">
+                <td><span class="group-label">Provider</span></td>
+                <td><code class="cmd">ai provider delete</code><br /><code class="cmd">ai provider delete 51talk</code></td>
+                <td>删除 provider 和模型缓存。</td>
+                <td>Hermes 会切到剩余最高优先级 provider。</td>
+              </tr>
+              <tr data-search="hermes add robot telegram">
+                <td><span class="group-label">Hermes</span></td>
+                <td><code class="cmd">ai hermes add</code></td>
+                <td>新增 Hermes 机器人，可绑定 Telegram。</td>
+                <td>保存后自动同步本机 Hermes。</td>
+              </tr>
+              <tr data-search="hermes edit robot provider model telegram">
+                <td><span class="group-label">Hermes</span></td>
+                <td><code class="cmd">ai hermes edit</code><br /><code class="cmd">ai hermes edit robot-name</code></td>
+                <td>修改机器人名称、provider、model、mode、Telegram。</td>
+                <td>Provider 管理由 <code>ai provider edit</code> 处理。</td>
+              </tr>
+              <tr data-search="hermes list status use clear delete">
+                <td><span class="group-label">Hermes</span></td>
+                <td><code class="cmd">ai hermes list</code><br /><code class="cmd">ai hermes status</code><br /><code class="cmd">ai hermes use robot-name</code></td>
+                <td>查看、检查或启动 Hermes 机器人。</td>
+                <td><code>list</code> 只列机器人。</td>
+              </tr>
+              <tr data-search="hermes import local export migrate telegram">
+                <td><span class="group-label">Hermes</span></td>
+                <td><code class="cmd">ai hermes import-local</code><br /><code class="cmd">ai hermes export</code><br /><code class="cmd">ai hermes export robot-name</code><br /><code class="cmd">ai hermes import ./robot.json</code></td>
+                <td>导入本机 Hermes、完整导出或迁移机器人。</td>
+                <td><code>export</code> 会包含关联 provider 凭证。</td>
+              </tr>
+              <tr data-search="status health provider model token usage">
+                <td><span class="group-label">诊断</span></td>
+                <td><code class="cmd">ai status</code></td>
+                <td>轻量刷新 provider 健康度和模型缓存。</td>
+                <td>默认不发送真实对话请求。</td>
+              </tr>
+              <tr data-search="doctor deep diagnose cli provider token">
+                <td><span class="group-label">诊断</span></td>
+                <td><code class="cmd">ai doctor</code><br /><code class="cmd">ai doctor --deep</code></td>
+                <td>检查环境；deep 会验证真实推理链路。</td>
+                <td><span class="tag warn">deep 可能消耗 token</span></td>
+              </tr>
+              <tr data-search="log context project">
+                <td><span class="group-label">诊断</span></td>
+                <td><code class="cmd">ai log</code><br /><code class="cmd">ai log --print</code><br /><code class="cmd">ai context</code></td>
+                <td>打开日志、打印日志、生成项目上下文。</td>
+                <td></td>
+              </tr>
+              <tr data-search="session report clear">
+                <td><span class="group-label">会话</span></td>
+                <td><code class="cmd">ai session</code><br /><code class="cmd">ai session list</code><br /><code class="cmd">ai session clear</code><br /><code class="cmd">ai report</code></td>
+                <td>管理 session 记录并生成报告。</td>
+                <td></td>
+              </tr>
+              <tr data-search="web dashboard panel planned">
+                <td><span class="group-label">其它</span></td>
+                <td><code class="cmd">ai web</code></td>
+                <td>规划中的 Web 控制面板。</td>
+                <td>当前基础版会提示暂未实现。</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="empty" id="emptyState">没有匹配的命令。试试搜索 provider、hermes、status、doctor 或 session。</div>
+        </section>
+
+        <div class="sections">
+          <section id="use" class="panel">
+            <h2>使用模型</h2>
+            <div class="section-grid">
+              <div class="note">
+                <h3>启动 Claude Code 或 Codex</h3>
+                <pre>ai use claude
+ai use codex
+ai use claude 51talk
 ai use codex 51talk gpt-5.5</pre>
-          <p><span class="tag">自动降级</span></p>
-          <ul>
-            <li>不指定 provider 时，使用 <code>level: 1</code>。</li>
-            <li>不指定模型时，使用 provider 默认 <code>model</code>。</li>
-            <li>provider 不可用时，按 <code>level</code> 自动降级。</li>
-            <li>启动 Claude Code 时会使用临时 <code>--settings</code> 文件注入 <code>ANTHROPIC_API_KEY</code> 和 <code>ANTHROPIC_BASE_URL</code>，不会修改用户 settings，也不会使用 <code>--bare</code>。</li>
-            <li>如果 provider 地址是 <code>https://icode.51talk.biz/v1</code>，Claude Code 会自动注入根地址 <code>https://icode.51talk.biz</code>；Codex 仍使用 <code>/v1</code>。</li>
-            <li>启动记录会写入日志，包含 provider、baseUrl、模型、启动参数和 Key 指纹，不包含完整 Key。</li>
-          </ul>
-        </div>
+                <p>不指定 provider 时使用 <code>level: 1</code>；不指定模型时使用 provider 默认 <code>model</code>。</p>
+              </div>
+              <div class="note">
+                <h3>运行规则</h3>
+                <ul>
+                  <li>provider 不可用时按 <code>level</code> 自动降级。</li>
+                  <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings。</li>
+                  <li>OpenAI 兼容地址用于 Codex 时会使用 <code>/v1</code>，用于 Claude 时会去掉 <code>/v1</code>。</li>
+                  <li>日志只记录 Key 指纹，不记录完整 API Key。</li>
+                </ul>
+              </div>
+            </div>
+          </section>
 
-        <div class="card">
-          <h2>管理 Hermes 机器人</h2>
-          <pre>ai hermes
+          <section id="providers" class="panel">
+            <h2>Provider 管理</h2>
+            <details open>
+              <summary>添加、编辑、删除</summary>
+              <div class="detail-body">
+                <pre>ai provider add
+ai provider add 51talk https://example.com sk-xxx
+ai provider edit
+ai provider edit 51talk
+ai provider delete
+ai provider delete 51talk
+ai provider list</pre>
+                <ul>
+                  <li><code>mode</code> 可选 <code>ask</code> 或 <code>auto</code>。</li>
+                  <li><code>level</code> 是优先级；如果目标等级已占用，会和对应 provider 交换。</li>
+                  <li><code>model</code> 从已探测模型中选择，不手动输入。</li>
+                  <li>删除 provider 会清理模型缓存；如果 Hermes 正在用它，会切到剩余 provider 中 <code>level</code> 最小的一个。</li>
+                </ul>
+              </div>
+            </details>
+            <details>
+              <summary>与 Hermes 的关系</summary>
+              <div class="detail-body">
+                <ul>
+                  <li>Provider 是 AI Gateway 顶层配置，不放在 <code>ai hermes edit</code> 里管理。</li>
+                  <li><code>ai provider add/edit/delete</code> 会自动同步本机 Hermes provider 列表并重启 Hermes gateway。</li>
+                  <li><code>ai provider list</code> 是查看 provider 的唯一列表入口；<code>ai hermes list</code> 只列机器人。</li>
+                </ul>
+              </div>
+            </details>
+          </section>
+
+          <section id="hermes" class="panel">
+            <h2>Hermes 机器人</h2>
+            <details open>
+              <summary>日常操作</summary>
+              <div class="detail-body">
+                <pre>ai hermes
 ai hermes add
 ai hermes list
 ai hermes edit
+ai hermes edit robot-name
 ai hermes status
 ai hermes use robot-name
 ai use hermes robot-name</pre>
-          <h3>维护和迁移</h3>
-          <pre>ai hermes clear
-ai hermes delete
+                <ul>
+                  <li>机器人配置保存到 <code>~/.ai-gateway/hermes.json</code>，只保存 provider 名称，不保存 API Key。</li>
+                  <li><code>ai hermes use</code> 使用独立目录 <code>~/.ai-gateway/hermes/&lt;机器人名称&gt;/</code>，避免串用全局 Hermes 凭证。</li>
+                  <li><code>ai hermes edit providers</code> 不是有效命令；provider 请用 <code>ai provider edit</code>。</li>
+                </ul>
+              </div>
+            </details>
+            <details>
+              <summary>完整迁移、本机 Hermes 导入和 Telegram /model</summary>
+              <div class="detail-body">
+                <pre>ai hermes import-local
+ai hermes import-local --overwrite
+ai hermes export
 ai hermes export robot-name
-ai hermes import-local
 ai hermes import ./hermes-robot.json</pre>
-          <ul>
-            <li><code>add</code> 通过交互选择 AI Gateway provider、模型、mode，并可选择是否绑定 Telegram。</li>
-            <li><code>edit</code> 可修改机器人名称、默认 provider、默认 model、mode 和 Telegram 绑定。</li>
-            <li>Telegram 不是必填项；Hermes cron job 只作为该机器人下面的 task。</li>
-            <li>task 的定时规则不写入 <code>hermes.json</code>，需要通过和机器人聊天或后续 task 管理功能修改。</li>
-            <li><code>list</code> 只列出机器人配置，不刷新健康度。</li>
-            <li><code>status</code> 检查 Hermes CLI、provider、模型缓存和 Telegram 绑定状态。</li>
-            <li><code>use</code> 使用 <code>~/.ai-gateway/hermes/&lt;机器人名称&gt;/</code> 独立运行目录启动 Hermes，不读取全局 <code>~/.hermes/config.yaml</code> 的 API Key。</li>
-            <li><code>ai add/edit</code> 修改 provider 后，会自动把 AI Gateway provider 列表同步到本机 Hermes 原生配置，并重启 Hermes gateway。</li>
-            <li><code>ai hermes add/edit/sync</code> 会刷新所有 provider 的模型，并用 <code>max_tokens: 1</code> 的轻量请求验证每个模型是否真的能调用；Telegram 里的 <code>/model</code> 只显示验证通过的模型，没有可调用模型的 provider 不会显示。<code>sync</code> 只作为手动补救命令。</li>
-            <li>模型可调用性验证产生的 token 会记录到使用量中；模型列表不会写进 <code>providers.json</code>。</li>
-            <li>如果本机 Hermes 版本的 <code>/model</code> 只读取默认模型，同步时会自动给 Hermes <code>model_switch.py</code> 打兼容补丁，让它读取完整模型列表；补丁前会保留 <code>.ai-gateway.bak</code> 备份。</li>
-            <li><code>clear</code> 清空机器人状态和记忆，保留配置。</li>
-            <li><code>delete</code> 删除机器人配置和 AI Gateway 管理状态。</li>
-            <li><code>export</code> 不导出 API Key，可复制到其他电脑后用 <code>import</code> 导入。</li>
-            <li><code>import-local</code> 自动扫描本机 <code>~/.hermes</code>，导入默认 Hermes 机器人和该机器人下面的 tasks。</li>
-          </ul>
-        </div>
+                <ul>
+                  <li><code>export</code> 默认导出所有机器人完整复刻包，包含机器人配置、Telegram 绑定、tasks schedule、关联 provider 配置、API Key 和模型缓存；导出的文件需要私密保存。传入机器人名称时只导出单个机器人。</li>
+                  <li><code>import</code> 导入完整复刻包时会写入关联 provider，并立即同步本机 Hermes 配置、重启 gateway。</li>
+                  <li>旧版不含 provider 的导出文件仍可导入，但目标机器需要已有同名 provider。</li>
+                  <li><code>import-local</code> 扫描 <code>~/.hermes/config.yaml</code>、<code>channel_directory.json</code> 和 <code>cron/jobs.json</code>。</li>
+                  <li>本机 Hermes provider 会先导入 AI Gateway provider 配置，再统一由 <code>ai provider</code> 管理。</li>
+                  <li>导入后会立即同步 <code>~/.hermes/config.yaml</code> 并重启 Hermes gateway；不需要单独执行 sync。</li>
+                  <li>Telegram <code>/model</code> 只展示 AI Gateway 管理且验证可调用的 provider/model。</li>
+                  <li>同步时会清空 Hermes 原生 provider 凭证入口，避免 MoA、Copilot、openai-codex 等原生 provider 混入列表。</li>
+                </ul>
+              </div>
+            </details>
+          </section>
 
-        <div class="card">
-          <h2>添加 Provider</h2>
-          <pre>ai add</pre>
-          <pre>ai add 51talk https://example.com sk-xxx</pre>
-          <div class="flow">
-            <div class="step">输入名称</div>
-            <div class="step">输入地址</div>
-            <div class="step">输入 Key</div>
-            <div class="step">探测模型</div>
-            <div class="step">写入配置</div>
-          </div>
-          <ul>
-            <li><code>mode</code> 默认是 <code>auto</code>。</li>
-            <li><code>level</code> 默认是下一个可用等级。</li>
-            <li>添加时会测试连通性并探测模型。</li>
-          </ul>
-        </div>
-
-        <div class="card">
-          <h2>编辑 Provider</h2>
-          <pre>ai edit</pre>
-          <table>
-            <thead>
-              <tr><th>字段</th><th>说明</th></tr>
-            </thead>
-            <tbody>
-              <tr><td><code>name</code></td><td>Provider 名称</td></tr>
-              <tr><td><code>baseUrl</code></td><td>API 地址</td></tr>
-              <tr><td><code>apiKey</code></td><td>API Key</td></tr>
-              <tr><td><code>mode</code></td><td><code>ask</code> 或 <code>auto</code></td></tr>
-              <tr><td><code>level</code></td><td>优先级，冲突时交换</td></tr>
-              <tr><td><code>model</code></td><td>从已探测模型中选择</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="card">
-          <h2>状态和检查</h2>
-          <pre>ai provider list
-ai status
+          <section id="status" class="panel">
+            <h2>状态和诊断</h2>
+            <div class="section-grid">
+              <div class="note">
+                <h3>轻量检查</h3>
+                <pre>ai status
+ai provider list
 ai log
-ai context
-ai session
-ai session list
-ai session clear
-ai report
-ai doctor
+ai log --print
+ai context</pre>
+                <p><code>status</code> 会刷新 provider 健康度和模型缓存，展示 Claude/Codex 各自实际 baseUrl、兼容模型、token 使用量和使用占比。</p>
+              </div>
+              <div class="note">
+                <h3>深度检查</h3>
+                <pre>ai doctor
 ai doctor --deep</pre>
-          <ul>
-            <li><code>provider list</code> 只读取配置，以卡片形式展示 provider 的名称、地址、Key、level、mode 和默认模型。</li>
-            <li><code>status</code> 会轻量刷新所有 provider，不发送真实对话请求，默认不消耗 token。</li>
-            <li><code>status</code> 展示健康度、Claude/Codex 各自的有效 baseUrl、兼容模型、真实 token 使用量和使用占比。</li>
-            <li><code>log</code> 打开日志文件；<code>log --print</code> 以分块形式在终端输出最近日志。</li>
-            <li><code>context</code> 生成并打开 <code>.ai-gateway/context.md</code>，用于给 Claude/Codex 提供项目上下文。</li>
-            <li><code>session</code> 进入最近 session 选择列表；<code>session list</code> 列出最近 session；<code>session clear</code> 清空 AI Gateway session 记录。</li>
-            <li><code>report</code> 选择 session 生成 Markdown 报告，包含 context、真实 token、模型、provider 快照和画像信息。</li>
-            <li><code>doctor</code> 检查配置文件、CLI、连通性、模型探测、level 冲突和默认模型。</li>
-            <li><code>doctor --deep</code> 使用最高优先级可用 provider 验证真实推理链路，支持自动降级，可能消耗 token。</li>
-            <li>如果 provider 返回 usage，<code>doctor --deep</code> 会写入真实 token 使用记录。</li>
-            <li>如果没有 provider 可用，<code>doctor --deep</code> 会自动回到普通 <code>doctor</code>，不使用大模型。</li>
-          </ul>
-        </div>
+                <p><code>doctor --deep</code> 使用最高优先级可用 provider 验证真实推理链路，可能消耗 token；如果没有 provider 可用，会退回普通 doctor。</p>
+              </div>
+            </div>
+          </section>
 
-        <div class="card">
-          <h2>继续上次会话</h2>
-          <pre>ai last</pre>
-          <p>继续使用上次选择的工具、provider 和模型。</p>
-        </div>
+          <section id="sessions" class="panel">
+            <h2>会话和报告</h2>
+            <div class="section-grid">
+              <div class="note">
+                <h3>Session</h3>
+                <pre>ai session
+ai session list
+ai session clear</pre>
+                <p><code>session</code> 进入最近 session 选择列表；<code>session clear</code> 清空 AI Gateway 记录。</p>
+              </div>
+              <div class="note">
+                <h3>Report</h3>
+                <pre>ai report</pre>
+                <p>选择 session 生成 Markdown 报告，包含 context、真实 token、模型、provider 快照和画像信息。</p>
+              </div>
+            </div>
+          </section>
 
-        <div class="card">
-          <h2>Web 控制面板</h2>
-          <pre>ai web</pre>
-          <p>规划中的命令。当前基础版会提示暂未实现，后续用于查看 provider、健康度、使用占比、消耗曲线和可视化配置。</p>
-        </div>
-
-        <div class="card wide">
-          <h2>配置文件</h2>
-          <h3>用户可编辑：~/.ai-gateway/providers.json</h3>
-          <pre>[
-  {
-    "name": "51talk",
-    "baseUrl": "https://example.com",
-    "apiKey": "sk-xxx",
-    "mode": "auto",
-    "level": 1,
-    "model": "claude-opus-4-6"
-  }
-]</pre>
-          <h3>内部文件</h3>
-          <pre>~/.ai-gateway/.ai-cache.json
+          <section id="files" class="panel">
+            <h2>配置文件</h2>
+            <details open>
+              <summary>用户可编辑</summary>
+              <div class="detail-body">
+                <pre>~/.ai-gateway/providers.json
+~/.ai-gateway/hermes.json</pre>
+                <p><code>providers.json</code> 保存 provider；<code>hermes.json</code> 保存 Hermes 机器人，不保存 API Key 到机器人配置。</p>
+              </div>
+            </details>
+            <details>
+              <summary>内部状态</summary>
+              <div class="detail-body">
+                <pre>~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
 ~/.ai-gateway/sessions.json
-~/.ai-gateway/hermes.json
 ~/.ai-gateway/hermes-state.json
 ~/.ai-gateway/hermes/&lt;机器人名称&gt;/
 ~/.ai-gateway/reports/
 ~/.ai-gateway/exports/
 ~/.ai-gateway/.ai-gateway.log</pre>
-          <p>除非调试问题，否则不要手动修改内部文件。</p>
+                <p>除非调试问题，否则不要手动修改内部文件。</p>
+              </div>
+            </details>
+            <details>
+              <summary>本机 Hermes 同步目标</summary>
+              <div class="detail-body">
+                <pre>~/.hermes/config.yaml
+~/.hermes/.env
+~/.hermes/auth.json</pre>
+                <p>AI Gateway 同步时会写入 provider/model 配置、清理原生凭证入口，并重启 Hermes gateway。</p>
+              </div>
+            </details>
+          </section>
         </div>
-      </section>
-    </main>
+      </main>
+    </div>
+
+    <script>
+      const search = document.getElementById("commandSearch");
+      const rows = Array.from(document.querySelectorAll("#commandTable tbody tr"));
+      const emptyState = document.getElementById("emptyState");
+
+      search.addEventListener("input", () => {
+        const query = search.value.trim().toLowerCase();
+        let visible = 0;
+        for (const row of rows) {
+          const haystack = `${row.textContent} ${row.dataset.search || ""}`.toLowerCase();
+          const match = !query || haystack.includes(query);
+          row.style.display = match ? "" : "none";
+          if (match) visible += 1;
+        }
+        emptyState.style.display = visible ? "none" : "block";
+      });
+    </script>
   </body>
 </html>
