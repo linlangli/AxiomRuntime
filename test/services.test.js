@@ -27,7 +27,7 @@ import {
   syncHermesProvidersToLocalConfig,
   updateHermesRobot
 } from "../dist/core/hermes/hermes-service.js";
-import { readHermesState, upsertHermesRobotState } from "../dist/core/hermes/hermes-store.js";
+import { readHermesState, upsertHermesRobotState, writeHermesRobots } from "../dist/core/hermes/hermes-store.js";
 import { prepareHermesRuntime } from "../dist/core/hermes/hermes-runner.js";
 
 const ORIGINAL_FETCH = globalThis.fetch;
@@ -882,17 +882,52 @@ test("hermes export defaults to full replication bundle and import restores robo
 });
 
 test("hermes clear keeps robot config and delete removes it", async () => {
-  await withTempHome(async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "native-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
     await writeProviders([
       { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" }
     ]);
-    await addHermesRobot({ name: "robot-a", provider: "api", model: "claude-opus-4-6" });
+    const robot = await addHermesRobot({ name: "robot-a", provider: "api", model: "claude-opus-4-6" });
+    await writeHermesRobots({
+      robots: [
+        {
+          ...robot,
+          tasks: [
+            {
+              id: "task-1",
+              name: "Cron Task",
+              type: "cron",
+              schedule: "0 9 * * *",
+              enabled: true,
+              state: "scheduled",
+              provider: "api",
+              model: "claude-opus-4-6"
+            }
+          ]
+        }
+      ]
+    });
+    await fs.mkdir(path.join(hermesDir, "cron"), { recursive: true });
+    await fs.writeFile(
+      path.join(hermesDir, "cron", "jobs.json"),
+      JSON.stringify({
+        jobs: [
+          { id: "task-1", name: "Cron Task", ai_gateway_robot: "robot-a" },
+          { id: "native-task", name: "Native Task" }
+        ]
+      })
+    );
     await upsertHermesRobotState("robot-a", { lastUsedAt: "now", lastSessionId: "ses_1", lastError: "boom" });
 
     await clearHermesRobot("robot-a");
     let robots = await listHermesRobots();
     let state = await readHermesState();
+    let cronJobs = JSON.parse(await fs.readFile(path.join(hermesDir, "cron", "jobs.json"), "utf8"));
     assert.equal(robots.length, 1);
+    assert.equal(robots[0].tasks.length, 0);
+    assert.equal(cronJobs.jobs.length, 1);
+    assert.equal(cronJobs.jobs[0].id, "native-task");
     assert.equal(state.robots["robot-a"].lastUsedAt, null);
     assert.equal(state.robots["robot-a"].lastError, null);
     assert.equal(Boolean(state.robots["robot-a"].clearedAt), true);

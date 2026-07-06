@@ -283,9 +283,9 @@ Interactive only in the first version:
 
 1. Select robot.
 2. Confirm reset.
-3. Clear robot runtime memory and AI Gateway-managed robot state.
+3. Clear robot runtime memory, AI Gateway-managed robot state, robot tasks, and native Hermes cron jobs owned by that robot.
 
-`clear` keeps robot configuration.
+`clear` keeps the main robot configuration.
 
 Keep:
 
@@ -303,6 +303,8 @@ Clear:
 - local robot context
 - AI Gateway-managed robot memory
 - isolated Hermes runtime home for that robot
+- robot tasks in `hermes.json`
+- native Hermes cron jobs in `~/.hermes/cron/jobs.json` whose id or `ai_gateway_robot` matches the robot
 - robot token usage aggregation when tracked per robot
 - robot error history
 

@@ -752,7 +752,7 @@ Sync rules:
 - Never write secrets into `hermes.json`; secrets are written only to the native Hermes config during `add`, `edit`, or explicit `sync`.
 - Restart the native Hermes gateway automatically after sync. Prefer launchd `ai.hermes.gateway` on macOS; fall back to `hermes gateway restart`.
 
-`ai hermes clear` resets robot memory and AI Gateway-managed robot runtime state while keeping robot configuration.
+`ai hermes clear` resets robot memory, AI Gateway-managed robot runtime state, robot tasks, and native Hermes cron jobs owned by that robot while keeping the main robot configuration.
 
 `ai hermes delete` removes the robot configuration and AI Gateway-managed robot state.
 

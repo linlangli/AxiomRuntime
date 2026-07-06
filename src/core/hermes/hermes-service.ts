@@ -408,17 +408,22 @@ export async function useHermesRobot(name: string): Promise<number> {
 }
 
 export async function clearHermesRobot(name: string): Promise<void> {
-  const robot = await getHermesRobot(name);
+  const robots = await listHermesRobots();
+  const robot = robots.find((item) => item.name === name);
   if (!robot) {
     throw new Error(`Hermes robot not found: ${name}`);
   }
+  await writeHermesRobots({
+    robots: robots.map((item) => item.name === name ? { ...item, tasks: [], updatedAt: new Date().toISOString() } : item)
+  });
+  await pruneLocalHermesCronJobs(path.join(getLocalHermesDir(), "cron", "jobs.json"), robot);
   await clearHermesRobotState(name);
   await removeHermesRobotOwnedFiles(name);
   await writeLog({
     category: "system",
     action: "hermes_robot_clear",
     message: `Cleared Hermes robot ${name}.`,
-    metadata: { robot: name }
+    metadata: { robot: name, clearedTasks: robot.tasks.length }
   });
 }
 
@@ -711,6 +716,26 @@ async function writeLocalHermesCronJobs(filePath: string, robot: HermesRobot): P
       ai_gateway_robot: robot.name
     }))
   ];
+
+  next.jobs = jobs;
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(filePath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(filePath, 0o600).catch(() => undefined);
+}
+
+async function pruneLocalHermesCronJobs(filePath: string, robot: HermesRobot): Promise<void> {
+  const raw = await readJsonIfExists(filePath);
+  if (!raw) return;
+  const next: Record<string, unknown> = isRecord(raw) ? { ...raw } : {};
+  if (!Array.isArray(next.jobs)) return;
+
+  const taskIds = new Set(robot.tasks.map((task) => task.id).filter(Boolean));
+  const jobs = next.jobs.filter((job) => {
+    if (!isRecord(job)) return true;
+    const jobRobot = String(job.ai_gateway_robot ?? "");
+    const jobId = String(job.id ?? "");
+    return jobRobot !== robot.name && (!jobId || !taskIds.has(jobId));
+  });
 
   next.jobs = jobs;
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });

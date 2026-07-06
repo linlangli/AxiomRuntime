@@ -9,6 +9,7 @@ import {
   importLocalHermesRobots,
   importHermesRobot,
   listHermesRobots,
+  restartLocalHermesGateway,
   syncHermesRobotToLocalConfigAndRestart,
   updateHermesRobot,
   useHermesRobot
@@ -250,6 +251,8 @@ async function runHermesClearCommand(name?: string): Promise<void> {
   if (!confirmed) return;
   await clearHermesRobot(robotName);
   console.log(`Cleared Hermes robot: ${robotName}`);
+  const restart = await restartLocalHermesGateway();
+  console.log(restart.message);
 }
 
 async function runHermesDeleteCommand(name?: string): Promise<void> {

@@ -131,7 +131,7 @@ ai hermes add
 - `list` 只列出机器人配置，不刷新健康度。
 - `edit` 可修改机器人名称、默认 provider、默认 model、mode 和 Telegram 绑定。
 - `status` 会检查 Hermes CLI、provider 是否存在、provider 健康度、模型缓存和 Telegram 绑定状态。
-- `clear` 会清空该机器人的 AI Gateway 管理状态和记忆，保留机器人配置。
+- `clear` 会清空该机器人的 AI Gateway 管理状态、记忆、tasks 和本机 Hermes cron jobs 中属于该机器人的条目，保留机器人名称、provider、model、mode 和 Telegram 绑定。
 - `delete` 会删除机器人配置和 AI Gateway 管理状态。
 - `export` 默认导出所有机器人完整复刻包，包含机器人配置、Telegram 绑定、tasks schedule、关联 provider 配置、API Key 和模型缓存；该文件需要私密保存。传入机器人名称时只导出单个机器人。
 - `import` 导入完整复刻包时会同步写入关联 provider，并立即同步本机 Hermes 配置、重启 gateway；旧版不含 provider 的导出文件仍可导入，但目标机器需要已有同名 provider。

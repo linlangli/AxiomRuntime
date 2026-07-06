@@ -186,7 +186,7 @@ Behavior rules:
 - `add`, `edit`, and `import` automatically sync the selected robot plus all AI Gateway providers into native local Hermes config at `~/.hermes/config.yaml`, refresh discovered provider models, verify callable models with minimal `max_tokens: 1` probes, preserve unrelated Hermes settings, clear native Hermes provider credential entry points, and restart the local Hermes gateway when possible. Telegram `/model` should show only callable models from AI Gateway-configured providers and omit providers with no callable models.
 - Provider `add` and provider `edit` also auto-sync the AI Gateway provider list into native Hermes config without changing the active native Hermes model block.
 - Native Hermes sync patches local Hermes `model_switch.py` when needed so Telegram `/model` reads AI Gateway's discovered model list for user-defined providers, not only `default_model`. Keep a `.ai-gateway.bak` backup before patching.
-- `clear` resets robot memory and AI Gateway-managed runtime state while keeping robot configuration.
+- `clear` resets robot memory, AI Gateway-managed runtime state, robot tasks, and native Hermes cron jobs owned by that robot while keeping the main robot configuration.
 - `delete` removes the robot configuration and AI Gateway-managed robot state.
 - `export` defaults to all robots and writes a complete replication bundle with referenced provider API keys and model cache. Keep export files private.
 - `import-local` scans local Hermes files and imports the default Hermes robot plus its cron jobs as tasks.
