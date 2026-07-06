@@ -78,7 +78,6 @@ ai hermes use <机器人名称>
 ai hermes add
 ai hermes list
 ai hermes edit
-ai hermes sync
 ai hermes clear
 ai hermes delete
 ai hermes import <文件路径>
@@ -121,14 +120,13 @@ ai hermes add
 - 启动 Hermes 时会使用 AI Gateway 管理的独立机器人运行目录，例如 `~/.ai-gateway/hermes/<机器人名称>/`。
 - 每次启动都会从 `providers.json` 读取当前 provider，生成该机器人专用的 Hermes 运行配置，避免读取全局 `~/.hermes/config.yaml` 后串用其它 API Key。
 - `ai hermes use` 不会读取你的全局 `~/.hermes/config.yaml`，会使用独立机器人运行目录。
-- `ai add/edit` 修改 provider 后，会自动把 AI Gateway 的 provider 列表同步到本机 Hermes 原生配置，并自动重启 Hermes gateway。
-- `ai hermes add/edit/sync` 会把 AI Gateway 的 provider 列表写入本机 Hermes 原生配置，让 Telegram 中的 `/model` 只显示 AI Gateway 配置过的 provider。
-- `sync` 会把该机器人的 provider/model/baseUrl/apiKey 写入本机 Hermes 原生配置 `~/.hermes/config.yaml`，并保留其它 Hermes 配置。
+- `ai provider add/edit/delete` 修改 provider 后，会自动把 AI Gateway 的 provider 列表同步到本机 Hermes 原生配置，并自动重启 Hermes gateway。
+- `ai hermes add/edit/import-local` 会把 AI Gateway 的 provider 列表写入本机 Hermes 原生配置，让 Telegram 中的 `/model` 只显示 AI Gateway 配置过的 provider。
+- 自动同步会把该机器人的 provider/model/baseUrl/apiKey 写入本机 Hermes 原生配置 `~/.hermes/config.yaml`，并保留其它 Hermes 配置。
 - 同步前会刷新所有 provider 的模型，并用最小请求验证每个模型是否真的能调用；Telegram `/model` 只展示验证通过的模型，没有可调用模型的 provider 不会显示。
 - 可调用性验证使用 `max_tokens: 1` 的轻量请求，产生的 token 会记录到使用量中；模型列表不会写进 `providers.json`。
 - 如果本机 Hermes 版本的 Telegram `/model` 只读取 `default_model`，同步时会自动给 Hermes 的 `model_switch.py` 打兼容补丁，让 `/model` 读取 AI Gateway 写入的完整模型列表；补丁前会保留 `.ai-gateway.bak` 备份。
 - 同步时会清空 Hermes 原生 provider 凭证入口，避免 `anthropic`、`copilot`、`openai-codex` 等原生 provider 继续出现在 `/model`。
-- `sync` 是手动补救命令；正常修改 provider/model 不需要单独执行。
 - `list` 只列出机器人配置，不刷新健康度。
 - `edit` 可修改机器人名称、默认 provider、默认 model、mode 和 Telegram 绑定。
 - `status` 会检查 Hermes CLI、provider 是否存在、provider 健康度、模型缓存和 Telegram 绑定状态。
@@ -136,8 +134,8 @@ ai hermes add
 - `delete` 会删除机器人配置和 AI Gateway 管理状态。
 - `export` 导出的文件不包含 API Key，可复制到其他电脑。
 - `import` 导入时如果本机没有同名 provider，也会导入成功，但 `status` 会提示 provider 缺失。
-- `import-local` 会自动扫描本机 `~/.hermes/config.yaml`、`~/.hermes/channel_directory.json` 和 `~/.hermes/cron/jobs.json`，导入 Hermes 默认机器人和该机器人下面的 tasks。
-- `import-local --overwrite` 会用本机 Hermes 配置覆盖同名机器人。
+- `import-local` 会自动扫描本机 `~/.hermes/config.yaml`、`~/.hermes/channel_directory.json` 和 `~/.hermes/cron/jobs.json`，先把本机 Hermes provider 导入 AI Gateway provider 配置，再导入 Hermes 默认机器人和该机器人下面的 tasks，并立即同步本机 Hermes 配置、重启 gateway。
+- `import-local --overwrite` 会用本机 Hermes 配置覆盖同名 provider 和同名机器人。
 
 ## 添加 Provider
 
@@ -150,7 +148,7 @@ ai add
 直接添加：
 
 ```bash
-ai add 51talk https://example.com sk-xxx
+ai provider add 51talk https://example.com sk-xxx
 ```
 
 添加时会自动完成：
@@ -165,7 +163,7 @@ ai add 51talk https://example.com sk-xxx
 ## 编辑 Provider
 
 ```bash
-ai edit
+ai provider edit
 ```
 
 可编辑字段：
@@ -206,6 +204,15 @@ model
 `ai provider list` 只展示配置，不刷新健康度。
 
 终端会以卡片形式展示，每个 provider 单独一块，`level: 1` 会标记为默认 provider。
+
+## 删除 Provider
+
+```bash
+ai provider delete
+ai provider delete 51talk
+```
+
+删除会同时清理 provider 配置和模型缓存，并同步本机 Hermes provider 列表。
 
 ## 查看状态
 

@@ -2,7 +2,7 @@
 import { runAddCommand } from "./commands/add.js";
 import { runContextCommand } from "./commands/context.js";
 import { runDoctorCommand } from "./commands/doctor.js";
-import { runEditCommand } from "./commands/edit.js";
+import { runProviderDeleteCommand, runProviderEditCommand } from "./commands/edit.js";
 import { runHelpCommand } from "./commands/help.js";
 import { runHermesCommand } from "./commands/hermes.js";
 import { runListCommand } from "./commands/list.js";
@@ -33,9 +33,6 @@ async function main(): Promise<void> {
       break;
     case "add":
       await runAddCommand(args);
-      break;
-    case "edit":
-      await runEditCommand();
       break;
     case "status":
       await runStatusCommand();
@@ -88,6 +85,9 @@ function sanitizeArgs(command: string | undefined, args: string[]): string[] {
   if (command === "add" && args.length >= 3) {
     return [args[0]!, args[1]!, maskSecretArg(args[2]!)];
   }
+  if (command === "provider" && args[0] === "add" && args.length >= 4) {
+    return [args[0]!, args[1]!, args[2]!, maskSecretArg(args[3]!)];
+  }
   return args.map((arg, index) => {
     const previous = args[index - 1]?.toLowerCase();
     if (previous === "--api-key" || previous === "--apikey" || previous === "--key") {
@@ -105,9 +105,10 @@ function maskSecretArg(value: string): string {
 async function runInteractive(): Promise<void> {
   const command = await promptSelect("AI Gateway", [
     { label: "use", value: "use" },
-    { label: "add", value: "add" },
-    { label: "edit", value: "edit" },
+    { label: "provider add", value: "add" },
     { label: "provider list", value: "provider:list" },
+    { label: "provider edit", value: "provider:edit" },
+    { label: "provider delete", value: "provider:delete" },
     { label: "hermes", value: "hermes" },
     { label: "status", value: "status" },
     { label: "session", value: "session" },
@@ -122,8 +123,9 @@ async function runInteractive(): Promise<void> {
 
   if (command === "use") await runUseCommand([]);
   if (command === "add") await runAddCommand([]);
-  if (command === "edit") await runEditCommand();
   if (command === "provider:list") await runListCommand();
+  if (command === "provider:edit") await runProviderEditCommand();
+  if (command === "provider:delete") await runProviderDeleteCommand();
   if (command === "hermes") await runHermesCommand([]);
   if (command === "status") await runStatusCommand();
   if (command === "session") await runSessionCommand([]);
@@ -136,9 +138,21 @@ async function runInteractive(): Promise<void> {
 }
 
 async function runProviderCommand(args: string[]): Promise<void> {
-  const subcommand = args[0];
+  const [subcommand, name] = args;
+  if (subcommand === "add") {
+    await runAddCommand(args.slice(1));
+    return;
+  }
   if (subcommand === "list") {
     await runListCommand();
+    return;
+  }
+  if (subcommand === "edit") {
+    await runProviderEditCommand(name);
+    return;
+  }
+  if (subcommand === "delete" || subcommand === "remove") {
+    await runProviderDeleteCommand(name);
     return;
   }
   throw new Error(`Unknown provider command: ${subcommand ?? "(missing)"}`);

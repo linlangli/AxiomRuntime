@@ -1,4 +1,4 @@
-import { readCache, renameProviderCache, upsertProviderCache } from "../config/cache-store.js";
+import { deleteProviderCache, readCache, renameProviderCache, upsertProviderCache } from "../config/cache-store.js";
 import { appendUsageEvent } from "../config/usage-store.js";
 import { writeLog } from "../logs/log-service.js";
 import { readProviders, swapProviderLevel, writeProviders } from "../config/providers-store.js";
@@ -89,6 +89,18 @@ export async function updateProvider(providerName: string, patch: Partial<Provid
   }
 
   return updated;
+}
+
+export async function deleteProvider(providerName: string): Promise<Provider> {
+  const providers = await readProviders();
+  const provider = providers.find((item) => item.name === providerName);
+  if (!provider) {
+    throw new Error(`Provider not found: ${providerName}`);
+  }
+
+  await writeProviders(providers.filter((item) => item.name !== providerName));
+  await deleteProviderCache(providerName);
+  return provider;
 }
 
 type RefreshProviderOptions = {

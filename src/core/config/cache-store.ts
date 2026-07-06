@@ -35,6 +35,15 @@ export async function renameProviderCache(from: string, to: string): Promise<voi
   await writeCache(cache);
 }
 
+export async function deleteProviderCache(providerName: string): Promise<void> {
+  const cache = await readCache();
+  delete cache.providers[providerName];
+  if (cache.lastSelection?.provider === providerName) {
+    delete cache.lastSelection;
+  }
+  await writeCache(cache);
+}
+
 export async function saveLastSelection(tool: ToolType, provider: string, model: string): Promise<void> {
   const cache = await readCache();
   cache.lastSelection = {

@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { getHermesExportPath } from "../config/paths.js";
-import { readCache } from "../config/cache-store.js";
-import { readProviders } from "../config/providers-store.js";
+import { readCache, upsertProviderCache } from "../config/cache-store.js";
+import { readProviders, writeProviders } from "../config/providers-store.js";
 import { writeJsonFile } from "../config/json-store.js";
 import { writeLog } from "../logs/log-service.js";
 import { refreshAllProviders } from "../providers/provider-service.js";
@@ -24,6 +24,8 @@ import { isHermesInstalled, runHermesRobot } from "./hermes-runner.js";
 import { ensureLocalHermesModelListSupport, type HermesModelListPatchResult } from "./hermes-compat.js";
 import type {
   AddHermesRobotInput,
+  HermesConfiguredProvider,
+  HermesConfiguredProvidersResult,
   HermesRobot,
   HermesRobotStatus,
   ImportLocalHermesResult,
@@ -34,8 +36,63 @@ import type {
 const execFileAsync = promisify(execFile);
 const DEFAULT_HERMES_LAUNCHD_LABEL = "ai.hermes.gateway";
 
+type LocalHermesProviderRecord = {
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  apiMode: string;
+  models: string[];
+  active: boolean;
+};
+
 export async function listHermesRobots(): Promise<HermesRobot[]> {
   return (await readHermesRobots()).robots;
+}
+
+export async function listHermesConfiguredProviders(): Promise<HermesConfiguredProvidersResult> {
+  const [providers, cache] = await Promise.all([
+    readProviders(),
+    readCache()
+  ]);
+  const configPath = path.join(getLocalHermesDir(), "config.yaml");
+  const raw = await readTextIfExists(configPath);
+  const local = parseLocalHermesProviderRecords(raw);
+  const merged = new Map<string, HermesConfiguredProvider>();
+
+  for (const provider of providers) {
+    upsertHermesConfiguredProvider(merged, {
+      name: provider.name,
+      sources: ["ai-gateway"],
+      baseUrl: getProviderDefaultBaseUrl(provider),
+      defaultModel: provider.model,
+      apiMode: getProviderApiMode(provider),
+      models: cache.providers[provider.name]?.models ?? [],
+      apiKeyConfigured: Boolean(provider.apiKey),
+      active: local.activeProvider === provider.name
+    });
+  }
+
+  for (const provider of local.providers) {
+    upsertHermesConfiguredProvider(merged, {
+      name: provider.name,
+      sources: ["local-hermes"],
+      baseUrl: provider.baseUrl,
+      defaultModel: provider.defaultModel,
+      apiMode: provider.apiMode,
+      models: provider.models,
+      apiKeyConfigured: Boolean(provider.apiKey),
+      active: provider.active || local.activeProvider === provider.name
+    });
+  }
+
+  return {
+    configPath,
+    providers: [...merged.values()].sort((a, b) => {
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    })
+  };
 }
 
 export async function getHermesRobot(name: string): Promise<HermesRobot | null> {
@@ -131,6 +188,15 @@ export async function updateHermesRobot(name: string, patch: UpdateHermesRobotIn
   return updated;
 }
 
+export async function switchHermesRobotsProvider(from: string, to: Provider): Promise<number> {
+  const robots = await listHermesRobots();
+  const affected = robots.filter((robot) => robot.provider === from);
+  for (const robot of affected) {
+    await updateHermesRobot(robot.name, { provider: to.name, model: to.model || robot.model });
+  }
+  return affected.length;
+}
+
 type HermesSyncMetadata = {
   providers: string[];
   modelCounts: Record<string, number>;
@@ -198,7 +264,8 @@ export async function syncHermesProvidersToLocalConfig(): Promise<{ configPath: 
   const envPath = path.join(hermesDir, ".env");
   const authPath = path.join(hermesDir, "auth.json");
   const existing = await readTextIfExists(configPath);
-  const withProviders = replaceTopLevelYamlBlock(existing, "providers", buildHermesProvidersBlock(providers, providerModels));
+  const withModel = reconcileLocalHermesModelBlock(existing, providers);
+  const withProviders = replaceTopLevelYamlBlock(withModel, "providers", buildHermesProvidersBlock(providers, providerModels));
   const nextConfig = replaceTopLevelYamlBlock(withProviders, "custom_providers", buildHermesCustomProvidersBlock(providers, providerModels));
   const nextEnv = await buildLocalHermesEnv(envPath);
   const hermesModelListPatch = await ensureLocalHermesModelListSupport();
@@ -410,11 +477,13 @@ export async function importHermesRobot(
 
 export async function importLocalHermesRobots(options: { overwrite?: boolean } = {}): Promise<ImportLocalHermesResult> {
   const sourceDir = getLocalHermesDir();
-  const [providers, existingRobots, localRobot] = await Promise.all([
+  const [existingProviders, existingRobots, localRobot, localProviders] = await Promise.all([
     readProviders(),
     listHermesRobots(),
-    discoverLocalHermesRobots(sourceDir)
+    discoverLocalHermesRobots(sourceDir),
+    discoverLocalHermesProviders(sourceDir)
   ]);
+  const { providers, importedProviders, skippedProviders } = await importLocalHermesProviders(existingProviders, localProviders, options);
   const now = new Date().toISOString();
   const imported: HermesRobot[] = [];
   const skipped: HermesRobot[] = [];
@@ -452,9 +521,15 @@ export async function importLocalHermesRobots(options: { overwrite?: boolean } =
     category: "system",
     action: "hermes_import_local",
     message: `Imported ${imported.length} local Hermes robot(s).`,
-    metadata: { imported: imported.length, skipped: skipped.length, sourceDir }
+    metadata: {
+      imported: imported.length,
+      skipped: skipped.length,
+      importedProviders: importedProviders.map((provider) => provider.name),
+      skippedProviders: skippedProviders.map((provider) => provider.name),
+      sourceDir
+    }
   });
-  return { imported, skipped, sourceDir };
+  return { imported, skipped, importedProviders, skippedProviders, sourceDir };
 }
 
 async function resolveRobotProvider(robot: HermesRobot): Promise<Provider> {
@@ -542,6 +617,7 @@ function buildHermesProvidersBlock(providers: Provider[], providerModels: Record
     lines.push(`    api_key: ${yamlString(provider.apiKey)}`);
     lines.push(`    default_model: ${yamlString(provider.model)}`);
     lines.push(`    transport: ${yamlString(getProviderApiMode(provider))}`);
+    lines.push("    ai_gateway_managed: true");
     if (models.length) {
       lines.push("    models:");
       for (const model of models) lines.push(`      - ${yamlString(model)}`);
@@ -562,6 +638,7 @@ function buildHermesCustomProvidersBlock(providers: Provider[], providerModels: 
     lines.push(`    api_key: ${yamlString(provider.apiKey)}`);
     lines.push(`    model: ${yamlString(provider.model)}`);
     lines.push(`    api_mode: ${yamlString(getProviderApiMode(provider))}`);
+    lines.push("    ai_gateway_managed: true");
     if (models.length) {
       lines.push("    models:");
       for (const model of models) {
@@ -573,6 +650,32 @@ function buildHermesCustomProvidersBlock(providers: Provider[], providerModels: 
     }
   }
   return lines;
+}
+
+function reconcileLocalHermesModelBlock(raw: string, providers: Provider[]): string {
+  const modelBlock = extractYamlBlock(raw, "model");
+  const activeProviderName = extractYamlValue(modelBlock, "provider");
+  if (!activeProviderName) return raw;
+
+  const provider = providers.find((item) => item.name === activeProviderName);
+  if (!provider) {
+    return replaceTopLevelYamlBlock(raw, "model", [
+      "model:",
+      "  default: \"\"",
+      "  provider: \"\"",
+      "  base_url: \"\"",
+      "  api_key: \"\""
+    ]);
+  }
+
+  const model = extractYamlValue(modelBlock, "default") || provider.model;
+  return replaceTopLevelYamlBlock(raw, "model", [
+    "model:",
+    `  default: ${yamlString(model)}`,
+    `  provider: ${yamlString(provider.name)}`,
+    `  base_url: ${yamlString(getHermesProviderBaseUrl({ model } as HermesRobot, provider))}`,
+    `  api_key: ${yamlString(provider.apiKey)}`
+  ]);
 }
 
 async function pruneNativeHermesAuthStore(authPath: string): Promise<void> {
@@ -795,6 +898,205 @@ async function discoverLocalHermesRobots(sourceDir: string): Promise<HermesRobot
   };
 }
 
+async function discoverLocalHermesProviders(sourceDir: string): Promise<LocalHermesProviderRecord[]> {
+  const raw = await readTextIfExists(path.join(sourceDir, "config.yaml"));
+  return parseLocalHermesProviderRecords(raw).providers;
+}
+
+async function importLocalHermesProviders(
+  existingProviders: Provider[],
+  localProviders: LocalHermesProviderRecord[],
+  options: { overwrite?: boolean }
+): Promise<{ providers: Provider[]; importedProviders: Provider[]; skippedProviders: Provider[] }> {
+  const importedProviders: Provider[] = [];
+  const skippedProviders: Provider[] = [];
+  let nextProviders = [...existingProviders];
+
+  for (const local of localProviders) {
+    if (!local.name || (!local.baseUrl && !local.apiKey && !local.defaultModel)) continue;
+    const provider: Provider = {
+      name: local.name,
+      baseUrl: local.baseUrl,
+      apiKey: local.apiKey,
+      mode: "auto",
+      level: nextProviders.length + 1,
+      model: local.defaultModel || local.models[0] || ""
+    };
+    const existingIndex = nextProviders.findIndex((item) => item.name === provider.name);
+    if (existingIndex >= 0 && !options.overwrite) {
+      skippedProviders.push(nextProviders[existingIndex]!);
+      continue;
+    }
+    if (existingIndex >= 0) {
+      nextProviders[existingIndex] = { ...provider, level: nextProviders[existingIndex]!.level };
+    } else {
+      nextProviders.push(provider);
+    }
+    importedProviders.push(provider);
+  }
+
+  if (importedProviders.length) {
+    await writeProviders(nextProviders);
+    nextProviders = await readProviders();
+    for (const provider of importedProviders) {
+      const normalized = nextProviders.find((item) => item.name === provider.name) ?? provider;
+      await upsertProviderCache(normalized.name, {
+        status: "unknown",
+        models: localProviders.find((local) => local.name === normalized.name)?.models ?? [],
+        lastCheckedAt: null,
+        lastError: null
+      });
+    }
+  }
+
+  return { providers: nextProviders, importedProviders, skippedProviders };
+}
+
+function parseLocalHermesProviderRecords(raw: string): { activeProvider: string; providers: LocalHermesProviderRecord[] } {
+  if (!raw.trim()) return { activeProvider: "", providers: [] };
+
+  const modelBlock = extractYamlBlock(raw, "model");
+  const activeProvider = extractYamlValue(modelBlock, "provider");
+  const activeModel = extractYamlValue(modelBlock, "default");
+  const activeBaseUrl = extractYamlValue(modelBlock, "base_url");
+  const activeApiKey = extractYamlValue(modelBlock, "api_key");
+  const providers = new Map<string, LocalHermesProviderRecord>();
+
+  if (activeProvider) {
+    upsertLocalHermesProviderRecord(providers, {
+      name: activeProvider,
+      baseUrl: activeBaseUrl,
+      defaultModel: activeModel,
+      apiMode: "",
+      models: activeModel ? [activeModel] : [],
+      apiKey: activeApiKey,
+      active: true
+    });
+  }
+
+  for (const provider of parseLocalHermesProvidersBlock(extractYamlBlock(raw, "providers"))) {
+    upsertLocalHermesProviderRecord(providers, provider);
+  }
+  for (const provider of parseLocalHermesCustomProvidersBlock(extractYamlBlock(raw, "custom_providers"))) {
+    upsertLocalHermesProviderRecord(providers, provider);
+  }
+
+  return { activeProvider, providers: [...providers.values()] };
+}
+
+function parseLocalHermesProvidersBlock(block: string): LocalHermesProviderRecord[] {
+  const providers: LocalHermesProviderRecord[] = [];
+  const lines = block.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index]!.match(/^  (\S.*?):\s*$/);
+    if (!match) continue;
+    const providerKey = stripYamlQuotes(match[1]!);
+    const entryLines: string[] = [];
+    index += 1;
+    while (index < lines.length && /^    \S/.test(lines[index]!)) {
+      entryLines.push(lines[index]!);
+      index += 1;
+      while (index < lines.length && /^      \S/.test(lines[index]!)) {
+        entryLines.push(lines[index]!);
+        index += 1;
+      }
+    }
+    index -= 1;
+
+    const entry = entryLines.join("\n");
+    const name = extractYamlValue(entry, "name") || providerKey;
+    if (!name || name === "{}") continue;
+    providers.push({
+      name,
+      baseUrl: extractYamlValue(entry, "api") || extractYamlValue(entry, "base_url") || extractYamlValue(entry, "url"),
+      defaultModel: extractYamlValue(entry, "default_model") || extractYamlValue(entry, "model"),
+      apiMode: extractYamlValue(entry, "transport") || extractYamlValue(entry, "api_mode"),
+      models: extractYamlModels(entry),
+      apiKey: extractYamlValue(entry, "api_key"),
+      active: false
+    });
+  }
+  return providers;
+}
+
+function parseLocalHermesCustomProvidersBlock(block: string): LocalHermesProviderRecord[] {
+  const providers: LocalHermesProviderRecord[] = [];
+  const lines = block.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const first = lines[index]!.match(/^  -\s*(.*)$/);
+    if (!first) continue;
+    const entryLines = [first[1] ? `    ${first[1]}` : ""].filter(Boolean);
+    index += 1;
+    while (index < lines.length && /^    \S/.test(lines[index]!)) {
+      entryLines.push(lines[index]!);
+      index += 1;
+      while (index < lines.length && /^      \S/.test(lines[index]!)) {
+        entryLines.push(lines[index]!);
+        index += 1;
+      }
+    }
+    index -= 1;
+
+    const entry = entryLines.join("\n");
+    const name = extractYamlValue(entry, "name");
+    if (!name) continue;
+    providers.push({
+      name,
+      baseUrl: extractYamlValue(entry, "base_url") || extractYamlValue(entry, "api") || extractYamlValue(entry, "url"),
+      defaultModel: extractYamlValue(entry, "default_model") || extractYamlValue(entry, "model"),
+      apiMode: extractYamlValue(entry, "api_mode") || extractYamlValue(entry, "transport"),
+      models: extractYamlModels(entry),
+      apiKey: extractYamlValue(entry, "api_key"),
+      active: false
+    });
+  }
+  return providers;
+}
+
+function upsertLocalHermesProviderRecord(target: Map<string, LocalHermesProviderRecord>, provider: LocalHermesProviderRecord): void {
+  const existing = target.get(provider.name);
+  if (!existing) {
+    target.set(provider.name, {
+      ...provider,
+      models: [...new Set(provider.models.filter(Boolean))]
+    });
+    return;
+  }
+
+  target.set(provider.name, {
+    name: provider.name,
+    baseUrl: provider.baseUrl || existing.baseUrl,
+    apiKey: provider.apiKey || existing.apiKey,
+    defaultModel: provider.defaultModel || existing.defaultModel,
+    apiMode: provider.apiMode || existing.apiMode,
+    models: [...new Set([...existing.models, ...provider.models].filter(Boolean))],
+    active: existing.active || provider.active
+  });
+}
+
+function upsertHermesConfiguredProvider(target: Map<string, HermesConfiguredProvider>, provider: HermesConfiguredProvider): void {
+  const existing = target.get(provider.name);
+  if (!existing) {
+    target.set(provider.name, {
+      ...provider,
+      sources: [...new Set(provider.sources)],
+      models: [...new Set(provider.models.filter(Boolean))]
+    });
+    return;
+  }
+
+  target.set(provider.name, {
+    name: provider.name,
+    sources: [...new Set([...existing.sources, ...provider.sources])],
+    baseUrl: provider.baseUrl || existing.baseUrl,
+    defaultModel: provider.defaultModel || existing.defaultModel,
+    apiMode: provider.apiMode || existing.apiMode,
+    models: [...new Set([...existing.models, ...provider.models].filter(Boolean))],
+    apiKeyConfigured: existing.apiKeyConfigured || provider.apiKeyConfigured,
+    active: existing.active || provider.active
+  });
+}
+
 async function readLocalHermesConfig(filePath: string): Promise<{ model: string; provider: string; baseUrl: string }> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -903,10 +1205,42 @@ function extractYamlValue(block: string, key: string): string {
   return stripYamlQuotes(match?.[1] ?? "");
 }
 
+function extractYamlModels(block: string): string[] {
+  const models = new Set<string>();
+  const lines = block.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^\s+models:\s*/.test(line));
+  if (start < 0) return [];
+  const modelIndent = lines[start]!.match(/^(\s*)/)?.[1].length ?? 0;
+
+  for (const line of lines.slice(start + 1)) {
+    const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
+    if (line.trim() && indent <= modelIndent) break;
+    const listItem = line.match(/^\s+-\s*(.+?)\s*$/);
+    if (listItem) {
+      models.add(stripYamlQuotes(listItem[1]!));
+      continue;
+    }
+    const mapKey = line.match(/^\s+(.+?):\s*$/);
+    if (mapKey) {
+      const value = stripYamlQuotes(mapKey[1]!);
+      if (value && value !== "{}") models.add(value);
+    }
+  }
+
+  return [...models];
+}
+
 function stripYamlQuotes(value: string): string {
   const trimmed = value.trim();
-  if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1);
+  if (trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+    try {
+      return JSON.parse(trimmed) as string;
+    } catch {
+      return trimmed.slice(1, -1);
+    }
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replace(/''/g, "'");
   }
   return trimmed;
 }

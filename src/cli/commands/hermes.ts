@@ -37,10 +37,10 @@ export async function runHermesCommand(args: string[]): Promise<void> {
       await runHermesListCommand();
       return;
     case "edit":
+      if (rest[0] === "provider" || rest[0] === "providers") {
+        throw new Error(`Unknown hermes command: edit ${rest[0]}`);
+      }
       await runHermesEditCommand(rest[0]);
-      return;
-    case "sync":
-      await runHermesSyncCommand(rest[0]);
       return;
     case "clear":
       await runHermesClearCommand(rest[0]);
@@ -69,7 +69,6 @@ async function runHermesInteractive(): Promise<void> {
     { label: "add", value: "add" },
     { label: "list", value: "list" },
     { label: "edit", value: "edit" },
-    { label: "sync local config", value: "sync" },
     { label: "clear", value: "clear" },
     { label: "delete", value: "delete" },
     { label: "import", value: "import" },
@@ -83,7 +82,6 @@ async function runHermesInteractive(): Promise<void> {
   if (command === "add") await runHermesAddCommand();
   if (command === "list") await runHermesListCommand();
   if (command === "edit") await runHermesEditCommand();
-  if (command === "sync") await runHermesSyncCommand();
   if (command === "clear") await runHermesClearCommand();
   if (command === "delete") await runHermesDeleteCommand();
   if (command === "import") await runHermesImportCommand();
@@ -265,11 +263,6 @@ async function runHermesDeleteCommand(name?: string): Promise<void> {
   console.log(`Deleted Hermes robot: ${robotName}`);
 }
 
-async function runHermesSyncCommand(name?: string): Promise<void> {
-  const robotName = name ?? (await selectRobotName("Select robot to sync"));
-  await syncAndRestartLocalHermes(robotName);
-}
-
 async function syncAndRestartLocalHermes(robotName: string): Promise<void> {
   const result = await syncHermesRobotToLocalConfigAndRestart(robotName);
   console.log(`Synced local Hermes config: ${result.configPath}`);
@@ -317,6 +310,12 @@ async function runHermesImportCommand(filePath?: string): Promise<void> {
 
 async function runHermesImportLocalCommand(overwrite = false): Promise<void> {
   const result = await importLocalHermesRobots({ overwrite });
+  if (result.importedProviders.length) {
+    console.log(`Imported ${result.importedProviders.length} local Hermes provider(s): ${result.importedProviders.map((provider) => provider.name).join(", ")}`);
+  }
+  if (result.skippedProviders.length) {
+    console.log(`Skipped ${result.skippedProviders.length} existing provider(s). Use \`ai hermes import-local --overwrite\` to overwrite them.`);
+  }
   console.log(`Imported ${result.imported.length} local Hermes robot(s) from ${result.sourceDir}.`);
   if (result.skipped.length) {
     console.log(`Skipped ${result.skipped.length} existing robot(s). Use \`ai hermes import-local --overwrite\` to overwrite them.`);
@@ -327,11 +326,17 @@ async function runHermesImportLocalCommand(overwrite = false): Promise<void> {
       console.log(`- ${robot.name} -> ${robot.provider} / ${robot.model || "(none)"} / ${robot.tasks.length} task(s)`);
     });
   }
+  const robotToSync = result.imported[0] ?? result.skipped[0];
+  if (robotToSync) {
+    console.log("");
+    console.log(`Syncing local Hermes config for: ${robotToSync.name}`);
+    await syncAndRestartLocalHermes(robotToSync.name);
+  }
 }
 
 async function selectProvider(providers: Provider[]): Promise<Provider> {
   const name = await promptSelect("Select provider", providers.map((provider) => ({
-    label: `${provider.level}. ${provider.name} (${provider.model || "no model"})`,
+    label: `${provider.name} (${provider.model || "no model"})`,
     value: provider.name
   })));
   return providers.find((provider) => provider.name === name)!;

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { addProvider, updateProvider } from "../dist/core/providers/provider-service.js";
+import { addProvider, deleteProvider, updateProvider } from "../dist/core/providers/provider-service.js";
 import { readCache, upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
 import { getProviderStatuses } from "../dist/core/status/status-service.js";
@@ -19,7 +19,9 @@ import {
   getHermesRobotStatuses,
   importHermesRobot,
   importLocalHermesRobots,
+  listHermesConfiguredProviders,
   listHermesRobots,
+  switchHermesRobotsProvider,
   syncHermesRobotToLocalConfigAndRestart,
   syncHermesRobotToLocalConfig,
   syncHermesProvidersToLocalConfig,
@@ -72,6 +74,28 @@ test("updateProvider edits mode, swaps level, and renames cache", async () => {
     assert.equal(providers.find((provider) => provider.name === "a").level, 2);
     assert.equal(cache.providers.renamed.status, "ok");
     assert.equal(cache.providers.b, undefined);
+  });
+});
+
+test("deleteProvider removes provider config and cache", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "a", baseUrl: "https://a.test/v1", apiKey: "a", mode: "auto", level: 1, model: "claude-opus-4-6" },
+      { name: "b", baseUrl: "https://b.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("a", { status: "ok", models: ["claude-opus-4-6"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("b", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+
+    const deleted = await deleteProvider("a");
+    const providers = await readProviders();
+    const cache = await readCache();
+
+    assert.equal(deleted.name, "a");
+    assert.equal(providers.length, 1);
+    assert.equal(providers[0].name, "b");
+    assert.equal(providers[0].level, 1);
+    assert.equal(cache.providers.a, undefined);
+    assert.equal(cache.providers.b.status, "ok");
   });
 });
 
@@ -414,6 +438,7 @@ test("syncHermesRobotToLocalConfig updates native Hermes model config", async ()
     assert.match(config, /base_url: "https:\/\/icode\.51talk\.biz"/);
     assert.match(config, /api_key: "sk-selected-native"/);
     assert.match(config, /providers:\n  51talk-cs:/);
+    assert.match(config, /ai_gateway_managed: true/);
     assert.match(config, /- "claude-sonnet-4-6"/);
     assert.match(config, /- "claude-opus-4-6"/);
     assert.match(config, /custom_providers:\n  - name: "51talk-cs"/);
@@ -432,7 +457,7 @@ test("syncHermesRobotToLocalConfig updates native Hermes model config", async ()
   });
 });
 
-test("syncHermesProvidersToLocalConfig refreshes models without changing active Hermes model", async () => {
+test("syncHermesProvidersToLocalConfig refreshes providers and syncs active Hermes credentials", async () => {
   await withTempHome(async (tempDir) => {
     const hermesDir = path.join(tempDir, "native-hermes");
     const hermesAgentDir = path.join(tempDir, "hermes-agent");
@@ -478,8 +503,10 @@ test("syncHermesProvidersToLocalConfig refreshes models without changing active 
     const backup = await fs.readFile(path.join(hermesAgentDir, "hermes_cli", "model_switch.py.ai-gateway.bak"), "utf8");
 
     assert.equal(result.configPath, path.join(hermesDir, "config.yaml"));
-    assert.match(config, /default: claude-opus-4-6/);
-    assert.match(config, /provider: 51talk-cs/);
+    assert.match(config, /default: "claude-opus-4-6"/);
+    assert.match(config, /provider: "51talk-cs"/);
+    assert.match(config, /api_key: "sk-selected-native"/);
+    assert.doesNotMatch(config, /sk-active/);
     assert.match(config, /providers:\n  51talk-cs:/);
     assert.match(config, /  51talk-codex:/);
     assert.match(config, /- "claude-sonnet-4-6"/);
@@ -488,10 +515,13 @@ test("syncHermesProvidersToLocalConfig refreshes models without changing active 
     assert.equal(result.metadata.modelCounts["51talk-codex"], 2);
     assert.equal(result.metadata.hermesModelListPatch.status, "patched");
     assert.match(modelSwitch, /AI Gateway: include callable-only user-config model candidates v2/);
+    assert.match(modelSwitch, /AI Gateway: restrict picker to managed user providers v1/);
+    assert.match(modelSwitch, /def _ai_gateway_managed_user_providers/);
     assert.match(modelSwitch, /configured_models = ep_cfg.get\("models", \[\]\)/);
     assert.match(modelSwitch, /has_configured_models = "models" in ep_cfg/);
     assert.match(modelSwitch, /not has_configured_models or str\(default_model\) in models_list/);
     assert.match(modelSwitch, /has_configured_models and not models_list/);
+    assert.match(modelSwitch, /if include_moa and not _ai_gateway_managed_user_providers\(user_providers\):/);
     assert.doesNotMatch(backup, /configured_models = ep_cfg/);
   });
 });
@@ -533,6 +563,108 @@ test("syncHermesProvidersToLocalConfig writes only callable models", async () =>
     assert.doesNotMatch(config, /claude-bad/);
     assert.equal(usage.events[0].source, "model_probe");
     assert.equal(usage.events[0].totalTokens, 2);
+  });
+});
+
+test("syncHermesProvidersToLocalConfig clears deleted active Hermes provider", async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "native-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    await fs.mkdir(hermesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(hermesDir, "config.yaml"),
+      [
+        "model:",
+        "  default: old-model",
+        "  provider: deleted-provider",
+        "  base_url: https://deleted.test",
+        "  api_key: sk-deleted",
+        "terminal:",
+        "  backend: local"
+      ].join("\n")
+    );
+    await writeProviders([
+      {
+        name: "remaining",
+        baseUrl: "https://remaining.test/v1",
+        apiKey: "sk-remaining",
+        mode: "auto",
+        level: 1,
+        model: "gpt-5.5"
+      }
+    ]);
+    mockFetchModels(["gpt-5.5"]);
+
+    await syncHermesProvidersToLocalConfig();
+    const config = await fs.readFile(path.join(hermesDir, "config.yaml"), "utf8");
+
+    assert.match(config, /model:\n  default: ""\n  provider: ""\n  base_url: ""\n  api_key: ""/);
+    assert.doesNotMatch(config, /deleted-provider|sk-deleted|https:\/\/deleted\.test/);
+    assert.match(config, /providers:\n  remaining:/);
+  });
+});
+
+test("listHermesConfiguredProviders includes AI Gateway and native Hermes providers", async () => {
+  await withTempHome(async (tempDir) => {
+    const hermesDir = path.join(tempDir, "native-hermes");
+    process.env.AI_GATEWAY_HERMES_HOME = hermesDir;
+    await fs.mkdir(hermesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(hermesDir, "config.yaml"),
+      [
+        "model:",
+        "  default: claude-local-active",
+        "  provider: native-main",
+        "  base_url: https://native-main.test",
+        "  api_key: sk-native-main",
+        "providers:",
+        "  native-main:",
+        "    name: native-main",
+        "    api: https://native-main.test",
+        "    api_key: sk-native-main",
+        "    default_model: claude-local-active",
+        "    transport: anthropic_messages",
+        "    models:",
+        "      - claude-local-active",
+        "      - claude-local-backup",
+        "custom_providers:",
+        "  - name: native-custom",
+        "    base_url: https://native-custom.test/v1",
+        "    api_key: sk-native-custom",
+        "    model: gpt-native",
+        "    api_mode: chat_completions",
+        "    models:",
+        "      gpt-native:",
+        "        context_length: null"
+      ].join("\n")
+    );
+    await writeProviders([
+      {
+        name: "gateway",
+        baseUrl: "https://gateway.test/v1",
+        apiKey: "sk-gateway",
+        mode: "auto",
+        level: 1,
+        model: "gpt-gateway"
+      }
+    ]);
+    await upsertProviderCache("gateway", { status: "ok", models: ["gpt-gateway", "gpt-gateway-plus"], lastCheckedAt: "now", lastError: null });
+
+    const result = await listHermesConfiguredProviders();
+    const byName = new Map(result.providers.map((provider) => [provider.name, provider]));
+
+    assert.equal(result.configPath, path.join(hermesDir, "config.yaml"));
+    assert.equal(byName.has("gateway"), true);
+    assert.equal(byName.has("native-main"), true);
+    assert.equal(byName.has("native-custom"), true);
+    assert.deepEqual(byName.get("gateway").sources, ["ai-gateway"]);
+    assert.deepEqual(byName.get("native-main").sources, ["local-hermes"]);
+    assert.equal(byName.get("native-main").active, true);
+    assert.equal(byName.get("native-main").defaultModel, "claude-local-active");
+    assert.deepEqual(byName.get("native-main").models, ["claude-local-active", "claude-local-backup"]);
+    assert.equal(byName.get("native-custom").baseUrl, "https://native-custom.test/v1");
+    assert.deepEqual(byName.get("native-custom").models, ["gpt-native"]);
+    assert.equal(byName.get("native-custom").apiKeyConfigured, true);
   });
 });
 
@@ -589,6 +721,24 @@ test("hermes robots are stored in editable hermes.json and can be edited", async
     assert.equal(raw[0].createdAt, undefined);
     assert.equal(raw[0].updatedAt, undefined);
     assert.equal(raw[0].source, undefined);
+  });
+});
+
+test("switchHermesRobotsProvider moves robots to fallback provider and model", async () => {
+  await withTempHome(async () => {
+    const fallback = { name: "fallback", baseUrl: "https://fallback.test/v1", apiKey: "key2", mode: "auto", level: 1, model: "gpt-5.5" };
+    await writeProviders([
+      fallback,
+      { name: "old", baseUrl: "https://old.test/v1", apiKey: "key", mode: "auto", level: 2, model: "claude-opus-4-6" }
+    ]);
+    await addHermesRobot({ name: "robot-a", provider: "old", model: "claude-opus-4-6" });
+
+    const count = await switchHermesRobotsProvider("old", fallback);
+    const robots = await listHermesRobots();
+
+    assert.equal(count, 1);
+    assert.equal(robots[0].provider, "fallback");
+    assert.equal(robots[0].model, "gpt-5.5");
   });
 });
 
@@ -711,12 +861,18 @@ test("imports local Hermes config and cron jobs as robots", async () => {
 
     const result = await importLocalHermesRobots();
     const robots = await listHermesRobots();
+    const providers = await readProviders();
+    const cache = await readCache();
     const raw = await fs.readFile(path.join(process.env.AI_GATEWAY_HOME, "hermes.json"), "utf8");
 
     assert.equal(result.imported.length, 1);
+    assert.equal(result.importedProviders.length, 1);
+    assert.equal(result.importedProviders[0].name, "anthropic");
+    assert.equal(providers.some((provider) => provider.name === "anthropic" && provider.apiKey === "sk-secret"), true);
+    assert.deepEqual(cache.providers.anthropic.models, ["claude-opus-4-6"]);
     assert.equal(robots.length, 1);
     assert.equal(robots[0].name, "hermes-default");
-    assert.equal(robots[0].provider, "api");
+    assert.equal(robots[0].provider, "anthropic");
     assert.equal(robots[0].telegram.chatId, "123");
     assert.equal(robots[0].tasks.length, 1);
     assert.equal(robots[0].tasks[0].name, "Cron Robot");
@@ -816,7 +972,18 @@ async function writeHermesModelSwitchFixture(hermesAgentDir) {
       "            # Try to probe /v1/models if URL is set (but don't block on it)",
       "            # For now just show what we know from config",
       "            results.append({\"slug\": ep_name, \"models\": models_list, \"api_url\": api_url, \"name\": display_name})",
+      "    # Sort: current provider first, then by model count descending",
+      "    results.sort(key=lambda r: (not r.get(\"is_current\", False), -r.get(\"total_models\", 0)))",
       "    return results",
+      "",
+      "def _prepend_moa_picker_provider(providers, current_provider=\"\"):",
+      "    return [{\"slug\": \"moa\"}] + providers",
+      "",
+      "def list_picker_providers(user_providers=None, include_moa=False):",
+      "    providers = list_authenticated_providers(user_providers=user_providers)",
+      "    if include_moa:",
+      "        providers = _prepend_moa_picker_provider(providers)",
+      "    return providers",
       ""
     ].join("\n")
   );

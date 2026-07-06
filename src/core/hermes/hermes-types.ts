@@ -1,4 +1,4 @@
-import type { ProviderMode, HealthStatus } from "../types.js";
+import type { Provider, ProviderMode, HealthStatus } from "../types.js";
 
 export type HermesTelegramBinding = {
   enabled: boolean;
@@ -82,6 +82,24 @@ export type HermesRobotStatus = {
   notes: string[];
 };
 
+export type HermesConfiguredProviderSource = "ai-gateway" | "local-hermes";
+
+export type HermesConfiguredProvider = {
+  name: string;
+  sources: HermesConfiguredProviderSource[];
+  baseUrl: string;
+  defaultModel: string;
+  apiMode: string;
+  models: string[];
+  apiKeyConfigured: boolean;
+  active: boolean;
+};
+
+export type HermesConfiguredProvidersResult = {
+  configPath: string;
+  providers: HermesConfiguredProvider[];
+};
+
 export type ImportHermesRobotResult = {
   robot: HermesRobot;
   action: "created" | "overwritten" | "renamed";
@@ -90,5 +108,7 @@ export type ImportHermesRobotResult = {
 export type ImportLocalHermesResult = {
   imported: HermesRobot[];
   skipped: HermesRobot[];
+  importedProviders: Provider[];
+  skippedProviders: Provider[];
   sourceDir: string;
 };
