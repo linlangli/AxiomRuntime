@@ -2,7 +2,7 @@ import { readCache } from "../config/cache-store.js";
 import { readProviders } from "../config/providers-store.js";
 import { writeLog } from "../logs/log-service.js";
 import { isModelCompatible, pickCompatibleModel } from "../models/model-filter.js";
-import type { Provider, ToolType } from "../types.js";
+import type { CliToolType, Provider } from "../types.js";
 
 export type ResolvedRun = {
   provider: Provider;
@@ -11,7 +11,7 @@ export type ResolvedRun = {
 };
 
 export async function resolveProviderForTool(
-  tool: ToolType,
+  tool: CliToolType,
   providerName?: string,
   modelName?: string
 ): Promise<ResolvedRun> {
@@ -31,7 +31,7 @@ export async function resolveProviderForTool(
 }
 
 export async function resolveProviderCandidatesForTool(
-  tool: ToolType,
+  tool: CliToolType,
   providerName?: string,
   modelName?: string
 ): Promise<ResolvedRun[]> {
@@ -86,7 +86,7 @@ export async function resolveProviderCandidatesForTool(
   return resolved;
 }
 
-function resolveModel(tool: ToolType, defaultModel: string, cachedModels: string[], requestedModel?: string): string | null {
+function resolveModel(tool: CliToolType, defaultModel: string, cachedModels: string[], requestedModel?: string): string | null {
   if (requestedModel) {
     return requestedModel;
   }

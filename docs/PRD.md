@@ -52,7 +52,7 @@ ai use codex 51talk gpt-5.5
 
 ai add 51talk https://example.com sk-xxx
 
-ai edit
+ai provider edit
 ai provider list
 ai status
 ai log
@@ -311,13 +311,13 @@ ai add 51talk https://example.com sk-xxx
 If multiple models are discovered in direct mode, select the first model by default. Users can later change it with:
 
 ```bash
-ai edit
+ai provider edit
 ```
 
 ## 6. Edit Flow
 
 ```bash
-ai edit
+ai provider edit
 ```
 
 Steps:
@@ -736,7 +736,7 @@ Launch rules:
 
 `ai hermes add` and `ai hermes edit` automatically write the selected robot and AI Gateway provider list into the native local Hermes config file at `~/.hermes/config.yaml`, then restart the local Hermes gateway when possible.
 
-`ai add` and `ai edit` also automatically sync the AI Gateway provider list into native local Hermes config. This provider-only sync must not replace the active native Hermes `model:` block.
+`ai provider add/edit/delete` record provider revisions only. They must not directly write native Hermes config or restart Hermes. The next Hermes command detects pending provider revisions, syncs the AI Gateway provider list into native local Hermes config, and restarts Hermes only when that Hermes command needs runtime changes. Provider-only sync must not replace the active native Hermes `model:` block.
 
 Sync rules:
 
@@ -750,7 +750,7 @@ Sync rules:
 - Clear native Hermes provider credential entry points in `.env` and `auth.json` that would otherwise make built-in providers appear in `/model`.
 - Preserve other native Hermes configuration such as Telegram, toolsets, terminal, cron, memory settings, and MCP servers.
 - Use the referenced AI Gateway provider from `providers.json`.
-- Never write secrets into `hermes.json`; secrets are written only to the native Hermes config during `add`, `edit`, or explicit `sync`.
+- Never write secrets into `hermes.json`; secrets are written only to native Hermes config during Hermes sync paths.
 - Restart the native Hermes gateway automatically after sync. Prefer launchd `ai.hermes.gateway` on macOS; fall back to `hermes gateway restart`.
 
 `ai hermes clear` resets robot memory, AI Gateway-managed robot runtime state, robot tasks, and native Hermes cron jobs owned by that robot while keeping the main robot configuration.
@@ -868,7 +868,7 @@ Principles:
 - `ai` enters interactive mode.
 - `ai help` opens the Chinese HTML usage guide.
 - `ai add` adds a provider and writes `providers.json`.
-- `ai edit` can change `mode`, `level`, and `model`.
+- `ai provider edit` can change `mode`, `level`, and `model`.
 - `ai provider list` lists provider config without refreshing health.
 - `ai session list` lists recent sessions.
 - `ai session` opens an interactive selector to resume a recent session launch configuration.

@@ -1,4 +1,6 @@
-export type ToolType = "claude" | "codex" | "hermes";
+export type CliToolType = "claude" | "codex";
+
+export type RunToolType = CliToolType | "hermes";
 
 export type ProviderMode = "ask" | "auto";
 
@@ -23,7 +25,7 @@ export type ProviderCache = {
 export type CacheFile = {
   providers: Record<string, ProviderCache>;
   lastSelection?: {
-    tool: ToolType;
+    tool: CliToolType;
     provider: string;
     model: string;
     usedAt: string;
@@ -32,7 +34,7 @@ export type CacheFile = {
 
 export type UsageEvent = {
   provider: string;
-  tool: ToolType;
+  tool: RunToolType;
   model: string;
   source: "doctor_deep" | "model_probe" | "proxy" | "cli";
   inputTokens: number;
@@ -49,7 +51,7 @@ export type SessionStatus = "running" | "completed" | "failed";
 
 export type SessionRecord = {
   id: string;
-  tool: ToolType;
+  tool: RunToolType;
   provider: string;
   model: string;
   mode: ProviderMode;

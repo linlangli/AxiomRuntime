@@ -39,6 +39,10 @@ export function getHermesStatePath(): string {
   return path.join(getConfigRoot(), "hermes-state.json");
 }
 
+export function getIntegrationStatePath(): string {
+  return path.join(getConfigRoot(), "integrations.json");
+}
+
 export function getExportsDir(): string {
   return path.join(getConfigRoot(), "exports");
 }

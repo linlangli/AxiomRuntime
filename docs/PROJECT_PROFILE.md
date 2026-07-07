@@ -55,7 +55,7 @@ ai use codex
 ai use claude 51talk claude-opus-4-6
 ai use codex 51talk gpt-5.5
 ai add 51talk https://example.com sk-xxx
-ai edit
+ai provider edit
 ai provider list
 ai status
 ai log
@@ -188,7 +188,7 @@ Behavior rules:
 - `add`, `edit`, and `import` automatically sync the selected robot plus all AI Gateway providers into native local Hermes config at `~/.hermes/config.yaml`, refresh discovered provider models, verify callable models with minimal `max_tokens: 1` probes, preserve unrelated Hermes settings, clear native Hermes provider credential entry points, and restart the local Hermes gateway when possible. Telegram `/model` should show only callable models from AI Gateway-configured providers and omit providers with no callable models.
 - Native Hermes sync must replace inline empty provider blocks such as `providers: {}` / `custom_providers: []` and remove duplicate top-level provider blocks, otherwise Telegram `/model` can show a provider that native execution later rejects as `Unknown provider`.
 - Lightweight self-repair should adopt a native Hermes top-level `model.provider/default` back into the matching AI Gateway robot when that provider exists in `providers.json`. This prevents AI Gateway from overwriting a Telegram `/model` change on the next command.
-- Provider `add` and provider `edit` also auto-sync the AI Gateway provider list into native Hermes config without changing the active native Hermes model block.
+- Provider `add/edit/delete` record provider revisions only. Hermes detects pending provider changes on the next Hermes command, syncs native Hermes config, and restarts only from that Hermes command path when runtime changes need to take effect.
 - Native Hermes sync patches local Hermes `model_switch.py` when needed so Telegram `/model` reads AI Gateway's discovered model list for user-defined providers, not only `default_model`. It also patches `gateway/run.py` when the Telegram picker calls `switch_model()` without passing the native `providers` dict or treats picker selections as session-only; otherwise provider selection can still fail with `Unknown provider` or revert after restart. Keep a `.ai-gateway.bak` backup before patching.
 - Native Hermes sync/self-repair also patches local Hermes `run_agent.py` when needed so chat-completions requests drop empty-name tool calls and matching empty tool results before sending. This prevents OpenAI-compatible providers from rejecting Telegram session history with `Invalid input[*].name`.
 - `clear` resets robot memory, AI Gateway-managed runtime state, robot tasks, and native Hermes cron jobs owned by that robot while keeping the main robot configuration.
@@ -273,7 +273,7 @@ Each provider has one default `model` in `providers.json`.
 Model selection rules:
 
 - `ai add` discovers models and lets the user select a default model.
-- `ai edit` changes model by selecting from discovered models.
+- `ai provider edit` changes model by selecting from discovered models.
 - Users do not manually type model names in interactive flows.
 - Direct commands may specify a model explicitly.
 - If no model is specified in `ai use`, use the provider default model.
@@ -504,7 +504,7 @@ Update `USAGE.html` when:
 - `USAGE.html` has been created as the visual Chinese usage page.
 - Product and usage documents have been moved under `docs/`.
 - Foundation CLI has been implemented with no runtime third-party dependencies.
-- Implemented commands: `ai`, `ai help`, `ai add`, `ai edit`, `ai provider list`, `ai session`, `ai session list`, `ai session clear`, `ai report`, `ai status`, `ai log`, `ai context`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
+- Implemented commands: `ai`, `ai help`, `ai add`, `ai provider list`, `ai provider edit`, `ai provider delete`, `ai session`, `ai session list`, `ai session clear`, `ai report`, `ai status`, `ai log`, `ai context`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, and a placeholder `ai web`.
 - Implemented core stores: `providers.json`, `.ai-cache.json`, and `usage.json`.
 - Implemented real token usage recording for provider responses that include usage data, currently from `ai doctor --deep`.
 - Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.
@@ -516,7 +516,7 @@ Update `USAGE.html` when:
 - Added Chinese `README.md` with install, build, test, and local link instructions.
 - Added interactive release script: `npm run release`; script usage lives in `scripts/USAGE.md`.
 - Added GitLab CI release plan for tag-triggered npm publishing.
-- Implemented Hermes robot foundation: `ai hermes`, `ai hermes add/list/edit/status/use/sync/clear/delete/import/import-local/export`, `ai use hermes <robot>`, user-editable `hermes.json`, robot store, state store, import/export, local Hermes import, native local config sync with callable model refresh, provider add/edit auto-sync, Hermes `/model` compatibility patching, and isolated Hermes runtime launch.
+- Implemented Hermes robot foundation: `ai hermes`, `ai hermes add/list/edit/status/use/clear/delete/import/import-local/export`, `ai use hermes <robot>`, user-editable `hermes.json`, robot store, state store, import/export, local Hermes import, native local config sync with callable model refresh, deferred provider sync from Hermes command paths, Hermes `/model` compatibility patching, and isolated Hermes runtime launch.
 - Hermes robot integration has been documented in `docs/HERMES_INTEGRATION.md`.
 - Product direction is CLI first, with web and Flutter desktop planned.
 

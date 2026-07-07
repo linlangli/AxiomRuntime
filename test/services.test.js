@@ -11,10 +11,12 @@ import { runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js"
 import { resolveProviderForTool } from "../dist/core/runner/fallback.js";
 import { clearAllSessions, finishSession, getSession, listRecentSessions, startSession } from "../dist/core/sessions/session-service.js";
 import { generateSessionReport } from "../dist/core/reports/report-service.js";
+import { readIntegrationState } from "../dist/core/integrations/integration-state.js";
 import {
   addHermesRobot,
   clearHermesRobot,
   deleteHermesRobot,
+  ensureHermesProviderSync,
   exportHermesRobot,
   getHermesRobotStatuses,
   importHermesRobot,
@@ -947,6 +949,64 @@ test("switchHermesRobotsProvider moves robots to fallback provider and model", a
     assert.equal(count, 1);
     assert.equal(robots[0].provider, "fallback");
     assert.equal(robots[0].model, "gpt-5.5");
+  });
+});
+
+test("Hermes provider sync is deferred until Hermes commands run", async () => {
+  await withTempHome(async (tempDir) => {
+    mockFetchModels(["gpt-5.5", "claude-opus-4-6"]);
+    process.env.AI_GATEWAY_HERMES_HOME = path.join(tempDir, "local-hermes");
+    await writeProviders([
+      { name: "fallback", baseUrl: "https://fallback.test/v1", apiKey: "key2", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "old", baseUrl: "https://old.test/v1", apiKey: "key", mode: "auto", level: 2, model: "claude-opus-4-6" }
+    ]);
+    await addHermesRobot({ name: "robot-a", provider: "old", model: "claude-opus-4-6" });
+
+    await deleteProvider("old");
+    await assert.rejects(() => fs.access(path.join(process.env.AI_GATEWAY_HERMES_HOME, "config.yaml")), /ENOENT/);
+
+    const result = await ensureHermesProviderSync({ restart: false, activeRobotName: "robot-a" });
+    const robots = await listHermesRobots();
+    const state = await readIntegrationState();
+    const config = await fs.readFile(path.join(process.env.AI_GATEWAY_HERMES_HOME, "config.yaml"), "utf8");
+
+    assert.equal(result.changed, true);
+    assert.equal(result.switchedRobots, 1);
+    assert.equal(robots[0].provider, "fallback");
+    assert.equal(robots[0].model, "gpt-5.5");
+    assert.equal(state.hermes.pendingProviderChanges.length, 0);
+    assert.equal(state.hermes.syncedProviderRevision, state.providerRevision);
+    assert.match(config, /provider: "fallback"/);
+  });
+});
+
+test("Hermes provider sync applies deferred provider renames before fallback", async () => {
+  await withTempHome(async (tempDir) => {
+    mockFetchModels(["gpt-5.5", "claude-opus-4-6"]);
+    process.env.AI_GATEWAY_HERMES_HOME = path.join(tempDir, "local-hermes");
+    await writeProviders([
+      { name: "fallback", baseUrl: "https://fallback.test/v1", apiKey: "key2", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "old", baseUrl: "https://old.test/v1", apiKey: "key", mode: "auto", level: 2, model: "claude-opus-4-6" }
+    ]);
+    await addHermesRobot({ name: "robot-a", provider: "old", model: "claude-opus-4-6" });
+
+    await updateProvider("old", { name: "middle" });
+    await updateProvider("middle", { name: "renamed" });
+    await assert.rejects(() => fs.access(path.join(process.env.AI_GATEWAY_HERMES_HOME, "config.yaml")), /ENOENT/);
+
+    const result = await ensureHermesProviderSync({ restart: false, activeRobotName: "robot-a" });
+    const robots = await listHermesRobots();
+    const state = await readIntegrationState();
+    const config = await fs.readFile(path.join(process.env.AI_GATEWAY_HERMES_HOME, "config.yaml"), "utf8");
+
+    assert.equal(result.changed, true);
+    assert.equal(result.renamedRobots, 1);
+    assert.equal(result.switchedRobots, 0);
+    assert.equal(robots[0].provider, "renamed");
+    assert.equal(robots[0].model, "claude-opus-4-6");
+    assert.equal(state.hermes.pendingProviderChanges.length, 0);
+    assert.equal(state.hermes.syncedProviderRevision, state.providerRevision);
+    assert.match(config, /provider: "renamed"/);
   });
 });
 

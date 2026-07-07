@@ -9,7 +9,7 @@ import { writeLog } from "../logs/log-service.js";
 import { getKnownCandidates, resolveToolCommand } from "../runner/command-resolver.js";
 import { resolveProviderCandidatesForTool, type ResolvedRun } from "../runner/fallback.js";
 import { buildUsageEvent } from "../usage/usage-service.js";
-import type { ToolType } from "../types.js";
+import type { CliToolType, RunToolType } from "../types.js";
 
 export type DoctorItem = {
   group: string;
@@ -64,7 +64,7 @@ export async function runDoctor(): Promise<DoctorItem[]> {
   return items;
 }
 
-export async function runDeepDoctor(tool: ToolType = "codex"): Promise<DoctorItem[]> {
+export async function runDeepDoctor(tool: CliToolType = "codex"): Promise<DoctorItem[]> {
   const items = await runDoctor();
   try {
     const candidates = await resolveProviderCandidatesForTool(tool);
@@ -86,7 +86,7 @@ export async function runDeepDoctor(tool: ToolType = "codex"): Promise<DoctorIte
   return items;
 }
 
-async function runDeepCandidates(tool: ToolType, candidates: ResolvedRun[], items: DoctorItem[]): Promise<boolean> {
+async function runDeepCandidates(tool: CliToolType, candidates: ResolvedRun[], items: DoctorItem[]): Promise<boolean> {
   for (const candidate of candidates) {
     const result = await runDeepCheck(candidate.provider, candidate.model);
     if (result.status === "ok") {
@@ -117,7 +117,7 @@ async function runDeepCandidates(tool: ToolType, candidates: ResolvedRun[], item
   return false;
 }
 
-async function recordDeepUsage(tool: ToolType, candidate: ResolvedRun, usage: NonNullable<Awaited<ReturnType<typeof runDeepCheck>>["usage"]>): Promise<void> {
+async function recordDeepUsage(tool: CliToolType, candidate: ResolvedRun, usage: NonNullable<Awaited<ReturnType<typeof runDeepCheck>>["usage"]>): Promise<void> {
   await appendUsageEvent(buildUsageEvent({
     provider: candidate.provider.name,
     tool,
@@ -170,7 +170,7 @@ async function checkJsonFile(group: string, filePath: string, items: DoctorItem[
   }
 }
 
-function checkCommand(group: string, command: ToolType, items: DoctorItem[]): void {
+function checkCommand(group: string, command: RunToolType, items: DoctorItem[]): void {
   const resolved = resolveToolCommand(command);
   if (resolved) {
     items.push({ group, status: "ok", message: `${command}: ${resolved}` });

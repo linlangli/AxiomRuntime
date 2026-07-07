@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { saveLastSelection } from "../config/cache-store.js";
 import { writeLog } from "../logs/log-service.js";
-import type { Provider, ToolType } from "../types.js";
+import type { CliToolType, Provider } from "../types.js";
 import { resolveToolCommand } from "./command-resolver.js";
 import { finishSession, startSession } from "../sessions/session-service.js";
 
-export async function runTool(tool: ToolType, provider: Provider, model: string, options: { fallbackFrom?: string | null } = {}): Promise<number> {
+export async function runTool(tool: CliToolType, provider: Provider, model: string, options: { fallbackFrom?: string | null } = {}): Promise<number> {
   await saveLastSelection(tool, provider.name, model);
   const command = resolveToolCommand(tool);
   if (!command) {
@@ -71,7 +71,7 @@ export function getSecretFingerprint(value: string): string {
   return `${value.slice(0, 8)}...${value.slice(-6)} len=${value.length}`;
 }
 
-function buildRunnerArgs(tool: ToolType, model: string, claudeSettingsPath: string | null): string[] {
+function buildRunnerArgs(tool: CliToolType, model: string, claudeSettingsPath: string | null): string[] {
   const args = ["--model", model];
   if (tool === "claude" && claudeSettingsPath) {
     args.push("--settings", claudeSettingsPath);
@@ -79,7 +79,7 @@ function buildRunnerArgs(tool: ToolType, model: string, claudeSettingsPath: stri
   return args;
 }
 
-function getAuthInjection(tool: ToolType): string {
+function getAuthInjection(tool: CliToolType): string {
   return tool === "claude"
     ? "temporary Claude settings env + process env"
     : "process env";
@@ -122,7 +122,7 @@ function cleanupTemporaryFiles(filePaths: string[]): void {
   }
 }
 
-function buildRunnerEnv(tool: ToolType, provider: Provider, model: string): NodeJS.ProcessEnv {
+function buildRunnerEnv(tool: CliToolType, provider: Provider, model: string): NodeJS.ProcessEnv {
   const baseUrl = getToolBaseUrl(tool, provider);
   const common = {
     ...process.env,
@@ -150,7 +150,7 @@ function buildRunnerEnv(tool: ToolType, provider: Provider, model: string): Node
   };
 }
 
-export function getToolBaseUrl(tool: ToolType, provider: Provider): string {
+export function getToolBaseUrl(tool: CliToolType, provider: Provider): string {
   const normalized = provider.baseUrl.replace(/\/+$/, "");
   if (tool === "claude") {
     return normalized.replace(/\/v1$/i, "");

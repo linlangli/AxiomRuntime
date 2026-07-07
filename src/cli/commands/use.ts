@@ -3,7 +3,7 @@ import { writeLog } from "../../core/logs/log-service.js";
 import { refreshAllProviders } from "../../core/providers/provider-service.js";
 import { resolveProviderForTool } from "../../core/runner/fallback.js";
 import { runTool } from "../../core/runner/tool-runner.js";
-import type { ToolType } from "../../core/types.js";
+import type { CliToolType } from "../../core/types.js";
 import { runHermesUseCommand } from "./hermes.js";
 import { promptConfirm, promptSelect } from "../prompts/prompt.js";
 
@@ -57,11 +57,11 @@ export async function runLastCommand(): Promise<void> {
   await runUseCommand([cache.lastSelection.tool, cache.lastSelection.provider, cache.lastSelection.model]);
 }
 
-async function getTool(value?: string): Promise<ToolType> {
+async function getTool(value?: string): Promise<CliToolType> {
   if (value === "claude" || value === "codex") {
     return value;
   }
-  return promptSelect<ToolType>("Select tool", [
+  return promptSelect<CliToolType>("Select tool", [
     { label: "claude", value: "claude" },
     { label: "codex", value: "codex" }
   ]);

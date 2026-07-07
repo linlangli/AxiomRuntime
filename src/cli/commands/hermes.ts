@@ -4,6 +4,7 @@ import {
   addHermesRobot,
   clearHermesRobot,
   deleteHermesRobot,
+  ensureHermesProviderSync,
   exportHermesRobot,
   getHermesRobotStatuses,
   importLocalHermesRobots,
@@ -93,6 +94,7 @@ async function runHermesInteractive(): Promise<void> {
 }
 
 async function runHermesAddCommand(): Promise<void> {
+  await ensureHermesProvidersReady();
   const providers = await listProviders();
   if (!providers.length) {
     console.log("No providers configured. Run `ai add` first.");
@@ -127,6 +129,7 @@ async function runHermesAddCommand(): Promise<void> {
 }
 
 async function runHermesEditCommand(name?: string): Promise<void> {
+  await ensureHermesProvidersReady();
   const robotName = name ?? (await selectRobotName("Select robot to edit"));
   const robot = (await listHermesRobots()).find((item) => item.name === robotName);
   if (!robot) {
@@ -201,6 +204,7 @@ async function runHermesEditCommand(name?: string): Promise<void> {
 
 async function runHermesListCommand(): Promise<void> {
   await runHermesSelfRepair();
+  await ensureHermesProvidersReady({ restart: false });
   const robots = await listHermesRobots();
   if (!robots.length) {
     console.log("No Hermes robots configured. Run `ai hermes add` first.");
@@ -219,6 +223,7 @@ async function runHermesListCommand(): Promise<void> {
 
 async function runHermesStatusCommand(): Promise<void> {
   await runHermesSelfRepair();
+  await ensureHermesProvidersReady({ restart: false });
   const statuses = await getHermesRobotStatuses({ refreshProviders: true });
   if (!statuses.length) {
     console.log("No Hermes robots configured. Run `ai hermes add` first.");
@@ -264,6 +269,7 @@ function shouldPrintRepairResult(result: HermesRepairResult): boolean {
 
 export async function runHermesUseCommand(name?: string): Promise<void> {
   const robotName = name ?? (await selectRobotName("Select robot"));
+  await ensureHermesProvidersReady({ activeRobotName: robotName });
   const robot = (await listHermesRobots()).find((item) => item.name === robotName);
   if (!robot) {
     throw new Error(`Hermes robot not found: ${robotName}`);
@@ -280,7 +286,7 @@ export async function runHermesUseCommand(name?: string): Promise<void> {
 async function runHermesClearCommand(name?: string): Promise<void> {
   const robotName = name ?? (await selectRobotName("Select robot to clear"));
   const confirmed = await promptConfirm(
-    `Clear Hermes robot ${robotName}? This resets memory/runtime state and keeps provider, model, Telegram, and tasks.`,
+    `Clear Hermes robot ${robotName}? This resets memory/runtime state and tasks, and keeps provider, model, and Telegram.`,
     false
   );
   if (!confirmed) return;
@@ -317,6 +323,7 @@ async function runHermesExportCommand(name?: string): Promise<void> {
 }
 
 async function runHermesImportCommand(filePath?: string): Promise<void> {
+  await ensureHermesProvidersReady();
   const selectedPath = filePath ?? (await promptText("Import file path"));
   const absolutePath = path.resolve(selectedPath);
 
@@ -370,6 +377,7 @@ function printImportedHermesRobots(result: Awaited<ReturnType<typeof importHerme
 }
 
 async function runHermesImportLocalCommand(overwrite = false): Promise<void> {
+  await ensureHermesProvidersReady();
   const result = await importLocalHermesRobots({ overwrite });
   if (result.importedProviders.length) {
     console.log(`Imported ${result.importedProviders.length} local Hermes provider(s): ${result.importedProviders.map((provider) => provider.name).join(", ")}`);
@@ -392,6 +400,26 @@ async function runHermesImportLocalCommand(overwrite = false): Promise<void> {
     console.log("");
     console.log(`Syncing local Hermes config for: ${robotToSync.name}`);
     await syncAndRestartLocalHermes(robotToSync.name);
+  }
+}
+
+async function ensureHermesProvidersReady(options: { restart?: boolean; activeRobotName?: string } = {}): Promise<void> {
+  const result = await ensureHermesProviderSync({ restart: options.restart, activeRobotName: options.activeRobotName });
+  if (!result.changed) return;
+  if (result.renamedRobots) {
+    console.log(`Updated ${result.renamedRobots} Hermes robot provider reference(s) after provider rename.`);
+  }
+  if (result.switchedRobots) {
+    console.log(`Updated ${result.switchedRobots} Hermes robot provider reference(s) to the highest-priority available provider.`);
+  }
+  if (result.sync) {
+    console.log(`Synced local Hermes config: ${result.sync.configPath}`);
+    if ("robot" in result.sync) {
+      console.log(`Active Hermes default: ${result.sync.robot.name} / ${result.sync.provider.name} / ${result.sync.robot.model}`);
+    }
+    if ("restart" in result.sync) {
+      console.log(result.sync.restart.message);
+    }
   }
 }
 

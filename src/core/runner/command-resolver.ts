@@ -2,9 +2,9 @@ import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import type { ToolType } from "../types.js";
+import type { RunToolType } from "../types.js";
 
-export function resolveToolCommand(tool: ToolType): string | null {
+export function resolveToolCommand(tool: RunToolType): string | null {
   const command = tool === "claude" ? "claude" : tool === "hermes" ? "hermes" : "codex";
   const fromPath = resolveFromPath(command);
   if (fromPath) return fromPath;
@@ -18,7 +18,7 @@ export function resolveToolCommand(tool: ToolType): string | null {
   return null;
 }
 
-export function getKnownCandidates(tool: ToolType): string[] {
+export function getKnownCandidates(tool: RunToolType): string[] {
   if (tool === "claude") {
     return [
       path.join(os.homedir(), ".local/bin/claude"),

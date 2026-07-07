@@ -633,7 +633,7 @@ ai provider list</pre>
                   <li><code>mode</code> 可选 <code>ask</code> 或 <code>auto</code>。</li>
                   <li><code>level</code> 是优先级；如果目标等级已占用，会和对应 provider 交换。</li>
                   <li><code>model</code> 从已探测模型中选择，不手动输入。</li>
-                  <li>删除 provider 会清理模型缓存；如果 Hermes 正在用它，会切到剩余 provider 中 <code>level</code> 最小的一个。</li>
+                  <li>删除 provider 会清理模型缓存；如果 Hermes 机器人正在用它，下一次 Hermes 命令会切到剩余 provider 中 <code>level</code> 最小的一个并同步本机 Hermes。</li>
                 </ul>
               </div>
             </details>
@@ -642,7 +642,7 @@ ai provider list</pre>
               <div class="detail-body">
                 <ul>
                   <li>Provider 是 AI Gateway 顶层配置，不放在 <code>ai hermes edit</code> 里管理。</li>
-                  <li><code>ai provider add/edit/delete</code> 会自动同步本机 Hermes provider 列表并重启 Hermes gateway。</li>
+                  <li><code>ai provider add/edit/delete</code> 只更新顶层 provider；下一次 Hermes 命令会检测 provider 变化，再同步本机 Hermes provider 列表并按需重启 gateway。</li>
                   <li><code>ai provider list</code> 是查看 provider 的唯一列表入口；<code>ai hermes list</code> 只列机器人。</li>
                 </ul>
               </div>

@@ -4,7 +4,7 @@ import { isModelCompatible, pickCompatibleModel } from "../models/model-filter.j
 import { refreshAllProviders } from "../providers/provider-service.js";
 import { getToolBaseUrl } from "../runner/tool-runner.js";
 import { getUsageShare, getWeeklyTokenMap } from "../usage/usage-service.js";
-import type { HealthStatus, Provider, ProviderStatus, ToolProviderStatus, ToolType } from "../types.js";
+import type { CliToolType, HealthStatus, Provider, ProviderStatus, ToolProviderStatus } from "../types.js";
 
 export async function getProviderStatuses(options: { refresh?: boolean } = {}): Promise<ProviderStatus[]> {
   if (options.refresh) {
@@ -32,7 +32,7 @@ export async function getProviderStatuses(options: { refresh?: boolean } = {}): 
 }
 
 function buildToolStatus(
-  tool: ToolType,
+  tool: CliToolType,
   provider: Provider,
   health: HealthStatus,
   models: string[]
@@ -65,7 +65,7 @@ function buildToolStatus(
   };
 }
 
-function resolveToolModel(tool: ToolType, defaultModel: string, models: string[]): string | null {
+function resolveToolModel(tool: CliToolType, defaultModel: string, models: string[]): string | null {
   if (defaultModel && isModelCompatible(tool, defaultModel) && (!models.length || models.includes(defaultModel))) {
     return defaultModel;
   }

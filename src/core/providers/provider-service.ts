@@ -1,5 +1,6 @@
 import { deleteProviderCache, readCache, renameProviderCache, upsertProviderCache } from "../config/cache-store.js";
 import { appendUsageEvent } from "../config/usage-store.js";
+import { recordProviderChange } from "../integrations/integration-state.js";
 import { writeLog } from "../logs/log-service.js";
 import { readProviders, swapProviderLevel, writeProviders } from "../config/providers-store.js";
 import { checkCallableModels, checkProvider } from "../models/model-discovery.js";
@@ -43,6 +44,7 @@ export async function addProvider(input: AddProviderInput): Promise<Provider> {
     lastCheckedAt: result.checkedAt,
     lastError: result.error
   });
+  await recordProviderChange({ type: "added", provider: provider.name });
   return provider;
 }
 
@@ -88,6 +90,11 @@ export async function updateProvider(providerName: string, patch: Partial<Provid
     await refreshProvider(updated);
   }
 
+  await recordProviderChange({
+    type: "updated",
+    provider: updated.name,
+    previousProvider: updated.name !== providerName ? providerName : undefined
+  });
   return updated;
 }
 
@@ -100,6 +107,7 @@ export async function deleteProvider(providerName: string): Promise<Provider> {
 
   await writeProviders(providers.filter((item) => item.name !== providerName));
   await deleteProviderCache(providerName);
+  await recordProviderChange({ type: "deleted", provider: provider.name });
   return provider;
 }
 

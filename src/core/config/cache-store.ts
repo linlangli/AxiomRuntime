@@ -1,6 +1,6 @@
 import { getCachePath } from "./paths.js";
 import { readJsonFile, writeJsonFile } from "./json-store.js";
-import type { CacheFile, ProviderCache, ToolType } from "../types.js";
+import type { CacheFile, CliToolType, ProviderCache } from "../types.js";
 
 const EMPTY_CACHE: CacheFile = { providers: {} };
 
@@ -44,7 +44,7 @@ export async function deleteProviderCache(providerName: string): Promise<void> {
   await writeCache(cache);
 }
 
-export async function saveLastSelection(tool: ToolType, provider: string, model: string): Promise<void> {
+export async function saveLastSelection(tool: CliToolType, provider: string, model: string): Promise<void> {
   const cache = await readCache();
   cache.lastSelection = {
     tool,

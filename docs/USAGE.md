@@ -121,7 +121,7 @@ ai hermes add
 - 启动 Hermes 时会使用 AI Gateway 管理的独立机器人运行目录，例如 `~/.ai-gateway/hermes/<机器人名称>/`。
 - 每次启动都会从 `providers.json` 读取当前 provider，生成该机器人专用的 Hermes 运行配置，避免读取全局 `~/.hermes/config.yaml` 后串用其它 API Key。
 - `ai hermes use` 不会读取你的全局 `~/.hermes/config.yaml`，会使用独立机器人运行目录。
-- `ai provider add/edit/delete` 修改 provider 后，会自动把 AI Gateway 的 provider 列表同步到本机 Hermes 原生配置，并自动重启 Hermes gateway。
+- `ai provider add/edit/delete` 修改 provider 后只记录顶层 provider 变化；下一次执行 Hermes 相关命令时会检测变化，同步本机 Hermes 原生配置，并在需要运行时生效时重启 Hermes gateway。
 - `ai hermes add/edit/import-local` 会把 AI Gateway 的 provider 列表写入本机 Hermes 原生配置，让 Telegram 中的 `/model` 只显示 AI Gateway 配置过的 provider。
 - 自动同步会把该机器人的 provider/model/baseUrl/apiKey 写入本机 Hermes 原生配置 `~/.hermes/config.yaml`，并保留其它 Hermes 配置。
 - 自动同步会替换 Hermes 原生配置里旧的 `providers` / `custom_providers` 块，并清理重复块，避免 `/model` 能选中但实际执行时报 `Unknown provider`。

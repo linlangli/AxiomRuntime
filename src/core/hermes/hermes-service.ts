@@ -7,6 +7,7 @@ import { getHermesAllExportPath, getHermesExportPath } from "../config/paths.js"
 import { readCache, upsertProviderCache } from "../config/cache-store.js";
 import { readProviders, writeProviders } from "../config/providers-store.js";
 import { writeJsonFile } from "../config/json-store.js";
+import { hasPendingHermesProviderChanges, markHermesProvidersSynced, readIntegrationState, recordProviderChange } from "../integrations/integration-state.js";
 import { writeLog } from "../logs/log-service.js";
 import { refreshAllProviders } from "../providers/provider-service.js";
 import { getSecretFingerprint, getToolBaseUrl } from "../runner/tool-runner.js";
@@ -271,6 +272,7 @@ export async function syncHermesRobotToLocalConfig(name: string): Promise<{
       apiKeyFingerprint: getSecretFingerprint(provider.apiKey)
     }
   });
+  await markHermesProvidersSynced();
   return { robot, provider, configPath, envPath, metadata };
 }
 
@@ -309,6 +311,7 @@ export async function syncHermesProvidersToLocalConfig(): Promise<{ configPath: 
       hermesModelListPatch: metadata.hermesModelListPatch
     }
   });
+  await markHermesProvidersSynced();
   return { configPath, envPath, metadata };
 }
 
@@ -430,6 +433,83 @@ export async function syncHermesProvidersToLocalConfigAndRestart(): Promise<{
   const synced = await syncHermesProvidersToLocalConfig();
   const restart = await restartLocalHermesGateway();
   return { ...synced, restart };
+}
+
+export async function ensureHermesProviderSync(options: { restart?: boolean; activeRobotName?: string } = {}): Promise<{
+  changed: boolean;
+  renamedRobots: number;
+  switchedRobots: number;
+  sync: HermesProviderSyncResult | null;
+}> {
+  if (!await hasPendingHermesProviderChanges()) {
+    return { changed: false, renamedRobots: 0, switchedRobots: 0, sync: null };
+  }
+
+  const renamedRobots = await applyPendingProviderRenamesToHermesRobots();
+  const switchedRobots = await switchRobotsWithMissingProvidersToFallback();
+  const robotName = options.activeRobotName ?? (await listHermesRobots())[0]?.name;
+  const sync = options.restart === false
+    ? robotName
+      ? await syncHermesRobotToLocalConfig(robotName)
+      : await syncHermesProvidersToLocalConfig()
+    : robotName
+      ? await syncHermesRobotToLocalConfigAndRestart(robotName)
+      : await syncHermesProvidersToLocalConfigAndRestart();
+  return { changed: true, renamedRobots, switchedRobots, sync };
+}
+
+type HermesProviderSyncResult =
+  | Awaited<ReturnType<typeof syncHermesRobotToLocalConfig>>
+  | Awaited<ReturnType<typeof syncHermesRobotToLocalConfigAndRestart>>
+  | Awaited<ReturnType<typeof syncHermesProvidersToLocalConfig>>
+  | Awaited<ReturnType<typeof syncHermesProvidersToLocalConfigAndRestart>>;
+
+async function applyPendingProviderRenamesToHermesRobots(): Promise<number> {
+  const state = await readIntegrationState();
+  const renameChanges = state.hermes.pendingProviderChanges.filter(
+    (change) => change.type === "updated" && change.previousProvider && change.previousProvider !== change.provider
+  );
+  if (!renameChanges.length) return 0;
+
+  const providers = await readProviders();
+  const providerNames = new Set(providers.map((provider) => provider.name));
+  const providerByName = new Map(providers.map((provider) => [provider.name, provider]));
+  const renameTargets = new Map<string, string>();
+
+  for (const change of renameChanges) {
+    if (!change.previousProvider) continue;
+    for (const [from, to] of renameTargets) {
+      if (to === change.previousProvider) {
+        renameTargets.set(from, change.provider);
+      }
+    }
+    renameTargets.set(change.previousProvider, change.provider);
+  }
+
+  let renamed = 0;
+
+  for (const [from, to] of renameTargets) {
+    if (!providerNames.has(to)) continue;
+    renamed += await switchHermesRobotsProvider(from, providerByName.get(to)!);
+  }
+  return renamed;
+}
+
+async function switchRobotsWithMissingProvidersToFallback(): Promise<number> {
+  const [robots, providers] = await Promise.all([listHermesRobots(), readProviders()]);
+  const providerNames = new Set(providers.map((provider) => provider.name));
+  const affected = robots.filter((robot) => !providerNames.has(robot.provider));
+  if (!affected.length) return 0;
+
+  const fallback = providers.sort((a, b) => a.level - b.level)[0];
+  if (!fallback) {
+    throw new Error(`Cannot sync Hermes: robot provider missing and no fallback provider exists (${affected.map((robot) => robot.name).join(", ")}).`);
+  }
+
+  for (const robot of affected) {
+    await updateHermesRobot(robot.name, { provider: fallback.name, model: fallback.model || robot.model });
+  }
+  return affected.length;
 }
 
 export async function getHermesRobotStatuses(options: { refreshProviders?: boolean } = {}): Promise<HermesRobotStatus[]> {
@@ -1308,6 +1388,10 @@ async function importHermesBundleProviders(
     if (providerCache) {
       await upsertProviderCache(provider.name, providerCache);
     }
+    await recordProviderChange({
+      type: current.some((item) => item.name === provider.name) ? "updated" : "added",
+      provider: provider.name
+    });
   }
 
   return imported;
@@ -1356,6 +1440,7 @@ async function importLocalHermesProviders(
 ): Promise<{ providers: Provider[]; importedProviders: Provider[]; skippedProviders: Provider[] }> {
   const importedProviders: Provider[] = [];
   const skippedProviders: Provider[] = [];
+  const providerChanges: Array<{ type: "added" | "updated"; provider: string }> = [];
   let nextProviders = [...existingProviders];
 
   for (const local of localProviders) {
@@ -1375,8 +1460,10 @@ async function importLocalHermesProviders(
     }
     if (existingIndex >= 0) {
       nextProviders[existingIndex] = { ...provider, level: nextProviders[existingIndex]!.level };
+      providerChanges.push({ type: "updated", provider: provider.name });
     } else {
       nextProviders.push(provider);
+      providerChanges.push({ type: "added", provider: provider.name });
     }
     importedProviders.push(provider);
   }
@@ -1384,6 +1471,9 @@ async function importLocalHermesProviders(
   if (importedProviders.length) {
     await writeProviders(nextProviders);
     nextProviders = await readProviders();
+    for (const change of providerChanges) {
+      await recordProviderChange(change);
+    }
     for (const provider of importedProviders) {
       const normalized = nextProviders.find((item) => item.name === provider.name) ?? provider;
       await upsertProviderCache(normalized.name, {
