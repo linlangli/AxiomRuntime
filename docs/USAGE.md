@@ -143,6 +143,47 @@ ai hermes add
 - 已导入后即使把 `hermes-default` 改名，再执行 `import-local` 也会按 Telegram chatId 或 task id 识别为同一个机器人，不会重复新增。
 - `import-local --overwrite` 会用本机 Hermes 配置覆盖同名 provider 和同名机器人。
 
+## Telegram Bot
+
+配置：
+
+```bash
+ai telegram config
+ai telegram config show
+ai telegram config set token <bot-token>
+ai telegram config set allowAllUsers true
+ai telegram config set allowedUserIds 123456789,987654321
+ai telegram config set defaultEngine claude
+ai telegram config set defaultPermissionMode full-auto
+ai telegram config set defaultCwd /path/to/project
+ai telegram config set proxyUrl http://127.0.0.1:7890
+```
+
+启动和管理：
+
+```bash
+ai telegram start
+ai telegram status
+ai telegram logs
+ai telegram logs -f
+ai telegram doctor
+ai telegram stop
+```
+
+说明：
+
+- 配置保存在 `~/.ai-gateway/telegram.json`，会话保存在 `~/.ai-gateway/telegram.sqlite`。
+- 默认只允许 `allowedUserIds` 里的 Telegram 用户访问；如果要开放给所有用户，显式设置 `allowAllUsers: true`。
+- Telegram 远程执行 Claude Code/Codex 时复用 AI Gateway 顶层 provider；可通过 `provider` 和 `model` 配置固定 provider/model，不配置则按 `ai use` 同样的优先级自动选择。
+- 首次 `/start` 或执行 `/reset` 会进入初始化流程：先选择工作路径，再选择 Claude Code/Codex。
+- 工作路径可从历史记录选择，也可以点“自定义”后输入名称；自定义路径固定创建或复用 `~/输入名称`。
+- 未确定工作路径时发送普通内容会提示先确定工作路径；未确定 CLI 时发送普通内容会提示先选择 CLI。
+- 选择 CLI 后只展示会话 ID、工作路径、CLI、provider、model 和权限模式。
+- Bot 默认命令菜单只保留 `/claude`、`/codex`、`/reset`、`/cwd` 和 `/help`；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射，点击后转发给当前 CLI 执行。
+- 文件上传支持 UTF-8 文本附件，下一条 prompt 会自动带上附件内容。
+- `full-auto` 会映射到 Claude/Codex 的跳过审批模式，但高风险命令文本仍会在 Telegram 侧强制确认。
+- 如果本机不能直连 `api.telegram.org`，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。
+
 ## 添加 Provider
 
 交互式添加：

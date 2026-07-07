@@ -11,6 +11,7 @@ import { runReportCommand } from "./commands/report.js";
 import { runLastCommand, runUseCommand } from "./commands/use.js";
 import { runSessionCommand } from "./commands/session.js";
 import { runStatusCommand } from "./commands/status.js";
+import { runTelegramCommand } from "./commands/telegram.js";
 import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
 
@@ -54,6 +55,9 @@ async function main(): Promise<void> {
       break;
     case "hermes":
       await runHermesCommand(args);
+      break;
+    case "telegram":
+      await runTelegramCommand(args);
       break;
     case "doctor":
       await runDoctorCommand(args);
@@ -110,6 +114,7 @@ async function runInteractive(): Promise<void> {
     { label: "provider edit", value: "provider:edit" },
     { label: "provider delete", value: "provider:delete" },
     { label: "hermes", value: "hermes" },
+    { label: "telegram", value: "telegram" },
     { label: "status", value: "status" },
     { label: "session", value: "session" },
     { label: "report", value: "report" },
@@ -127,6 +132,7 @@ async function runInteractive(): Promise<void> {
   if (command === "provider:edit") await runProviderEditCommand();
   if (command === "provider:delete") await runProviderDeleteCommand();
   if (command === "hermes") await runHermesCommand([]);
+  if (command === "telegram") await runTelegramCommand([]);
   if (command === "status") await runStatusCommand();
   if (command === "session") await runSessionCommand([]);
   if (command === "report") await runReportCommand([]);

@@ -1,0 +1,207 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import { getTelegramConfigPath, getTelegramDbPath } from "../core/config/paths.js";
+import { readJsonFile, writeJsonFile } from "../core/config/json-store.js";
+
+export type TelegramEngineName = "claude" | "codex";
+export type TelegramPermissionMode = "default" | "acceptEdits" | "bypassPermissions";
+
+export type TelegramConfig = {
+  token: string;
+  allowAllUsers: boolean;
+  allowedUserIds: number[];
+  defaultEngine: TelegramEngineName;
+  defaultCwd: string;
+  defaultPermissionMode: TelegramPermissionMode;
+  sessionTimeoutHours: number;
+  maxOutputLength: number;
+  provider?: string;
+  model?: string;
+  proxyUrl?: string;
+  dbPath: string;
+};
+
+const VALID_ENGINES = new Set<TelegramEngineName>(["claude", "codex"]);
+const VALID_PERMISSION_MODES = new Set<TelegramPermissionMode>(["default", "acceptEdits", "bypassPermissions"]);
+
+export async function loadTelegramConfig(): Promise<TelegramConfig> {
+  const raw = await readJsonFile<unknown>(getTelegramConfigPath(), getDefaultTelegramConfig());
+  return normalizeTelegramConfig(raw);
+}
+
+export async function saveTelegramConfig(config: TelegramConfig): Promise<TelegramConfig> {
+  const normalized = normalizeTelegramConfig(config);
+  await writeJsonFile(getTelegramConfigPath(), normalized);
+  await chmodConfigFile();
+  return normalized;
+}
+
+export async function updateTelegramConfig(patch: Partial<TelegramConfig>): Promise<TelegramConfig> {
+  const current = await loadTelegramConfig();
+  return saveTelegramConfig({ ...current, ...patch });
+}
+
+export async function setTelegramConfigValue(key: string, value: string): Promise<TelegramConfig> {
+  if (!isTelegramConfigKey(key)) {
+    throw new Error(`Unknown telegram config key: ${key}`);
+  }
+  const parsed = parseTelegramConfigValue(key, value);
+  return updateTelegramConfig({ [key]: parsed } as Partial<TelegramConfig>);
+}
+
+export function normalizeTelegramConfig(value: unknown): TelegramConfig {
+  const defaults = getDefaultTelegramConfig();
+  const input = isRecord(value) ? value : {};
+  const defaultEngine = String(input.defaultEngine ?? defaults.defaultEngine);
+  const defaultPermissionMode = normalizePermissionMode(String(input.defaultPermissionMode ?? defaults.defaultPermissionMode));
+  const sessionTimeoutHours = Number(input.sessionTimeoutHours ?? defaults.sessionTimeoutHours);
+  const maxOutputLength = Number(input.maxOutputLength ?? defaults.maxOutputLength);
+  const allowedUserIds = normalizeAllowedUserIds(input.allowedUserIds);
+  const provider = normalizeOptionalString(input.provider);
+  const model = normalizeOptionalString(input.model);
+  const proxyUrl = normalizeOptionalString(input.proxyUrl);
+  const dbPath = String(input.dbPath ?? defaults.dbPath).trim() || defaults.dbPath;
+
+  return {
+    token: String(input.token ?? defaults.token).trim(),
+    allowAllUsers: parseBoolean(input.allowAllUsers ?? defaults.allowAllUsers),
+    allowedUserIds,
+    defaultEngine: VALID_ENGINES.has(defaultEngine as TelegramEngineName) ? defaultEngine as TelegramEngineName : defaults.defaultEngine,
+    defaultCwd: String(input.defaultCwd ?? defaults.defaultCwd).trim() || defaults.defaultCwd,
+    defaultPermissionMode,
+    sessionTimeoutHours: Number.isFinite(sessionTimeoutHours) && sessionTimeoutHours > 0 ? sessionTimeoutHours : defaults.sessionTimeoutHours,
+    maxOutputLength: Number.isFinite(maxOutputLength) && maxOutputLength >= 500 ? maxOutputLength : defaults.maxOutputLength,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    ...(proxyUrl ? { proxyUrl } : {}),
+    dbPath
+  };
+}
+
+export function parseTelegramConfigValue(key: keyof TelegramConfig, rawValue: string): TelegramConfig[keyof TelegramConfig] {
+  const value = rawValue.trim();
+  if (key === "allowedUserIds") {
+    return normalizeAllowedUserIds(value);
+  }
+  if (key === "allowAllUsers") {
+    return parseBoolean(value);
+  }
+  if (key === "sessionTimeoutHours" || key === "maxOutputLength") {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(`${key} must be a positive number.`);
+    }
+    return parsed;
+  }
+  if (key === "defaultEngine") {
+    if (!VALID_ENGINES.has(value as TelegramEngineName)) {
+      throw new Error("defaultEngine must be claude or codex.");
+    }
+    return value as TelegramEngineName;
+  }
+  if (key === "defaultPermissionMode") {
+    return normalizePermissionMode(value);
+  }
+  return value;
+}
+
+export function normalizePermissionMode(value: string): TelegramPermissionMode {
+  if (value === "auto-edit") return "acceptEdits";
+  if (value === "full-auto") return "bypassPermissions";
+  if (VALID_PERMISSION_MODES.has(value as TelegramPermissionMode)) return value as TelegramPermissionMode;
+  return getDefaultTelegramConfig().defaultPermissionMode;
+}
+
+export function describeTelegramConfig(config: TelegramConfig): string[] {
+  return [
+    `token: ${config.token ? maskToken(config.token) : "(empty)"}`,
+    `allowAllUsers: ${config.allowAllUsers ? "true" : "false"}`,
+    `allowedUserIds: ${config.allowedUserIds.length ? config.allowedUserIds.join(", ") : "(empty)"}`,
+    `defaultEngine: ${config.defaultEngine}`,
+    `defaultCwd: ${config.defaultCwd}`,
+    `defaultPermissionMode: ${config.defaultPermissionMode}`,
+    `sessionTimeoutHours: ${config.sessionTimeoutHours}`,
+    `maxOutputLength: ${config.maxOutputLength}`,
+    `provider: ${config.provider ?? "(auto)"}`,
+    `model: ${config.model ?? "(auto)"}`,
+    `proxyUrl: ${config.proxyUrl ?? "(none)"}`,
+    `dbPath: ${config.dbPath}`
+  ];
+}
+
+function normalizeAllowedUserIds(value: unknown): number[] {
+  const items = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[,\s]+/).filter(Boolean)
+      : [];
+  const seen = new Set<number>();
+  const ids: number[] = [];
+  for (const item of items) {
+    const parsed = Number(item);
+    if (Number.isInteger(parsed) && parsed > 0 && !seen.has(parsed)) {
+      seen.add(parsed);
+      ids.push(parsed);
+    }
+  }
+  return ids;
+}
+
+function getDefaultTelegramConfig(): TelegramConfig {
+  return {
+    token: "",
+    allowAllUsers: false,
+    allowedUserIds: [],
+    defaultEngine: "claude",
+    defaultCwd: os.homedir(),
+    defaultPermissionMode: "default",
+    sessionTimeoutHours: 24,
+    maxOutputLength: 4000,
+    dbPath: getTelegramDbPath()
+  };
+}
+
+function isTelegramConfigKey(key: string): key is keyof TelegramConfig {
+  return [
+    "token",
+    "allowAllUsers",
+    "allowedUserIds",
+    "defaultEngine",
+    "defaultCwd",
+    "defaultPermissionMode",
+    "sessionTimeoutHours",
+    "maxOutputLength",
+    "provider",
+    "model",
+    "proxyUrl",
+    "dbPath"
+  ].includes(key);
+}
+
+function parseBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  const text = String(value ?? "").trim().toLowerCase();
+  return text === "true" || text === "1" || text === "yes" || text === "y" || text === "on";
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  const text = String(value ?? "").trim();
+  return text || undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function chmodConfigFile(): Promise<void> {
+  try {
+    await fs.chmod(getTelegramConfigPath(), 0o600);
+  } catch {
+    // Best-effort on filesystems that may not support chmod.
+  }
+}
+
+function maskToken(token: string): string {
+  if (token.length <= 12) return "****";
+  return `${token.slice(0, 6)}****${token.slice(-4)}`;
+}

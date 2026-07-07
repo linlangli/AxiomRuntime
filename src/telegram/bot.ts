@@ -1,0 +1,120 @@
+import { Bot } from "grammy";
+import { loadTelegramConfig, type TelegramConfig } from "./config.js";
+import { ClaudeEngine } from "./engine/claude-engine.js";
+import { CodexEngine } from "./engine/codex-engine.js";
+import { registerCallbackHandler } from "./handlers/callback.js";
+import { registerCommands } from "./handlers/command.js";
+import { registerDocumentHandler } from "./handlers/document.js";
+import { registerMessageHandler } from "./handlers/message.js";
+import { ApprovalManager } from "./interaction/approval.js";
+import { safeSetDefaultCommandMenu } from "./interaction/command-menu.js";
+import { SessionManager } from "./session/manager.js";
+import { SessionStore } from "./session/store.js";
+import { writeTelegramLog } from "./log.js";
+import { configureTelegramNetwork, createTelegramApiClientOptions } from "./network.js";
+
+export type TelegramRuntime = {
+  bot: Bot;
+  config: TelegramConfig;
+  store: SessionStore;
+  sessionManager: SessionManager;
+  engines: {
+    claude: ClaudeEngine;
+    codex: CodexEngine;
+  };
+};
+
+export async function createBot(): Promise<TelegramRuntime> {
+  const config = await loadTelegramConfig();
+  if (!config.token) {
+    throw new Error("Telegram token is not configured. Run `ai telegram config set token <token>`.");
+  }
+  if (!config.allowAllUsers && !config.allowedUserIds.length) {
+    throw new Error("No Telegram users are allowed. Run `ai telegram config set allowedUserIds <id>` or `ai telegram config set allowAllUsers true`.");
+  }
+  const proxyUrl = configureTelegramNetwork(config);
+  if (proxyUrl) {
+    await writeTelegramLog({
+      action: "proxy_enabled",
+      message: `Telegram API proxy enabled: ${proxyUrl}`
+    });
+  }
+
+  const bot = new Bot(config.token, {
+    client: createTelegramApiClientOptions(proxyUrl)
+  });
+  const store = new SessionStore(config.dbPath);
+  const sessionManager = new SessionManager(store, config);
+  const claudeEngine = new ClaudeEngine();
+  const codexEngine = new CodexEngine();
+  const approvalManager = new ApprovalManager(bot);
+
+  sessionManager.cleanupExpired();
+
+  bot.catch((error) => {
+    void writeTelegramLog({
+      level: "error",
+      action: "bot_error",
+      message: error.error instanceof Error ? error.error.message : String(error.error),
+      metadata: { updateId: error.ctx.update.update_id }
+    });
+  });
+
+  bot.use(async (ctx, next) => {
+    const text = ctx.message && "text" in ctx.message ? ctx.message.text : undefined;
+    await writeTelegramLog({
+      action: "update_received",
+      message: text ? `Received Telegram message: ${text.slice(0, 80)}` : `Received Telegram update ${ctx.update.update_id}`,
+      metadata: {
+        updateId: ctx.update.update_id,
+        userId: ctx.from?.id,
+        chatId: ctx.chat?.id,
+        messageType: ctx.message ? "message" : "other",
+        command: text?.startsWith("/") ? text.split(/\s+/, 1)[0] : undefined
+      }
+    });
+
+    const userId = ctx.from?.id;
+    if (!userId || (!config.allowAllUsers && !config.allowedUserIds.includes(userId))) {
+      await ctx.reply("Access denied.");
+      await writeTelegramLog({
+        level: "warn",
+        action: "access_denied",
+        message: `Denied Telegram user ${userId ?? "(missing)"}`,
+        metadata: { userId, chatId: ctx.chat?.id }
+      });
+      return;
+    }
+    await next();
+  });
+
+  const deps = {
+    bot,
+    sessionManager,
+    claudeEngine,
+    codexEngine,
+    approvalManager,
+    config,
+    engines: {
+      claude: claudeEngine,
+      codex: codexEngine
+    }
+  };
+  registerCommands(bot, deps);
+  registerCallbackHandler(bot, { bot, approvalManager, sessionManager });
+  registerDocumentHandler(bot, { sessionManager, config });
+  registerMessageHandler(bot, deps);
+
+  await safeSetDefaultCommandMenu(bot);
+
+  return {
+    bot,
+    config,
+    store,
+    sessionManager,
+    engines: {
+      claude: claudeEngine,
+      codex: codexEngine
+    }
+  };
+}

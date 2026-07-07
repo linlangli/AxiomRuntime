@@ -446,7 +446,8 @@
         <a class="nav-link" href="#commands"><span>命令索引</span><span class="nav-count">常用入口</span></a>
         <a class="nav-link" href="#use"><span>使用模型</span><span class="nav-count">use / last</span></a>
         <a class="nav-link" href="#providers"><span>Provider</span><span class="nav-count">add / edit / delete</span></a>
-        <a class="nav-link" href="#hermes"><span>Hermes</span><span class="nav-count">机器人 / Telegram</span></a>
+        <a class="nav-link" href="#hermes"><span>Hermes</span><span class="nav-count">机器人</span></a>
+        <a class="nav-link" href="#telegram"><span>Telegram</span><span class="nav-count">Bot</span></a>
         <a class="nav-link" href="#status"><span>状态诊断</span><span class="nav-count">status / doctor</span></a>
         <a class="nav-link" href="#sessions"><span>会话报告</span><span class="nav-count">session / report</span></a>
         <a class="nav-link" href="#files"><span>配置文件</span><span class="nav-count">路径</span></a>
@@ -557,6 +558,12 @@
                 <td><code class="cmd">ai hermes import-local</code><br /><code class="cmd">ai hermes export</code><br /><code class="cmd">ai hermes export robot-name</code><br /><code class="cmd">ai hermes import ./robot.json</code></td>
                 <td>导入本机 Hermes、完整导出或迁移机器人。</td>
                 <td><code>export</code> 会包含关联 provider 凭证。</td>
+              </tr>
+              <tr data-search="telegram bot start stop status config logs claude codex remote">
+                <td><span class="group-label">Telegram</span></td>
+                <td><code class="cmd">ai telegram config</code><br /><code class="cmd">ai telegram start</code><br /><code class="cmd">ai telegram status</code><br /><code class="cmd">ai telegram logs -f</code><br /><code class="cmd">ai telegram stop</code></td>
+                <td>配置并管理远程控制 Claude Code/Codex 的 Telegram Bot。</td>
+                <td>复用顶层 provider。</td>
               </tr>
               <tr data-search="status health provider model token usage">
                 <td><span class="group-label">诊断</span></td>
@@ -698,6 +705,53 @@ ai hermes import ./hermes-robot.json</pre>
             </details>
           </section>
 
+          <section id="telegram" class="panel">
+            <h2>Telegram Bot</h2>
+            <details open>
+              <summary>配置和进程管理</summary>
+              <div class="detail-body">
+                <pre>ai telegram config
+ai telegram config show
+ai telegram config set token &lt;bot-token&gt;
+ai telegram config set allowAllUsers true
+ai telegram config set allowedUserIds 123456789,987654321
+ai telegram config set defaultEngine claude
+ai telegram config set defaultPermissionMode full-auto
+ai telegram config set defaultCwd /path/to/project
+ai telegram config set proxyUrl http://127.0.0.1:7890
+ai telegram start
+ai telegram status
+ai telegram logs
+ai telegram logs -f
+ai telegram doctor
+ai telegram stop</pre>
+                <ul>
+                  <li>配置保存在 <code>~/.ai-gateway/telegram.json</code>，会话保存在 <code>~/.ai-gateway/telegram.sqlite</code>。</li>
+                  <li>默认只有 <code>allowedUserIds</code> 中的 Telegram 用户可以访问 Bot；如需开放给所有用户，显式设置 <code>allowAllUsers: true</code>。</li>
+                  <li>远程执行复用 AI Gateway 顶层 provider；不配置固定 provider/model 时按优先级自动选择。</li>
+                  <li>如果本机不能直连 <code>api.telegram.org</code>，设置 <code>proxyUrl</code> 或环境变量 <code>HTTPS_PROXY</code> / <code>ALL_PROXY</code>。</li>
+                </ul>
+              </div>
+            </details>
+            <details>
+              <summary>Bot 命令</summary>
+              <div class="detail-body">
+                <pre>/claude prompt
+/codex prompt
+/reset
+/cwd /path/to/project
+/help</pre>
+                <ul>
+                  <li>普通文本会发送给当前会话的默认引擎。</li>
+                  <li>默认命令菜单只注册这 5 个基础命令；选择 CLI 后，会在当前 chat 的 <code>/</code> 菜单追加该 CLI 的 slash 命令映射。</li>
+                  <li>CLI slash 命令不会以消息列表形式额外刷屏，点击菜单项后会转发给当前 CLI 执行。</li>
+                  <li>上传 UTF-8 文本文件会作为下一条 prompt 的附件上下文。</li>
+                  <li><code>full-auto</code> 会映射到 Claude/Codex 的跳过审批模式，但高风险命令文本仍会在 Telegram 侧强制确认。</li>
+                </ul>
+              </div>
+            </details>
+          </section>
+
           <section id="status" class="panel">
             <h2>状态和诊断</h2>
             <div class="section-grid">
@@ -755,6 +809,9 @@ ai session clear</pre>
 ~/.ai-gateway/sessions.json
 ~/.ai-gateway/hermes-state.json
 ~/.ai-gateway/hermes/&lt;机器人名称&gt;/
+~/.ai-gateway/telegram.json
+~/.ai-gateway/telegram.sqlite
+~/.ai-gateway/telegram.log
 ~/.ai-gateway/reports/
 ~/.ai-gateway/exports/
 ~/.ai-gateway/.ai-gateway.log</pre>

@@ -1,6 +1,6 @@
 export type CliToolType = "claude" | "codex";
 
-export type RunToolType = CliToolType | "hermes";
+export type RunToolType = CliToolType | "hermes" | "telegram";
 
 export type ProviderMode = "ask" | "auto";
 
@@ -102,7 +102,7 @@ export type TokenUsage = {
 
 export type LogLevel = "info" | "warn" | "error";
 
-export type LogCategory = "usage" | "error" | "strategy" | "provider" | "system";
+export type LogCategory = "usage" | "error" | "strategy" | "provider" | "system" | "telegram";
 
 export type LogEvent = {
   timestamp: string;

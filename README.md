@@ -40,6 +40,9 @@ ai hermes list
 ai hermes edit
 ai hermes status
 ai hermes import-local
+ai telegram
+ai telegram start
+ai telegram status
 ai status
 ai log
 ai log --print
@@ -64,6 +67,9 @@ ai doctor
 ~/.ai-gateway/hermes.json
 ~/.ai-gateway/hermes-state.json
 ~/.ai-gateway/hermes/<机器人名称>/
+~/.ai-gateway/telegram.json
+~/.ai-gateway/telegram.sqlite
+~/.ai-gateway/telegram.log
 ~/.ai-gateway/reports/
 ~/.ai-gateway/exports/
 ~/.ai-gateway/.ai-gateway.log
@@ -80,6 +86,16 @@ Hermes 集成说明：
 - `ai hermes export` 默认导出所有机器人完整复刻包；传入机器人名称时只导出单个机器人。
 - `ai hermes add/edit/import` 会同步当前机器人、用最小请求验证可调用模型，并自动重启 Hermes gateway。
 - 如果本机 Hermes `/model` 只显示默认模型，同步时会自动打兼容补丁让它读取完整模型列表。
+
+Telegram Bot 集成说明：
+
+- `ai telegram config` 配置 Bot token、访问用户、默认引擎、默认目录和权限模式；如需所有用户可访问，执行 `ai telegram config set allowAllUsers true`。
+- `ai telegram start|stop|status|logs` 管理后台轮询进程。
+- 如果本机不能直连 Telegram API，可设置 `ai telegram config set proxyUrl http://127.0.0.1:7890`。
+- Bot 首次 `/start` 或 `/reset` 会先选择工作路径，再选择 Claude Code/Codex，并展示当前会话、provider 和模型卡片。
+- Bot 会记录选择过的工作路径；自定义路径会按 `~/输入名称` 创建或复用。
+- Telegram 默认命令菜单只保留 `/claude`、`/codex`、`/reset`、`/cwd` 和 `/help`；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射。
+- Telegram 远程执行复用 AI Gateway 顶层 provider，不维护另一套 provider 配置。
 
 更多命令用法见：
 

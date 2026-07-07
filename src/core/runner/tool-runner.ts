@@ -88,7 +88,7 @@ function getAuthInjection(tool: CliToolType): string {
     : "process env";
 }
 
-function writeTemporaryClaudeSettings(provider: Provider): string {
+export function writeTemporaryClaudeSettings(provider: Provider): string {
   const userSettingsPath = path.join(os.homedir(), ".claude", "settings.json");
   const settings = readClaudeSettings(userSettingsPath);
   const settingsEnv = isRecord(settings.env) ? settings.env : {};
@@ -115,7 +115,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function cleanupTemporaryFiles(filePaths: string[]): void {
+export function cleanupTemporaryFiles(filePaths: string[]): void {
   for (const filePath of filePaths) {
     try {
       fs.unlinkSync(filePath);
@@ -125,7 +125,7 @@ function cleanupTemporaryFiles(filePaths: string[]): void {
   }
 }
 
-function buildRunnerEnv(tool: CliToolType, provider: Provider, model: string): NodeJS.ProcessEnv {
+export function buildRunnerEnv(tool: CliToolType, provider: Provider, model: string): NodeJS.ProcessEnv {
   const baseUrl = getToolBaseUrl(tool, provider);
   const common = {
     ...process.env,

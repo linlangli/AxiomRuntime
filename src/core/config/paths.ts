@@ -67,6 +67,22 @@ export function getLogPath(): string {
   return path.join(getConfigRoot(), ".ai-gateway.log");
 }
 
+export function getTelegramConfigPath(): string {
+  return path.join(getConfigRoot(), "telegram.json");
+}
+
+export function getTelegramPidPath(): string {
+  return path.join(getConfigRoot(), "telegram.pid");
+}
+
+export function getTelegramLogPath(): string {
+  return path.join(getConfigRoot(), "telegram.log");
+}
+
+export function getTelegramDbPath(): string {
+  return path.join(getConfigRoot(), "telegram.sqlite");
+}
+
 export function getContextDir(): string {
   return path.join(getProjectRoot(), ".ai-gateway");
 }

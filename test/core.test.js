@@ -7,6 +7,7 @@ import { readJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
 import { normalizeProviders, swapProviderLevel } from "../dist/core/config/providers-store.js";
 import { extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
+import { resolveToolCommand } from "../dist/core/runner/command-resolver.js";
 import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl } from "../dist/core/runner/tool-runner.js";
 
 test("normalizes provider levels by priority", () => {
@@ -160,4 +161,10 @@ test("does not skip Claude permissions in ask mode", () => {
     "--settings",
     "/tmp/settings.json"
   ]);
+});
+
+test("resolveToolCommand skips broken codex shim when app binary exists", () => {
+  const command = resolveToolCommand("codex");
+  assert.notEqual(command, "/opt/homebrew/bin/codex");
+  assert.equal(command, "/Applications/Codex.app/Contents/Resources/codex");
 });

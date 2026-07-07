@@ -7,10 +7,10 @@ import type { RunToolType } from "../types.js";
 export function resolveToolCommand(tool: RunToolType): string | null {
   const command = tool === "claude" ? "claude" : tool === "hermes" ? "hermes" : "codex";
   const fromPath = resolveFromPath(command);
-  if (fromPath) return fromPath;
+  if (fromPath && isRunnableCommand(fromPath)) return fromPath;
 
   for (const candidate of getKnownCandidates(tool)) {
-    if (isExecutable(candidate)) {
+    if (isRunnableCommand(candidate)) {
       return candidate;
     }
   }
@@ -58,4 +58,14 @@ function isExecutable(filePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function isRunnableCommand(command: string): boolean {
+  if (!isExecutable(command)) return false;
+  const result = spawnSync(command, ["--version"], {
+    encoding: "utf8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  return result.status === 0;
 }
