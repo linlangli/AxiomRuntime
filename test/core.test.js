@@ -7,7 +7,7 @@ import { readJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
 import { normalizeProviders, swapProviderLevel } from "../dist/core/config/providers-store.js";
 import { extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
-import { resolveToolCommand } from "../dist/core/runner/command-resolver.js";
+import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
 import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl } from "../dist/core/runner/tool-runner.js";
 
 test("normalizes provider levels by priority", () => {
@@ -164,7 +164,14 @@ test("does not skip Claude permissions in ask mode", () => {
 });
 
 test("resolveToolCommand skips broken codex shim when app binary exists", () => {
-  const command = resolveToolCommand("codex");
+  const brokenShim = "/opt/homebrew/bin/codex";
+  const appBinary = "/Applications/Codex.app/Contents/Resources/codex";
+  const command = resolveToolCommandWithOptions("codex", {
+    pathResolver: () => brokenShim,
+    candidates: [appBinary, brokenShim, "/usr/local/bin/codex"],
+    runner: (candidate) => candidate === appBinary
+  });
+
   assert.notEqual(command, "/opt/homebrew/bin/codex");
-  assert.equal(command, "/Applications/Codex.app/Contents/Resources/codex");
+  assert.equal(command, appBinary);
 });

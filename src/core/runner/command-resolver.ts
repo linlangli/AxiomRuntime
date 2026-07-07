@@ -5,12 +5,24 @@ import path from "node:path";
 import type { RunToolType } from "../types.js";
 
 export function resolveToolCommand(tool: RunToolType): string | null {
-  const command = tool === "claude" ? "claude" : tool === "hermes" ? "hermes" : "codex";
-  const fromPath = resolveFromPath(command);
-  if (fromPath && isRunnableCommand(fromPath)) return fromPath;
+  return resolveToolCommandWithOptions(tool);
+}
 
-  for (const candidate of getKnownCandidates(tool)) {
-    if (isRunnableCommand(candidate)) {
+export function resolveToolCommandWithOptions(
+  tool: RunToolType,
+  options: {
+    pathResolver?: (command: string) => string | null;
+    candidates?: string[];
+    runner?: (command: string) => boolean;
+  } = {}
+): string | null {
+  const command = tool === "claude" ? "claude" : tool === "hermes" ? "hermes" : "codex";
+  const runner = options.runner ?? isRunnableCommand;
+  const fromPath = (options.pathResolver ?? resolveFromPath)(command);
+  if (fromPath && runner(fromPath)) return fromPath;
+
+  for (const candidate of options.candidates ?? getKnownCandidates(tool)) {
+    if (runner(candidate)) {
       return candidate;
     }
   }
