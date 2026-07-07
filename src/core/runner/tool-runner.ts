@@ -18,7 +18,7 @@ export async function runTool(tool: CliToolType, provider: Provider, model: stri
   const temporaryFiles: string[] = [];
   const claudeSettingsPath = tool === "claude" ? writeTemporaryClaudeSettings(provider) : null;
   if (claudeSettingsPath) temporaryFiles.push(claudeSettingsPath);
-  const args = buildRunnerArgs(tool, model, claudeSettingsPath);
+  const args = buildRunnerArgs(tool, provider, model, claudeSettingsPath);
   const effectiveBaseUrl = getToolBaseUrl(tool, provider);
   await writeLog({
     category: "usage",
@@ -71,10 +71,13 @@ export function getSecretFingerprint(value: string): string {
   return `${value.slice(0, 8)}...${value.slice(-6)} len=${value.length}`;
 }
 
-function buildRunnerArgs(tool: CliToolType, model: string, claudeSettingsPath: string | null): string[] {
+export function buildRunnerArgs(tool: CliToolType, provider: Provider, model: string, claudeSettingsPath: string | null): string[] {
   const args = ["--model", model];
   if (tool === "claude" && claudeSettingsPath) {
     args.push("--settings", claudeSettingsPath);
+  }
+  if (tool === "claude" && provider.mode === "auto") {
+    args.push("--dangerously-skip-permissions");
   }
   return args;
 }

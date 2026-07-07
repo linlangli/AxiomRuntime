@@ -282,7 +282,7 @@ Model selection rules:
 
 Each provider has a `mode`:
 
-- `auto`: highest permission mode, default value.
+- `auto`: highest permission mode, default value. For Claude Code this maps to `--dangerously-skip-permissions`.
 - `ask`: ask before sensitive execution.
 
 The runner layer should map `mode` to Claude Code or Codex CLI permissions where supported. If a downstream CLI does not support an equivalent setting, enforce the behavior in this tool before launch.

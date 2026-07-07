@@ -7,7 +7,7 @@ import { readJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
 import { normalizeProviders, swapProviderLevel } from "../dist/core/config/providers-store.js";
 import { extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
-import { getSecretFingerprint, getToolBaseUrl } from "../dist/core/runner/tool-runner.js";
+import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl } from "../dist/core/runner/tool-runner.js";
 
 test("normalizes provider levels by priority", () => {
   const providers = normalizeProviders([
@@ -123,4 +123,41 @@ test("json store recovers trailing duplicate content and rewrites clean json", a
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("maps Claude auto mode to dangerously skip permissions", () => {
+  const provider = {
+    name: "api",
+    baseUrl: "https://icode.51talk.biz/v1/",
+    apiKey: "key",
+    mode: "auto",
+    level: 1,
+    model: "claude-sonnet-4-6"
+  };
+
+  assert.deepEqual(buildRunnerArgs("claude", provider, "claude-sonnet-4-6", "/tmp/settings.json"), [
+    "--model",
+    "claude-sonnet-4-6",
+    "--settings",
+    "/tmp/settings.json",
+    "--dangerously-skip-permissions"
+  ]);
+});
+
+test("does not skip Claude permissions in ask mode", () => {
+  const provider = {
+    name: "api",
+    baseUrl: "https://icode.51talk.biz/v1/",
+    apiKey: "key",
+    mode: "ask",
+    level: 1,
+    model: "claude-sonnet-4-6"
+  };
+
+  assert.deepEqual(buildRunnerArgs("claude", provider, "claude-sonnet-4-6", "/tmp/settings.json"), [
+    "--model",
+    "claude-sonnet-4-6",
+    "--settings",
+    "/tmp/settings.json"
+  ]);
 });

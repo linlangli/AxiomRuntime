@@ -110,7 +110,7 @@ Field definitions:
 - `name`: unique provider name.
 - `baseUrl`: provider API base URL.
 - `apiKey`: provider API key.
-- `mode`: permission mode, either `ask` or `auto`.
+- `mode`: permission mode, either `ask` or `auto`. For Claude Code, `auto` launches with `--dangerously-skip-permissions`; `ask` prompts before launch and does not add that flag.
 - `level`: provider priority. Smaller numbers have higher priority. `level: 1` is the default provider.
 - `model`: default model for this provider.
 
@@ -370,6 +370,7 @@ Default rules:
 - If model is omitted, use the selected provider's default `model`.
 - If the provider is unavailable, trigger automatic fallback.
 - Claude Code launches must pass `--model <model>` and a temporary `--settings <file>` containing `env.ANTHROPIC_API_KEY` and `env.ANTHROPIC_BASE_URL`.
+- Claude Code launches with provider `mode: auto` must also pass `--dangerously-skip-permissions`; `mode: ask` must not pass it.
 - Ordinary `ai use` must not mutate `~/.claude/settings.json`.
 - Ordinary `ai use` must not use `--bare` by default.
 - If a configured provider base URL ends with `/v1`, Claude Code launches must strip the trailing `/v1` before injecting `ANTHROPIC_BASE_URL`.
