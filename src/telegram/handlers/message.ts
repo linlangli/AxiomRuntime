@@ -1,6 +1,6 @@
 import { InputFile, type Bot, type Context } from "grammy";
 import type { TelegramConfig, TelegramEngineName } from "../config.js";
-import type { Engine, ExecutionResult, ProgressUpdate } from "../engine/types.js";
+import type { Engine, ExecutionResult } from "../engine/types.js";
 import type { ApprovalManager } from "../interaction/approval.js";
 import { parseTelegramCommand, resolveMappedCommand } from "../interaction/command-menu.js";
 import { Formatter } from "../interaction/formatter.js";
@@ -28,6 +28,10 @@ export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void
     }
     if (session.setupStep === "custom_workdir") {
       await setWorkdir(ctx, deps, text, { fromCustomInput: true });
+      return;
+    }
+    if (session.setupStep === "edit_custom_workdir") {
+      await setWorkdir(ctx, deps, text, { fromCustomInput: true, returnToReady: true });
       return;
     }
     if (await remindSetup(ctx, session)) return;
@@ -79,30 +83,14 @@ export async function executePrompt(
   }
 
   const promptWithAttachments = buildPromptWithAttachments(text, session);
-  const statusMessage = await ctx.reply(Formatter.taskStarted(session.engine, text), { parse_mode: "HTML" });
   session = deps.sessionManager.update(session.id, {
     status: "running",
     messageCount: session.messageCount + 1
   });
+  const stopTypingStatus = startTypingStatus(ctx, chatId);
 
   try {
     const engine = session.engine === "codex" ? deps.codexEngine : deps.claudeEngine;
-    let lastProgressAt = 0;
-    const onProgress = async (update: ProgressUpdate): Promise<void> => {
-      const now = Date.now();
-      if (now - lastProgressAt < 2000) return;
-      lastProgressAt = now;
-      try {
-        await ctx.api.editMessageText(
-          chatId,
-          statusMessage.message_id,
-          `${Formatter.taskStarted(session.engine, text)}\n\n${Formatter.taskProgress(update)}`,
-          { parse_mode: "HTML" }
-        );
-      } catch {
-        // Telegram may reject duplicate/old edits; ignore progress update failures.
-      }
-    };
 
     const result = await engine.execute({
       chatId,
@@ -118,8 +106,7 @@ export async function executePrompt(
         const approved = await deps.approvalManager.request(chatId, req);
         deps.sessionManager.update(session.id, { status: "running" });
         return approved;
-      },
-      onProgress
+      }
     });
 
     deps.sessionManager.update(session.id, {
@@ -127,8 +114,12 @@ export async function executePrompt(
       status: "idle",
       attachments: []
     });
-    await safeDeleteMessage(ctx, chatId, statusMessage.message_id);
-    await sendResult(ctx, result, deps.config.maxOutputLength);
+    deps.sessionManager.recordProviderUsage(session.id, {
+      provider: result.provider ?? deps.config.provider ?? "unknown",
+      model: result.model ?? deps.config.model,
+      costUsd: result.cost
+    });
+    await sendResult(ctx, session.engine, result, deps.config.maxOutputLength);
     await writeTelegramLog({
       action: "task_completed",
       message: `Completed ${session.engine} task for Telegram chat ${chatId}`,
@@ -143,7 +134,6 @@ export async function executePrompt(
     });
   } catch (error) {
     deps.sessionManager.update(session.id, { status: "idle" });
-    await safeDeleteMessage(ctx, chatId, statusMessage.message_id);
     const message = error instanceof Error ? error.message : String(error);
     await writeTelegramLog({
       level: "error",
@@ -152,19 +142,27 @@ export async function executePrompt(
       metadata: { chatId, engine: session.engine }
     });
     await ctx.reply(Formatter.taskFailed(message), { parse_mode: "HTML" });
+  } finally {
+    stopTypingStatus();
   }
 }
 
-async function sendResult(ctx: Context, result: ExecutionResult, maxOutputLength: number): Promise<void> {
-  const formatted = Formatter.taskCompleted(result, Math.min(maxOutputLength, 2500));
+async function sendResult(
+  ctx: Context,
+  engine: TelegramEngineName,
+  result: ExecutionResult,
+  maxOutputLength: number
+): Promise<void> {
+  const formatted = Formatter.taskCompleted(engine, result, Math.min(maxOutputLength, 2500));
   if (formatted.length <= 4000 && result.response.length <= maxOutputLength) {
     await ctx.reply(formatted, { parse_mode: "HTML" });
     return;
   }
 
-  await ctx.reply(Formatter.taskCompleted({ ...result, response: "Output is attached as a file." }, 800), {
-    parse_mode: "HTML"
-  });
+  await ctx.reply(
+    Formatter.taskCompleted(engine, { ...result, response: "Output is attached as a file." }, 800),
+    { parse_mode: "HTML" }
+  );
   await ctx.replyWithDocument(new InputFile(Buffer.from(result.response || "(empty)", "utf8"), "ai-gateway-output.md"), {
     caption: "Full output"
   });
@@ -185,10 +183,21 @@ function buildPromptWithAttachments(prompt: string, session: TelegramSession): s
   return [prompt, "", "Attached files:", ...blocks].join("\n");
 }
 
-async function safeDeleteMessage(ctx: Context, chatId: number, messageId: number): Promise<void> {
-  try {
-    await ctx.api.deleteMessage(chatId, messageId);
-  } catch {
-    // Status message may already be deleted or not deletable.
-  }
+export function startTypingStatus(ctx: Pick<Context, "api">, chatId: number): () => void {
+  let stopped = false;
+  const sendTyping = async (): Promise<void> => {
+    if (stopped) return;
+    try {
+      await ctx.api.sendChatAction(chatId, "typing");
+    } catch {
+      // Chat actions are best-effort and should never affect task execution.
+    }
+  };
+
+  void sendTyping();
+  const interval = setInterval(() => void sendTyping(), 4000);
+  return () => {
+    stopped = true;
+    clearInterval(interval);
+  };
 }

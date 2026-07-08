@@ -1,4 +1,5 @@
-import type { ExecutionResult, ProgressUpdate } from "../engine/types.js";
+import type { TelegramEngineName } from "../config.js";
+import type { ExecutionResult } from "../engine/types.js";
 import type { TelegramSession } from "../session/types.js";
 
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
@@ -37,7 +38,7 @@ export function splitPlainText(value: string, maxLength = 3800): string[] {
 
 export const Formatter = {
   workdirPrompt(): string {
-    return "🤖 你好呀，先确定工作路径吧。";
+    return "🤖 你好呀，先确定工作路径吧";
   },
 
   workdirRequired(): string {
@@ -46,13 +47,9 @@ export const Formatter = {
 
   workdirList(workdirs: string[]): string {
     if (!workdirs.length) {
-      return "🤖 还没有记录过工作路径，点“自定义”新建一个吧。";
+      return "🤖 还没有记录过工作路径。";
     }
-    return [
-      "📁 <b>选择一个已有工作路径</b>",
-      "",
-      ...workdirs.map((cwd, index) => `${index + 1}. <code>${escapeHtml(cwd)}</code>`)
-    ].join("\n");
+    return "🤖 选择一个已存在的工作路径吧";
   },
 
   customWorkdirPrompt(): string {
@@ -64,14 +61,8 @@ export const Formatter = {
     ].join("\n");
   },
 
-  cliPrompt(cwd: string): string {
-    return [
-      "✅ <b>工作路径已确定</b>",
-      "",
-      `📁 <code>${escapeHtml(cwd)}</code>`,
-      "",
-      "🤖 接下来选择你想使用的 CLI。"
-    ].join("\n");
+  cliPrompt(_cwd: string): string {
+    return "🤖 确定你要使用的CLI吧";
   },
 
   cliRequired(): string {
@@ -79,71 +70,39 @@ export const Formatter = {
   },
 
   sessionCard(session: TelegramSession, provider?: { name: string; model: string }, error?: string): string {
-    const cliName = session.engine === "claude" ? "Claude Code" : "Codex";
+    const suffix = error && !provider ? `\n\n<i>${escapeHtml(truncateText(error, 160))}</i>` : "";
+    return `🤖 会话<code>${escapeHtml(session.id.slice(0, 8))}</code>已就绪，可以开始和我聊天啦${suffix}`;
+  },
+
+  sessionCleared(session: TelegramSession): string {
+    return `🤖 会话<code>${escapeHtml(session.id.slice(0, 8))}</code>聊天记录已清理`;
+  },
+
+  configPanel(): string {
+    return "🤖 Telegram Bot 配置";
+  },
+
+  sessionUsage(session: TelegramSession, provider?: { name: string; model: string }, error?: string): string {
+    const providerName = provider?.name ?? "(unknown)";
+    const model = provider?.model ?? "(unknown)";
+    const usage = provider ? session.providerUsage.find((item) => item.provider === provider.name) : undefined;
     const lines = [
-      "✨ <b>会话已就绪</b>",
+      "🤖 当前会话用量",
       "",
-      `🆔 <code>${escapeHtml(session.id.slice(0, 8))}</code>`,
-      `📁 <b>工作路径</b>\n<code>${escapeHtml(session.cwd)}</code>`,
-      `🧰 <b>CLI</b>：${escapeHtml(cliName)}`,
-      provider
-        ? `🔌 <b>Provider</b>：<code>${escapeHtml(provider.name)}</code>`
-        : "🔌 <b>Provider</b>：<code>未配置</code>",
-      provider
-        ? `🧠 <b>Model</b>：<code>${escapeHtml(provider.model)}</code>`
-        : error
-          ? `⚠️ <b>Model</b>：${escapeHtml(error)}`
-          : "🧠 <b>Model</b>：<code>未配置</code>",
-      `🛡️ <b>权限模式</b>：<code>${escapeHtml(session.permissionMode)}</code>`
+      `Session：<code>${escapeHtml(session.id.slice(0, 8))}</code>`,
+      `Provider：<code>${escapeHtml(providerName)}</code>`,
+      `Model：<code>${escapeHtml(model)}</code>`,
+      `额度：<code>${escapeHtml(formatProviderCost(usage))}</code>`
     ];
+    if (error && !provider) {
+      lines.push("", `<i>${escapeHtml(truncateText(error, 160))}</i>`);
+    }
     return lines.join("\n");
   },
 
-  taskStarted(engine: string, prompt: string): string {
-    return [
-      `<b>${engine === "codex" ? "Codex" : "Claude Code"}</b>`,
-      "",
-      `Prompt: <i>${escapeHtml(truncateText(prompt, 180))}</i>`,
-      "Status: processing"
-    ].join("\n");
-  },
-
-  taskProgress(update: ProgressUpdate): string {
-    const phase = {
-      thinking: "thinking",
-      tool_calling: "calling tool",
-      writing: "writing",
-      done: "done"
-    }[update.phase];
-    const suffix = update.tool ? `: <code>${escapeHtml(update.tool)}</code>` : update.message ? `: ${escapeHtml(update.message)}` : "";
-    return `Status: ${phase}${suffix}`;
-  },
-
-  taskCompleted(result: ExecutionResult, maxOutputLength = 2500): string {
-    const parts = ["<b>Done</b>"];
-    if (result.provider || result.model) {
-      parts.push(`<i>${escapeHtml([result.provider, result.model].filter(Boolean).join(" / "))}</i>`);
-    }
-    if (result.response) {
-      parts.push("", escapeHtml(truncateText(result.response.trim(), maxOutputLength)));
-    }
-    if (result.filesChanged?.length) {
-      parts.push("", "<b>Changed files</b>");
-      for (const filePath of result.filesChanged.slice(0, 10)) {
-        parts.push(`- <code>${escapeHtml(filePath)}</code>`);
-      }
-      if (result.filesChanged.length > 10) {
-        parts.push(`- and ${result.filesChanged.length - 10} more`);
-      }
-    }
-    if (result.toolCalls?.length) {
-      parts.push("", `<b>Tool calls</b>: ${result.toolCalls.length}`);
-    }
-    const meta: string[] = [];
-    if (result.duration) meta.push(`${(result.duration / 1000).toFixed(1)}s`);
-    if (result.cost) meta.push(`$${result.cost.toFixed(4)}`);
-    if (meta.length) parts.push("", `<i>${escapeHtml(meta.join(" · "))}</i>`);
-    return truncateText(parts.join("\n"), TELEGRAM_MESSAGE_LIMIT - 32);
+  taskCompleted(engine: TelegramEngineName, result: ExecutionResult, maxOutputLength = 2500): string {
+    void engine;
+    return escapeHtml(truncateText((result.response || "(empty)").trim(), maxOutputLength));
   },
 
   taskFailed(error: string): string {
@@ -163,8 +122,11 @@ export const Formatter = {
       "<b>Commands</b>",
       "/claude prompt - 使用 Claude Code",
       "/codex prompt - 使用 Codex",
-      "/reset - 重置并重新选择工作路径和 CLI",
+      "/reset - 重置会话信息",
+      "/fresh - 清空会话聊天记录",
       "/cwd path - 查看或切换工作路径",
+      "/config - 查看或编辑 Bot 配置",
+      "/usage - 查看当前会话额度",
       "/help - 查看帮助"
     ].join("\n");
   },
@@ -173,7 +135,17 @@ export const Formatter = {
     return [
       `Hello <b>${escapeHtml(name)}</b>`,
       "",
-      "AI Gateway Bot is ready. Send /reset to reconfigure."
+      "AI Gateway Bot is ready. Send /reset to reset session info."
     ].join("\n");
   }
 };
+
+function formatProviderCost(usage: TelegramSession["providerUsage"][number] | undefined): string {
+  if (!usage) return "$0.0000";
+  if (usage.costUsd > 0) {
+    const suffix = usage.unknownCostCount > 0 ? ` + ${usage.unknownCostCount} 次未知` : "";
+    return `$${usage.costUsd.toFixed(4)}${suffix}`;
+  }
+  if (usage.unknownCostCount > 0) return "额度未知";
+  return "$0.0000";
+}

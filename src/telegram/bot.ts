@@ -7,7 +7,7 @@ import { registerCommands } from "./handlers/command.js";
 import { registerDocumentHandler } from "./handlers/document.js";
 import { registerMessageHandler } from "./handlers/message.js";
 import { ApprovalManager } from "./interaction/approval.js";
-import { safeSetDefaultCommandMenu } from "./interaction/command-menu.js";
+import { safeResetChatCommandMenu, safeSetChatCommandMenu, safeSetDefaultCommandMenu } from "./interaction/command-menu.js";
 import { SessionManager } from "./session/manager.js";
 import { SessionStore } from "./session/store.js";
 import { writeTelegramLog } from "./log.js";
@@ -101,11 +101,12 @@ export async function createBot(): Promise<TelegramRuntime> {
     }
   };
   registerCommands(bot, deps);
-  registerCallbackHandler(bot, { bot, approvalManager, sessionManager });
+  registerCallbackHandler(bot, { bot, approvalManager, sessionManager, config });
   registerDocumentHandler(bot, { sessionManager, config });
   registerMessageHandler(bot, deps);
 
   await safeSetDefaultCommandMenu(bot);
+  await refreshStoredChatCommandMenus(bot, sessionManager);
 
   return {
     bot,
@@ -117,4 +118,15 @@ export async function createBot(): Promise<TelegramRuntime> {
       codex: codexEngine
     }
   };
+}
+
+async function refreshStoredChatCommandMenus(bot: Bot, sessionManager: SessionManager): Promise<void> {
+  const sessions = sessionManager.getActiveSessions();
+  for (const session of sessions) {
+    if (session.setupStep === "ready") {
+      await safeSetChatCommandMenu(bot, session.chatId, session.engine);
+    } else {
+      await safeResetChatCommandMenu(bot, session.chatId);
+    }
+  }
 }

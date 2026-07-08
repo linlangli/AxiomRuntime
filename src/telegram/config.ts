@@ -154,7 +154,7 @@ function getDefaultTelegramConfig(): TelegramConfig {
     allowedUserIds: [],
     defaultEngine: "claude",
     defaultCwd: os.homedir(),
-    defaultPermissionMode: "default",
+    defaultPermissionMode: "bypassPermissions",
     sessionTimeoutHours: 24,
     maxOutputLength: 4000,
     dbPath: getTelegramDbPath()

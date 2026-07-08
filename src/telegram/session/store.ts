@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import type { TelegramAttachment, TelegramSession, TelegramSessionCreateInput, TelegramSetupStep } from "./types.js";
+import type { TelegramAttachment, TelegramProviderUsage, TelegramSession, TelegramSessionCreateInput, TelegramSetupStep } from "./types.js";
 
 type SessionRow = {
   id: string;
@@ -16,6 +16,7 @@ type SessionRow = {
   status: string;
   message_count: number;
   attachments_json: string;
+  provider_usage_json: string;
   created_at: string;
   last_active_at: string;
 };
@@ -48,22 +49,24 @@ export class SessionStore {
       status: input.status ?? "idle",
       messageCount: 0,
       attachments: [],
+      providerUsage: [],
       createdAt: now,
       lastActiveAt: now
     };
     this.db.prepare(
       `insert into sessions (
         id, chat_id, engine, engine_session_id, cwd, permission_mode, approve_all, setup_step,
-        status, message_count, attachments_json, created_at, last_active_at
+        status, message_count, attachments_json, provider_usage_json, created_at, last_active_at
       ) values (
         @id, @chatId, @engine, @engineSessionId, @cwd, @permissionMode, @approveAll, @setupStep,
-        @status, @messageCount, @attachmentsJson, @createdAt, @lastActiveAt
+        @status, @messageCount, @attachmentsJson, @providerUsageJson, @createdAt, @lastActiveAt
       )`
     ).run({
       ...session,
       approveAll: session.approveAll ? 1 : 0,
       setupStep: session.setupStep,
-      attachmentsJson: JSON.stringify(session.attachments)
+      attachmentsJson: JSON.stringify(session.attachments),
+      providerUsageJson: JSON.stringify(session.providerUsage)
     });
     return session;
   }
@@ -87,6 +90,21 @@ export class SessionStore {
     return rows.map(rowToSession);
   }
 
+  listActiveByChat(limit = 100): TelegramSession[] {
+    const rows = this.db.prepare(
+      "select * from sessions where status != 'closed' order by chat_id asc, last_active_at desc limit ?"
+    ).all(limit * 5) as SessionRow[];
+    const seen = new Set<number>();
+    const sessions: TelegramSession[] = [];
+    for (const row of rows) {
+      if (seen.has(row.chat_id)) continue;
+      seen.add(row.chat_id);
+      sessions.push(rowToSession(row));
+      if (sessions.length >= limit) break;
+    }
+    return sessions;
+  }
+
   update(id: string, patch: Partial<TelegramSession>): TelegramSession {
     const current = this.getById(id);
     if (!current) {
@@ -96,6 +114,7 @@ export class SessionStore {
       ...current,
       ...patch,
       attachments: patch.attachments ?? current.attachments,
+      providerUsage: patch.providerUsage ?? current.providerUsage,
       lastActiveAt: patch.lastActiveAt ?? new Date().toISOString()
     };
     this.db.prepare(
@@ -109,6 +128,7 @@ export class SessionStore {
         status = @status,
         message_count = @messageCount,
         attachments_json = @attachmentsJson,
+        provider_usage_json = @providerUsageJson,
         last_active_at = @lastActiveAt
        where id = @id`
     ).run({
@@ -122,6 +142,7 @@ export class SessionStore {
       status: next.status,
       messageCount: next.messageCount,
       attachmentsJson: JSON.stringify(next.attachments),
+      providerUsageJson: JSON.stringify(next.providerUsage),
       lastActiveAt: next.lastActiveAt
     });
     return next;
@@ -186,6 +207,7 @@ export class SessionStore {
         status text not null,
         message_count integer not null default 0,
         attachments_json text not null default '[]',
+        provider_usage_json text not null default '[]',
         created_at text not null,
         last_active_at text not null
       );
@@ -199,6 +221,7 @@ export class SessionStore {
       create index if not exists idx_workdirs_chat_last_used on workdirs(chat_id, last_used_at);
     `);
     this.ensureColumn("sessions", "setup_step", "setup_step text not null default 'ready'");
+    this.ensureColumn("sessions", "provider_usage_json", "provider_usage_json text not null default '[]'");
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -222,13 +245,14 @@ function rowToSession(row: SessionRow): TelegramSession {
     status: row.status === "running" || row.status === "waiting_approval" || row.status === "closed" ? row.status : "idle",
     messageCount: row.message_count,
     attachments: parseAttachments(row.attachments_json),
+    providerUsage: parseProviderUsage(row.provider_usage_json),
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at
   };
 }
 
 function normalizeSetupStep(value: string): TelegramSetupStep {
-  if (value === "workdir" || value === "custom_workdir" || value === "cli" || value === "ready") return value;
+  if (value === "workdir" || value === "custom_workdir" || value === "edit_custom_workdir" || value === "cli" || value === "ready") return value;
   return "ready";
 }
 
@@ -241,7 +265,40 @@ function parseAttachments(value: string): TelegramAttachment[] {
   }
 }
 
+function parseProviderUsage(value: string): TelegramProviderUsage[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      if (!isProviderUsage(item)) return [];
+      return [{
+        provider: item.provider,
+        model: item.model,
+        requestCount: item.requestCount,
+        costUsd: item.costUsd,
+        unknownCostCount: item.unknownCostCount,
+        updatedAt: item.updatedAt
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
 function isAttachment(value: unknown): value is TelegramAttachment {
   const item = value as TelegramAttachment;
   return Boolean(item && typeof item.name === "string" && typeof item.path === "string" && typeof item.text === "string");
+}
+
+function isProviderUsage(value: unknown): value is TelegramProviderUsage {
+  const item = value as TelegramProviderUsage;
+  return Boolean(
+    item
+      && typeof item.provider === "string"
+      && typeof item.model === "string"
+      && Number.isFinite(item.requestCount)
+      && Number.isFinite(item.costUsd)
+      && Number.isFinite(item.unknownCostCount)
+      && typeof item.updatedAt === "string"
+  );
 }

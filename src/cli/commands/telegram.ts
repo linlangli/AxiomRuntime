@@ -187,9 +187,9 @@ async function editTelegramConfigInteractive(): Promise<void> {
     }
     if (field === "defaultPermissionMode") {
       const defaultPermissionMode = await promptSelect<TelegramPermissionMode>("Default permission mode", [
-        { label: "default", value: "default" },
-        { label: "auto-edit", value: "acceptEdits" },
-        { label: "full-auto", value: "bypassPermissions" }
+        { label: "bypassPermissions", value: "bypassPermissions" },
+        { label: "acceptEdits", value: "acceptEdits" },
+        { label: "default", value: "default" }
       ]);
       config = await saveTelegramConfig({ ...config, defaultPermissionMode });
       continue;

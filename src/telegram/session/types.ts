@@ -1,13 +1,22 @@
 import type { TelegramEngineName, TelegramPermissionMode } from "../config.js";
 
 export type TelegramSessionStatus = "idle" | "running" | "waiting_approval" | "closed";
-export type TelegramSetupStep = "workdir" | "custom_workdir" | "cli" | "ready";
+export type TelegramSetupStep = "workdir" | "custom_workdir" | "edit_custom_workdir" | "cli" | "ready";
 
 export type TelegramAttachment = {
   name: string;
   path: string;
   text: string;
   createdAt: string;
+};
+
+export type TelegramProviderUsage = {
+  provider: string;
+  model: string;
+  requestCount: number;
+  costUsd: number;
+  unknownCostCount: number;
+  updatedAt: string;
 };
 
 export type TelegramSession = {
@@ -22,6 +31,7 @@ export type TelegramSession = {
   status: TelegramSessionStatus;
   messageCount: number;
   attachments: TelegramAttachment[];
+  providerUsage: TelegramProviderUsage[];
   createdAt: string;
   lastActiveAt: string;
 };

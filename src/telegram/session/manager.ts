@@ -1,6 +1,12 @@
 import type { TelegramConfig } from "../config.js";
 import type { SessionStore } from "./store.js";
-import type { TelegramAttachment, TelegramSession } from "./types.js";
+import type { TelegramAttachment, TelegramProviderUsage, TelegramSession } from "./types.js";
+
+export type TelegramProviderUsageInput = {
+  provider: string;
+  model?: string;
+  costUsd?: number;
+};
 
 export class SessionManager {
   constructor(
@@ -60,6 +66,33 @@ export class SessionManager {
     });
   }
 
+  clearConversation(chatId: number): TelegramSession {
+    const current = this.getOrCreate(chatId);
+    return this.store.update(current.id, {
+      engineSessionId: null,
+      approveAll: false,
+      status: "idle",
+      messageCount: 0,
+      attachments: []
+    });
+  }
+
+  recordProviderUsage(sessionId: string, input: TelegramProviderUsageInput): TelegramSession {
+    const session = this.store.getById(sessionId);
+    if (!session) {
+      throw new Error(`Telegram session not found: ${sessionId}`);
+    }
+    const provider = input.provider.trim() || "unknown";
+    const model = input.model?.trim() || "(unknown)";
+    const hasCost = typeof input.costUsd === "number" && Number.isFinite(input.costUsd) && input.costUsd >= 0;
+    const nextUsage = upsertProviderUsage(session.providerUsage, {
+      provider,
+      model,
+      costUsd: hasCost ? input.costUsd : undefined
+    });
+    return this.store.update(sessionId, { providerUsage: nextUsage });
+  }
+
   resume(chatId: number, idPrefix?: string): TelegramSession | null {
     const sessions = this.getHistory(chatId, 20);
     const target = idPrefix
@@ -72,6 +105,10 @@ export class SessionManager {
 
   getHistory(chatId: number, limit = 10): TelegramSession[] {
     return this.store.listByChatId(chatId, limit);
+  }
+
+  getActiveSessions(limit = 100): TelegramSession[] {
+    return this.store.listActiveByChat(limit);
   }
 
   addAttachment(chatId: number, attachment: TelegramAttachment): TelegramSession {
@@ -97,3 +134,23 @@ export class SessionManager {
 }
 
 export type { TelegramAttachment, TelegramSession } from "./types.js";
+
+function upsertProviderUsage(
+  usage: TelegramProviderUsage[],
+  input: TelegramProviderUsageInput
+): TelegramProviderUsage[] {
+  const now = new Date().toISOString();
+  const index = usage.findIndex((item) => item.provider === input.provider);
+  const current = index >= 0 ? usage[index] : null;
+  const hasCost = typeof input.costUsd === "number" && Number.isFinite(input.costUsd) && input.costUsd >= 0;
+  const next: TelegramProviderUsage = {
+    provider: input.provider,
+    model: input.model || current?.model || "(unknown)",
+    requestCount: (current?.requestCount ?? 0) + 1,
+    costUsd: (current?.costUsd ?? 0) + (hasCost ? input.costUsd! : 0),
+    unknownCostCount: (current?.unknownCostCount ?? 0) + (hasCost ? 0 : 1),
+    updatedAt: now
+  };
+  if (index < 0) return [...usage, next];
+  return usage.map((item, itemIndex) => itemIndex === index ? next : item);
+}
