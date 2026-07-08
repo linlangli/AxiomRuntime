@@ -88,9 +88,11 @@ export function buildCodexArgs(prompt: string, model: string, cwd: string, permi
   if (permissionMode === "bypassPermissions") {
     args.push("--dangerously-bypass-approvals-and-sandbox");
   } else if (permissionMode === "acceptEdits") {
-    args.push("-s", "workspace-write", "-a", "never");
+    args.unshift("-a", "never");
+    args.push("-s", "workspace-write");
   } else {
-    args.push("-s", "workspace-write", "-a", "on-request");
+    args.unshift("-a", "on-request");
+    args.push("-s", "workspace-write");
   }
 
   args.push(prompt);

@@ -136,6 +136,8 @@ test("dangerous command detector catches high risk commands", () => {
 
 test("codex args map permission modes to non-interactive CLI flags", () => {
   assert.deepEqual(buildCodexArgs("hello", "gpt-5.5", "/tmp/project", "default"), [
+    "-a",
+    "on-request",
     "exec",
     "--json",
     "--skip-git-repo-check",
@@ -145,10 +147,10 @@ test("codex args map permission modes to non-interactive CLI flags", () => {
     "/tmp/project",
     "-s",
     "workspace-write",
-    "-a",
-    "on-request",
     "hello"
   ]);
+  const acceptEditsArgs = buildCodexArgs("hello", "gpt-5.5", "/tmp/project", "acceptEdits");
+  assert.deepEqual(acceptEditsArgs.slice(0, 3), ["-a", "never", "exec"]);
   assert.equal(buildCodexArgs("hello", "gpt-5.5", "/tmp/project", "bypassPermissions").includes("--dangerously-bypass-approvals-and-sandbox"), true);
 });
 
