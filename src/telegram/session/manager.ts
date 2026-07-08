@@ -1,7 +1,7 @@
 import type { TelegramConfig } from "../config.js";
 import type { TokenUsage } from "../../core/types.js";
 import type { SessionStore } from "./store.js";
-import type { TelegramAttachment, TelegramProviderUsage, TelegramSession } from "./types.js";
+import type { TelegramAttachment, TelegramConversationTurn, TelegramProviderUsage, TelegramSession } from "./types.js";
 
 export type TelegramProviderUsageInput = {
   provider: string;
@@ -9,6 +9,15 @@ export type TelegramProviderUsageInput = {
   costUsd?: number;
   usage?: TokenUsage;
 };
+
+export type TelegramConversationTurnInput = {
+  user: string;
+  assistant: string;
+};
+
+const MAX_CONVERSATION_TURNS = 6;
+const MAX_CONVERSATION_USER_CHARS = 1000;
+const MAX_CONVERSATION_ASSISTANT_CHARS = 1600;
 
 export class SessionManager {
   constructor(
@@ -72,10 +81,27 @@ export class SessionManager {
     const current = this.getOrCreate(chatId);
     return this.store.update(current.id, {
       engineSessionId: null,
+      botContextFingerprint: null,
       approveAll: false,
       status: "idle",
       messageCount: 0,
-      attachments: []
+      attachments: [],
+      conversation: []
+    });
+  }
+
+  appendConversationTurn(sessionId: string, input: TelegramConversationTurnInput): TelegramSession {
+    const session = this.store.getById(sessionId);
+    if (!session) {
+      throw new Error(`Telegram session not found: ${sessionId}`);
+    }
+    const turn: TelegramConversationTurn = {
+      user: truncateConversationText(input.user, MAX_CONVERSATION_USER_CHARS),
+      assistant: truncateConversationText(input.assistant, MAX_CONVERSATION_ASSISTANT_CHARS),
+      createdAt: new Date().toISOString()
+    };
+    return this.store.update(sessionId, {
+      conversation: [...session.conversation, turn].slice(-MAX_CONVERSATION_TURNS)
     });
   }
 
@@ -137,6 +163,12 @@ export class SessionManager {
 }
 
 export type { TelegramAttachment, TelegramSession } from "./types.js";
+
+function truncateConversationText(value: string, maxLength: number): string {
+  const text = value.trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+}
 
 function upsertProviderUsage(
   usage: TelegramProviderUsage[],

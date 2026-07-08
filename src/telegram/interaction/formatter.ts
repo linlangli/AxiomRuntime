@@ -29,6 +29,12 @@ export function formatCodeBlock(code: string, language = ""): string {
   return `<pre><code${className}>${escapeHtml(truncateText(code, 3500))}</code></pre>`;
 }
 
+export function markdownToTelegramHtml(value: string, maxLength = 2500): string {
+  const text = truncateText((value || "(empty)").trim(), maxLength);
+  if (!text) return "(empty)";
+  return renderMarkdownBlocks(text);
+}
+
 export function splitPlainText(value: string, maxLength = 3800): string[] {
   if (value.length <= maxLength) return [value];
   const chunks: string[] = [];
@@ -76,6 +82,10 @@ export const Formatter = {
     return "🤖 先确定你想使用的CLI哦。";
   },
 
+  agentProfilePrompt(): string {
+    return "🤖 介绍一下我和你吧，可以帮你构建画像哦";
+  },
+
   sessionCard(session: TelegramSession, provider?: { name: string; model: string }, error?: string): string {
     const suffix = error && !provider ? `\n\n<i>${escapeHtml(truncateText(error, 160))}</i>` : "";
     return `🤖 会话<code>${escapeHtml(session.id.slice(0, 8))}</code>已就绪，可以开始和我聊天啦${suffix}`;
@@ -87,6 +97,14 @@ export const Formatter = {
 
   configPanel(): string {
     return "🤖 Telegram Bot 配置";
+  },
+
+  agentProfile(content: string): string {
+    return [
+      "<b>BOT.md</b>",
+      "",
+      formatCodeBlock(content, "markdown")
+    ].join("\n");
   },
 
   sessionUsage(
@@ -133,7 +151,7 @@ export const Formatter = {
 
   taskCompleted(engine: TelegramEngineName, result: ExecutionResult, maxOutputLength = 2500): string {
     void engine;
-    return escapeHtml(truncateText((result.response || "(empty)").trim(), maxOutputLength));
+    return markdownToTelegramHtml(result.response || "(empty)", maxOutputLength);
   },
 
   taskFailed(error: string): string {
@@ -154,7 +172,7 @@ export const Formatter = {
       "/claude prompt - 使用 Claude Code",
       "/codex prompt - 使用 Codex",
       "/reset - 重置会话信息",
-      "/fresh - 清空会话聊天记录",
+      "/fresh - 清空聊天窗口",
       "/cwd path - 查看或切换工作路径",
       "/config - 查看或编辑 Bot 配置",
       "/usage - 查看当前会话额度",
@@ -170,6 +188,155 @@ export const Formatter = {
     ].join("\n");
   }
 };
+
+function renderMarkdownBlocks(value: string): string {
+  const lines = value.replace(/\r\n?/g, "\n").split("\n");
+  const output: string[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const fence = line.match(/^\s*```([A-Za-z0-9_-]*)\s*$/);
+    if (fence) {
+      const language = fence[1] ?? "";
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^\s*```\s*$/.test(lines[index])) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      output.push(formatCodeBlock(codeLines.join("\n"), language));
+      continue;
+    }
+
+    if (!line.trim()) {
+      output.push("");
+      index += 1;
+      continue;
+    }
+
+    if (isMarkdownTableStart(lines, index)) {
+      const tableLines: string[] = [];
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        tableLines.push(lines[index]);
+        index += 1;
+      }
+      output.push(renderMarkdownTable(tableLines));
+      continue;
+    }
+
+    const heading = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (heading) {
+      output.push(`<b>${renderMarkdownInline(heading[1])}</b>`);
+      index += 1;
+      continue;
+    }
+
+    const unordered = line.match(/^(\s*)[-*+]\s+(.+)$/);
+    if (unordered) {
+      const indent = "  ".repeat(Math.floor(unordered[1].length / 2));
+      output.push(`${indent}• ${renderMarkdownInline(unordered[2])}`);
+      index += 1;
+      continue;
+    }
+
+    const ordered = line.match(/^(\s*)\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      const indent = "  ".repeat(Math.floor(ordered[1].length / 2));
+      output.push(`${indent}${line.trimStart().match(/^\d+[.)]/)?.[0] ?? "1."} ${renderMarkdownInline(ordered[2])}`);
+      index += 1;
+      continue;
+    }
+
+    output.push(renderMarkdownInline(line));
+    index += 1;
+  }
+
+  return output.join("\n");
+}
+
+function renderMarkdownInline(value: string): string {
+  const placeholders: string[] = [];
+  const protect = (html: string): string => {
+    const token = `\u0000${placeholders.length}\u0000`;
+    placeholders.push(html);
+    return token;
+  };
+
+  let text = value.replace(/`([^`\n]+)`/g, (_match, code: string) => protect(`<code>${escapeHtml(code)}</code>`));
+  text = text.replace(/\[([^\]\n]+)]\((https?:\/\/[^\s)]+)\)/g, (_match, label: string, href: string) => {
+    const safeHref = escapeHtmlAttribute(href);
+    return protect(`<a href="${safeHref}">${escapeHtml(label)}</a>`);
+  });
+
+  text = escapeHtml(text);
+  text = text.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  text = text.replace(/__(.+?)__/g, "<b>$1</b>");
+  text = text.replace(/~~(.+?)~~/g, "<s>$1</s>");
+  text = text.replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, "$1<i>$2</i>");
+
+  return text.replace(/\u0000(\d+)\u0000/g, (_match, indexText: string) => placeholders[Number(indexText)] ?? "");
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return escapeHtml(value).replace(/"/g, "&quot;");
+}
+
+function isMarkdownTableStart(lines: string[], index: number): boolean {
+  const current = lines[index];
+  const next = lines[index + 1];
+  return Boolean(
+    current?.includes("|") &&
+    next &&
+    /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(next)
+  );
+}
+
+function renderMarkdownTable(lines: string[]): string {
+  const rows = lines
+    .filter((_line, index) => index !== 1)
+    .map(parseMarkdownTableRow)
+    .filter((row) => row.length > 0);
+  if (!rows.length) return "";
+
+  const headers = rows[0] ?? [];
+  const dataRows = rows.slice(1);
+  if (!headers.length || !dataRows.length) {
+    return rows.map((row) => row.map(renderMarkdownInline).join(" / ")).join("\n");
+  }
+
+  return dataRows
+    .map((row, rowIndex) => renderMarkdownTableItem(headers, row, rowIndex))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function parseMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function renderMarkdownTableItem(headers: string[], row: string[], rowIndex: number): string {
+  const title = row[0]?.trim() || `${stripInlineMarkdown(headers[0] ?? "项目")}${rowIndex + 1}`;
+  const lines = [`<b>${renderMarkdownInline(title)}</b>`];
+  headers.slice(1).forEach((header, index) => {
+    const value = row[index + 1]?.trim();
+    if (!value) return;
+    lines.push(`${escapeHtml(stripInlineMarkdown(header))}：${renderMarkdownInline(value)}`);
+  });
+  return lines.join("\n");
+}
+
+function stripInlineMarkdown(value: string): string {
+  return value
+    .replace(/\[([^\]\n]+)]\(([^)]+)\)/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/~~(.+?)~~/g, "$1")
+    .replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, "$1$2");
+}
 
 export function formatUsagePricePrompt(provider: { name: string; model: string }): string {
   return [

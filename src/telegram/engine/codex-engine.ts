@@ -1,8 +1,11 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { Engine, EngineExecuteParams, ExecutionResult, ProgressUpdate, ToolCallResult } from "./types.js";
 import type { TokenUsage } from "../../core/types.js";
-import { cleanupRuntime, createCommandPermissionRequest, prepareEngineRuntime, summarizeRuntime } from "./engine-utils.js";
-import { extractJsonLines, spawnCapture, stripAnsi } from "./process-utils.js";
+import { cleanupRuntime, createCommandPermissionRequest, formatEngineTimeout, prepareEngineRuntime, summarizeRuntime } from "./engine-utils.js";
+import { extractJsonLines, spawnCapture, stripAnsi, terminateProcessTree } from "./process-utils.js";
 import { startOpenAiUsageProxy, type OpenAiUsageProxy, type OpenAiUsageProxyRecord } from "../../core/runner/openai-usage-proxy.js";
 import { requiresDangerousConfirmation } from "../interaction/approval.js";
 import { writeTelegramLog } from "../log.js";
@@ -44,7 +47,7 @@ export class CodexEngine implements Engine {
       });
       const args = buildCodexArgs(params.prompt, runtime.model, params.cwd, permissionMode, {
         baseUrl: usageProxy.baseUrl
-      });
+      }, params.resume);
       const result = await spawnCapture({
         command: runtime.command,
         args,
@@ -56,9 +59,16 @@ export class CodexEngine implements Engine {
           AI_GATEWAY_BASE_URL: usageProxy.baseUrl
         },
         signal,
+        timeoutMs: params.timeoutMs,
         onStdout: (chunk) => handleCodexProgress(chunk, params.onProgress)
       }, (child) => this.processes.set(params.chatId, child));
 
+      if (result.timedOut) {
+        throw new Error(formatEngineTimeout("Codex", params.timeoutMs, runtime.provider.name, runtime.model));
+      }
+      if (result.aborted) {
+        throw new Error("任务已停止。");
+      }
       if (result.code !== 0) {
         throw new Error(formatCodexFailure(
           result.stderr || result.stdout || `Codex exited with code ${result.code}`,
@@ -67,8 +77,22 @@ export class CodexEngine implements Engine {
         ));
       }
       await params.onProgress?.({ phase: "done" });
+      const parsed = parseCodexOutput(result.stdout, Date.now() - startTime);
+      const sessionId = parsed.sessionId ?? findLatestCodexSessionId({
+        cwd: params.cwd,
+        startedAtMs: startTime,
+        finishedAtMs: Date.now()
+      });
+      if (sessionId && !parsed.sessionId) {
+        await writeTelegramLog({
+          action: "codex_session_detected",
+          message: `Detected Codex session ${sessionId} from local history.`,
+          metadata: { chatId: params.chatId, cwd: params.cwd }
+        });
+      }
       return {
-        ...parseCodexOutput(result.stdout, Date.now() - startTime),
+        ...parsed,
+        sessionId,
         cost: sumKnownProxyCosts(usageProxy.getRecords()),
         usage: sumProxyUsage(usageProxy.getRecords()),
         provider: runtime.provider.name,
@@ -90,7 +114,8 @@ export class CodexEngine implements Engine {
       return;
     }
     this.controllers.get(chatId)?.abort();
-    this.processes.get(chatId)?.kill("SIGTERM");
+    const child = this.processes.get(chatId);
+    if (child) terminateProcessTree(child, "SIGTERM");
     this.controllers.delete(chatId);
     this.processes.delete(chatId);
   }
@@ -106,29 +131,41 @@ export function buildCodexArgs(
   model: string,
   cwd: string,
   permissionMode: string,
-  providerOverride?: CodexProviderOverride
+  providerOverride?: CodexProviderOverride,
+  resume?: string | null
 ): string[] {
   const args = [
     "exec",
+    ...(resume ? ["resume"] : []),
     ...buildCodexProviderOverrideArgs(providerOverride),
     "--json",
     "--skip-git-repo-check",
     "-m",
     model,
-    "-C",
-    cwd
+    ...(resume ? [] : ["-C", cwd])
   ];
 
   if (permissionMode === "bypassPermissions") {
     args.push("--dangerously-bypass-approvals-and-sandbox");
   } else if (permissionMode === "acceptEdits") {
     args.unshift("-a", "never");
-    args.push("-s", "workspace-write");
+    if (resume) {
+      args.unshift("-s", "workspace-write");
+    } else {
+      args.push("-s", "workspace-write");
+    }
   } else {
     args.unshift("-a", "on-request");
-    args.push("-s", "workspace-write");
+    if (resume) {
+      args.unshift("-s", "workspace-write");
+    } else {
+      args.push("-s", "workspace-write");
+    }
   }
 
+  if (resume) {
+    args.push(resume);
+  }
   args.push(prompt);
   return args;
 }
@@ -165,8 +202,7 @@ export function parseCodexOutput(raw: string, duration: number): ExecutionResult
 
   for (const event of events) {
     if (!isRecord(event)) continue;
-    if (typeof event.session_id === "string") sessionId = event.session_id;
-    if (typeof event.sessionId === "string") sessionId = event.sessionId;
+    sessionId = readCodexSessionId(event) ?? sessionId;
     const message = readCodexMessage(event);
     if (message) response = message;
     const toolCall = readCodexToolCall(event);
@@ -187,6 +223,34 @@ export function parseCodexOutput(raw: string, duration: number): ExecutionResult
     filesChanged: [...filesChanged],
     duration
   };
+}
+
+export type FindLatestCodexSessionIdInput = {
+  cwd: string;
+  startedAtMs: number;
+  finishedAtMs?: number;
+  codexHome?: string;
+};
+
+export function findLatestCodexSessionId(input: FindLatestCodexSessionIdInput): string | undefined {
+  const codexHome = input.codexHome ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
+  const sessionsRoot = path.join(codexHome, "sessions");
+  const finishedAtMs = input.finishedAtMs ?? Date.now();
+  const files = listCandidateCodexSessionFiles(sessionsRoot, input.startedAtMs, finishedAtMs);
+  const startedWindow = input.startedAtMs - 10_000;
+  const finishedWindow = finishedAtMs + 30_000;
+
+  for (const filePath of files) {
+    const stat = safeStat(filePath);
+    if (!stat || stat.mtimeMs < startedWindow || stat.mtimeMs > finishedWindow) continue;
+    const session = readCodexSessionMeta(filePath);
+    if (!session) continue;
+    if (path.resolve(session.cwd) !== path.resolve(input.cwd)) continue;
+    if (session.source && session.source !== "exec") continue;
+    return session.sessionId;
+  }
+
+  return undefined;
 }
 
 export function formatCodexFailure(raw: string, providerName?: string, model?: string): string {
@@ -216,6 +280,75 @@ function isBenignCodexDiagnostic(line: string): boolean {
     || /codex_core_plugins::manager: failed to warm featured plugin ids cache/.test(line);
 }
 
+function listCandidateCodexSessionFiles(sessionsRoot: string, startedAtMs: number, finishedAtMs: number): string[] {
+  const dayDirs = new Set<string>();
+  for (const ms of [startedAtMs, finishedAtMs, startedAtMs - 24 * 60 * 60 * 1000, finishedAtMs + 24 * 60 * 60 * 1000]) {
+    const date = new Date(ms);
+    dayDirs.add(path.join(
+      sessionsRoot,
+      String(date.getFullYear()),
+      String(date.getMonth() + 1).padStart(2, "0"),
+      String(date.getDate()).padStart(2, "0")
+    ));
+  }
+
+  const files: Array<{ path: string; mtimeMs: number }> = [];
+  for (const dir of dayDirs) {
+    for (const filePath of listJsonlFiles(dir)) {
+      const stat = safeStat(filePath);
+      if (stat) files.push({ path: filePath, mtimeMs: stat.mtimeMs });
+    }
+  }
+  return files.sort((a, b) => b.mtimeMs - a.mtimeMs).map((file) => file.path);
+}
+
+function listJsonlFiles(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+      .map((entry) => path.join(dir, entry.name));
+  } catch {
+    return [];
+  }
+}
+
+function safeStat(filePath: string): fs.Stats | null {
+  try {
+    return fs.statSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
+type CodexSessionMeta = {
+  sessionId: string;
+  cwd: string;
+  source?: string;
+};
+
+function readCodexSessionMeta(filePath: string): CodexSessionMeta | null {
+  try {
+    const text = fs.readFileSync(filePath, "utf8");
+    for (const line of text.split(/\r?\n/).slice(0, 20)) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as unknown;
+      if (!isRecord(event) || event.type !== "session_meta" || !isRecord(event.payload)) continue;
+      const sessionId = readCodexSessionId(event);
+      const cwd = typeof event.payload.cwd === "string" ? event.payload.cwd : "";
+      if (sessionId && cwd) {
+        return {
+          sessionId,
+          cwd,
+          source: typeof event.payload.source === "string" ? event.payload.source : undefined
+        };
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function handleCodexProgress(chunk: string, onProgress?: (update: ProgressUpdate) => void | Promise<void>): void {
   if (!onProgress) return;
   for (const event of extractJsonLines(chunk)) {
@@ -229,6 +362,28 @@ function handleCodexProgress(chunk: string, onProgress?: (update: ProgressUpdate
       void onProgress({ phase: "writing" });
     }
   }
+}
+
+function readCodexSessionId(event: Record<string, unknown>, depth = 0): string | null {
+  if (depth > 4) return null;
+  for (const key of ["session_id", "sessionId"]) {
+    const value = event[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  const id = event.id;
+  if (typeof id === "string" && isUuidLike(id)) return id;
+  for (const key of ["payload", "item", "message", "response"]) {
+    const value = event[key];
+    if (isRecord(value)) {
+      const nested = readCodexSessionId(value, depth + 1);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+function isUuidLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
 function readCodexMessage(event: Record<string, unknown>): string | null {

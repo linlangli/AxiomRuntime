@@ -44,6 +44,7 @@ export type EngineExecuteParams = {
   onPermission: PermissionHandler;
   onProgress?: (update: ProgressUpdate) => void | Promise<void>;
   signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 export type ProgressUpdate = {

@@ -102,7 +102,7 @@ export async function createBot(): Promise<TelegramRuntime> {
   };
   registerCommands(bot, deps);
   registerCallbackHandler(bot, { bot, approvalManager, sessionManager, config });
-  registerDocumentHandler(bot, { sessionManager, config });
+  registerDocumentHandler(bot, deps);
   registerMessageHandler(bot, deps);
 
   await safeSetDefaultCommandMenu(bot);

@@ -11,6 +11,8 @@ import { updateTelegramConfig, type TelegramConfig, type TelegramEngineName, typ
 import { safeSetChatCommandMenu } from "../interaction/command-menu.js";
 import { Formatter } from "../interaction/formatter.js";
 import {
+  buildAgentProfileBackKeyboard,
+  buildAgentProfileKeyboard,
   buildCliKeyboard,
   buildReadyCliKeyboard,
   buildReadyKeyboard,
@@ -22,6 +24,9 @@ import {
 } from "../interaction/keyboards.js";
 import type { SessionManager } from "../session/manager.js";
 import type { TelegramSession } from "../session/types.js";
+
+export const BOT_PROFILE_FILENAME = "BOT.md";
+export const PROMPT_PROFILE_FILENAME = "PROMPT.md";
 
 export type SetupDeps = {
   sessionManager: SessionManager;
@@ -101,7 +106,12 @@ export async function setWorkdir(ctx: Context, deps: SetupDeps, rawPath: string,
     return;
   }
   fs.mkdirSync(cwd, { recursive: true });
-  const next = deps.sessionManager.update(session.id, { cwd, setupStep: options.returnToReady ? "ready" : "cli" });
+  const next = deps.sessionManager.update(session.id, {
+    cwd,
+    engineSessionId: null,
+    botContextFingerprint: null,
+    setupStep: options.returnToReady ? "ready" : "cli"
+  });
   deps.sessionManager.rememberWorkdir(chatId, cwd);
   if (options.returnToReady) {
     await showReadyCard(ctx, deps, next, { edit: options.edit });
@@ -121,12 +131,44 @@ export async function selectCli(ctx: Context, deps: SetupDeps, engine: TelegramE
     await ctx.reply(Formatter.workdirRequired(), { parse_mode: "HTML" });
     return;
   }
-  const next = deps.sessionManager.update(session.id, { engine, setupStep: "ready" });
+  const next = deps.sessionManager.update(session.id, {
+    engine,
+    engineSessionId: null,
+    botContextFingerprint: null,
+    setupStep: "agent_profile"
+  });
   deps.sessionManager.rememberWorkdir(chatId, next.cwd);
   if (deps.bot) {
     await safeSetChatCommandMenu(deps.bot, chatId, engine);
   }
-  await showReadyCard(ctx, deps, next);
+  await showAgentProfilePrompt(ctx);
+}
+
+export async function showAgentProfilePrompt(ctx: Context): Promise<void> {
+  await ctx.reply(Formatter.agentProfilePrompt(), {
+    parse_mode: "HTML",
+    reply_markup: buildAgentProfileKeyboard()
+  });
+}
+
+export async function completeAgentProfile(
+  ctx: Context,
+  deps: SetupDeps,
+  description?: string,
+  options: { showReady?: boolean } = {}
+): Promise<TelegramSession | null> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return null;
+  const session = deps.sessionManager.getOrCreate(chatId);
+  if (description?.trim()) {
+    writePromptProfileFile(session, description);
+    writeBotProfileFallbackFile(session, description);
+  }
+  const next = deps.sessionManager.update(session.id, { setupStep: "ready" });
+  if (options.showReady !== false) {
+    await showReadyCard(ctx, deps, next);
+  }
+  return next;
 }
 
 export async function remindSetup(ctx: Context, session: TelegramSession): Promise<boolean> {
@@ -138,6 +180,13 @@ export async function remindSetup(ctx: Context, session: TelegramSession): Promi
     await ctx.reply(Formatter.cliRequired(), {
       parse_mode: "HTML",
       reply_markup: buildCliKeyboard()
+    });
+    return true;
+  }
+  if (session.setupStep === "agent_profile") {
+    await ctx.reply(Formatter.agentProfilePrompt(), {
+      parse_mode: "HTML",
+      reply_markup: buildAgentProfileKeyboard()
     });
     return true;
   }
@@ -172,6 +221,17 @@ export async function showConfigPanel(ctx: Context, deps: SetupDeps, session: Te
   await ctx.reply(Formatter.configPanel(), extra);
 }
 
+export async function showAgentProfile(ctx: Context, deps: SetupDeps): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const session = deps.sessionManager.getOrCreate(chatId);
+  const content = readAgentProfileFile(session) ?? "暂未生成 BOT.md。";
+  await editOrReply(ctx, Formatter.agentProfile(content), {
+    parse_mode: "HTML",
+    reply_markup: buildAgentProfileBackKeyboard()
+  });
+}
+
 export async function showReadyCliPicker(ctx: Context, deps: SetupDeps): Promise<void> {
   await editOrReply(ctx, "🤖 确定你要使用的CLI吧", {
     parse_mode: "HTML",
@@ -183,7 +243,12 @@ export async function selectReadyCli(ctx: Context, deps: SetupDeps, engine: Tele
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const session = deps.sessionManager.getOrCreate(chatId);
-  const next = deps.sessionManager.update(session.id, { engine, setupStep: "ready" });
+  const next = deps.sessionManager.update(session.id, {
+    engine,
+    engineSessionId: null,
+    botContextFingerprint: null,
+    setupStep: "ready"
+  });
   if (deps.bot) {
     await safeSetChatCommandMenu(deps.bot, chatId, engine);
   }
@@ -243,6 +308,10 @@ export async function selectReadyModel(ctx: Context, deps: SetupDeps, providerIn
     return;
   }
   await updateRuntimeTelegramConfig(deps, { provider: choice.provider.name, model });
+  deps.sessionManager.update(session.id, {
+    engineSessionId: null,
+    botContextFingerprint: null
+  });
   await showReadyCard(ctx, deps, deps.sessionManager.getOrCreate(chatId), { edit: true });
 }
 
@@ -340,4 +409,80 @@ function expandHome(value: string): string {
   if (value === "~") return os.homedir();
   if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
   return value;
+}
+
+export function getAgentProfilePath(session: TelegramSession): string {
+  return path.join(session.cwd, BOT_PROFILE_FILENAME);
+}
+
+export function getPromptProfilePath(session: TelegramSession): string {
+  return path.join(session.cwd, PROMPT_PROFILE_FILENAME);
+}
+
+export function buildAgentProfileGenerationPrompt(): string {
+  return [
+    "请读取当前工作目录下的 PROMPT.md，并根据其中用户的完整原始表述，生成一份精炼的 Telegram Bot 画像文件 BOT.md。",
+    "",
+    "要求：",
+    "- 必须创建或覆盖当前工作目录下的 BOT.md。",
+    "- 不要修改 PROMPT.md，也不要修改其它文件。",
+    "- BOT.md 是后续每次 Telegram 对话都会注入的上下文，所以必须简洁、稳定、可执行。",
+    "- 保留长期有效的信息：机器人身份、用户偏好、分析框架、输出风格、风险边界、数据偏好、禁止事项。",
+    "- 删除临时寒暄、重复内容、上传说明、会话 id、provider/model、实现细节。",
+    "- 中文输入就使用中文。",
+    "- 总长度控制在 1200 个中文字符以内。",
+    "",
+    "建议结构：",
+    "# BOT",
+    "## 角色与目标",
+    "## 用户偏好",
+    "## 工作方式",
+    "## 风险边界",
+    "",
+    "完成后只需要简短说明已写入 BOT.md。"
+  ].join("\n");
+}
+
+function readAgentProfileFile(session: TelegramSession): string | null {
+  const filePath = getAgentProfilePath(session);
+  if (fs.existsSync(filePath)) {
+    return fs.readFileSync(filePath, "utf8");
+  }
+  return null;
+}
+
+function writePromptProfileFile(session: TelegramSession, description: string): string {
+  fs.mkdirSync(session.cwd, { recursive: true });
+  const content = `${description.trim()}\n`;
+  fs.writeFileSync(getPromptProfilePath(session), content);
+  return content;
+}
+
+function writeBotProfileFallbackFile(session: TelegramSession, description: string): string {
+  fs.mkdirSync(session.cwd, { recursive: true });
+  const excerpt = normalizeProfileDescription(description).slice(0, 1000);
+  const content = [
+    "# BOT",
+    "",
+    "## 角色与目标",
+    "根据用户提供的长期描述，在 Telegram 对话中保持一致的助手画像。",
+    "",
+    "## 用户偏好",
+    excerpt,
+    "",
+    "## 工作方式",
+    "回复保持简洁、直接、可执行。优先使用中文，先给结论，再说明关键依据和风险。",
+    "",
+    "## 风险边界",
+    "涉及投资、医疗、法律等高风险内容时说明不确定性，不替用户做最终决策。"
+  ].join("\n");
+  fs.writeFileSync(getAgentProfilePath(session), `${content.trim()}\n`);
+  return content;
+}
+
+function normalizeProfileDescription(value: string): string {
+  return value
+    .trim()
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
 }

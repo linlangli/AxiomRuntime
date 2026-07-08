@@ -1,7 +1,14 @@
 import type { TelegramEngineName, TelegramPermissionMode } from "../config.js";
 
 export type TelegramSessionStatus = "idle" | "running" | "waiting_approval" | "closed";
-export type TelegramSetupStep = "workdir" | "custom_workdir" | "edit_custom_workdir" | "usage_price_input" | "cli" | "ready";
+export type TelegramSetupStep =
+  | "workdir"
+  | "custom_workdir"
+  | "edit_custom_workdir"
+  | "usage_price_input"
+  | "cli"
+  | "agent_profile"
+  | "ready";
 
 export type TelegramAttachment = {
   name: string;
@@ -23,11 +30,18 @@ export type TelegramProviderUsage = {
   updatedAt: string;
 };
 
+export type TelegramConversationTurn = {
+  user: string;
+  assistant: string;
+  createdAt: string;
+};
+
 export type TelegramSession = {
   id: string;
   chatId: number;
   engine: TelegramEngineName;
   engineSessionId: string | null;
+  botContextFingerprint: string | null;
   cwd: string;
   permissionMode: TelegramPermissionMode;
   approveAll: boolean;
@@ -35,6 +49,7 @@ export type TelegramSession = {
   status: TelegramSessionStatus;
   messageCount: number;
   attachments: TelegramAttachment[];
+  conversation: TelegramConversationTurn[];
   providerUsage: TelegramProviderUsage[];
   createdAt: string;
   lastActiveAt: string;

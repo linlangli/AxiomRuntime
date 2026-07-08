@@ -7,6 +7,8 @@ export type SpawnCaptureOptions = {
   cwd: string;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
+  timeoutMs?: number;
+  killGraceMs?: number;
   onStdout?: (chunk: string) => void | Promise<void>;
   onStderr?: (chunk: string) => void | Promise<void>;
 };
@@ -16,6 +18,8 @@ export type SpawnCaptureResult = {
   stderr: string;
   code: number | null;
   signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  aborted: boolean;
 };
 
 export async function spawnCapture(options: SpawnCaptureOptions, onProcess?: (child: ChildProcess) => void): Promise<SpawnCaptureResult> {
@@ -23,12 +27,15 @@ export async function spawnCapture(options: SpawnCaptureOptions, onProcess?: (ch
     cwd: options.cwd,
     env: options.env,
     stdio: ["ignore", "pipe", "pipe"],
-    signal: options.signal
+    detached: process.platform !== "win32"
   });
   onProcess?.(child);
 
   let stdout = "";
   let stderr = "";
+  let timedOut = false;
+  let aborted = false;
+  let killTimer: NodeJS.Timeout | undefined;
 
   child.stdout?.on("data", (chunk: Buffer) => {
     const text = chunk.toString();
@@ -41,8 +48,56 @@ export async function spawnCapture(options: SpawnCaptureOptions, onProcess?: (ch
     void options.onStderr?.(text);
   });
 
-  const [code, signal] = await once(child, "close") as [number | null, NodeJS.Signals | null];
-  return { stdout, stderr, code, signal };
+  const requestTermination = (reason: "timeout" | "abort"): void => {
+    if (reason === "timeout") timedOut = true;
+    if (reason === "abort") aborted = true;
+    terminateProcessTree(child, "SIGTERM");
+    killTimer ??= setTimeout(() => terminateProcessTree(child, "SIGKILL"), options.killGraceMs ?? 3000);
+    killTimer.unref?.();
+  };
+
+  const abortHandler = (): void => requestTermination("abort");
+  if (options.signal?.aborted) {
+    requestTermination("abort");
+  } else {
+    options.signal?.addEventListener("abort", abortHandler, { once: true });
+  }
+
+  let timeout: NodeJS.Timeout | undefined;
+  if (options.timeoutMs && options.timeoutMs > 0) {
+    timeout = setTimeout(() => requestTermination("timeout"), options.timeoutMs);
+    timeout.unref?.();
+  }
+
+  try {
+    const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve([code, signal]));
+    });
+    return { stdout, stderr, code, signal, timedOut, aborted };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (killTimer) clearTimeout(killTimer);
+    options.signal?.removeEventListener("abort", abortHandler);
+  }
+}
+
+export function terminateProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (!pid) return;
+  try {
+    if (process.platform !== "win32") {
+      process.kill(-pid, signal);
+      return;
+    }
+  } catch {
+    // Fall back to killing the direct child below.
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // The process may have already exited.
+  }
 }
 
 export function extractJsonLines(raw: string): unknown[] {

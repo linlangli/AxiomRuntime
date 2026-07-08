@@ -56,3 +56,21 @@ export function summarizeRuntime(provider: Provider, model: string, tool: CliToo
     baseUrl: getToolBaseUrl(tool, provider)
   };
 }
+
+export function formatEngineTimeout(engineLabel: string, timeoutMs: number | undefined, providerName?: string, model?: string): string {
+  return [
+    `${engineLabel} 请求超时，已自动停止。`,
+    timeoutMs ? `超时时间：${formatDuration(timeoutMs)}` : "",
+    providerName && model ? `Provider：${providerName} / ${model}` : "",
+    "这通常是 CLI 子进程、provider 上游或网络连接卡住导致的。"
+  ].filter(Boolean).join("\n");
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remaining = seconds % 60;
+  return remaining ? `${minutes}m ${remaining}s` : `${minutes}m`;
+}

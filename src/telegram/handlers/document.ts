@@ -2,16 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Bot } from "grammy";
-import type { TelegramConfig } from "../config.js";
 import { escapeHtml, truncateText } from "../interaction/formatter.js";
-import type { SessionManager } from "../session/manager.js";
+import { runAgentProfileBootstrap, type MessageHandlerDeps } from "./message.js";
+import { completeAgentProfile, showReadyCard } from "./setup.js";
 
 const MAX_ATTACHMENT_BYTES = 512 * 1024;
 
-export function registerDocumentHandler(bot: Bot, deps: {
-  sessionManager: SessionManager;
-  config: TelegramConfig;
-}): void {
+export function registerDocumentHandler(bot: Bot, deps: MessageHandlerDeps): void {
   bot.on("message:document", async (ctx) => {
     const chatId = ctx.chat.id;
     const document = ctx.message.document;
@@ -43,6 +40,17 @@ export function registerDocumentHandler(bot: Bot, deps: {
       const text = buffer.toString("utf8");
       if (text.includes("\u0000")) {
         await ctx.reply("Binary files are not supported as prompt context yet.");
+        return;
+      }
+      const current = deps.sessionManager.getOrCreate(chatId);
+      if (current.setupStep === "agent_profile") {
+        const next = await completeAgentProfile(ctx, deps, text, { showReady: false });
+        if (next && text.trim()) {
+          await runAgentProfileBootstrap(ctx, deps, next.engine);
+        }
+        if (next) {
+          await showReadyCard(ctx, deps, next);
+        }
         return;
       }
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-telegram-"));

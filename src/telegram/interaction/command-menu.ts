@@ -18,7 +18,7 @@ const BASE_COMMANDS: TelegramCommandMapping[] = [
   { command: "claude", description: "使用 Claude Code", prompt: "/claude" },
   { command: "codex", description: "使用 Codex", prompt: "/codex" },
   { command: "reset", description: "重置会话信息", prompt: "/reset" },
-  { command: "fresh", description: "清空会话聊天记录", prompt: "/fresh" },
+  { command: "fresh", description: "清空聊天窗口", prompt: "/fresh" },
   { command: "cwd", description: "查看或切换工作路径", prompt: "/cwd" },
   { command: "config", description: "查看或编辑 Bot 配置", prompt: "/config" },
   { command: "usage", description: "查看当前会话额度", prompt: "/usage" },

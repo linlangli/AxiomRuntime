@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { Engine, EngineExecuteParams, ExecutionResult, ProgressUpdate, ToolCallResult } from "./types.js";
-import { cleanupRuntime, createCommandPermissionRequest, prepareEngineRuntime, summarizeRuntime } from "./engine-utils.js";
-import { extractJsonLines, spawnCapture, stripAnsi } from "./process-utils.js";
+import { cleanupRuntime, createCommandPermissionRequest, formatEngineTimeout, prepareEngineRuntime, summarizeRuntime } from "./engine-utils.js";
+import { extractJsonLines, spawnCapture, stripAnsi, terminateProcessTree } from "./process-utils.js";
 import { requiresDangerousConfirmation } from "../interaction/approval.js";
 import { writeTelegramLog } from "../log.js";
 
@@ -52,9 +52,16 @@ export class ClaudeEngine implements Engine {
           CLAUDE_CODE_HEADLESS: "1"
         },
         signal,
+        timeoutMs: params.timeoutMs,
         onStdout: (chunk) => handleClaudeProgress(chunk, params.onProgress)
       }, (child) => this.processes.set(params.chatId, child));
 
+      if (result.timedOut) {
+        throw new Error(formatEngineTimeout("Claude Code", params.timeoutMs, runtime.provider.name, runtime.model));
+      }
+      if (result.aborted) {
+        throw new Error("任务已停止。");
+      }
       if (result.code !== 0) {
         throw new Error(stripAnsi(result.stderr || result.stdout || `Claude exited with code ${result.code}`));
       }
@@ -80,7 +87,8 @@ export class ClaudeEngine implements Engine {
       return;
     }
     this.controllers.get(chatId)?.abort();
-    this.processes.get(chatId)?.kill("SIGTERM");
+    const child = this.processes.get(chatId);
+    if (child) terminateProcessTree(child, "SIGTERM");
     this.controllers.delete(chatId);
     this.processes.delete(chatId);
   }

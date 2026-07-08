@@ -18,8 +18,10 @@ import {
   parseTelegramCommand,
   resolveMappedCommand
 } from "../dist/telegram/interaction/command-menu.js";
-import { escapeHtml, Formatter, splitPlainText, truncateText } from "../dist/telegram/interaction/formatter.js";
+import { escapeHtml, Formatter, markdownToTelegramHtml, splitPlainText, truncateText } from "../dist/telegram/interaction/formatter.js";
 import {
+  buildAgentProfileBackKeyboard,
+  buildAgentProfileKeyboard,
   buildCliKeyboard,
   buildReadyKeyboard,
   buildReadyModeKeyboard,
@@ -27,11 +29,13 @@ import {
   buildWorkdirListKeyboard,
   buildWorkdirStartKeyboard
 } from "../dist/telegram/interaction/keyboards.js";
-import { buildCodexArgs, formatCodexFailure, parseCodexOutput } from "../dist/telegram/engine/codex-engine.js";
+import { buildCodexArgs, findLatestCodexSessionId, formatCodexFailure, parseCodexOutput } from "../dist/telegram/engine/codex-engine.js";
 import { buildClaudeArgs, parseClaudeOutput } from "../dist/telegram/engine/claude-engine.js";
+import { spawnCapture } from "../dist/telegram/engine/process-utils.js";
 import { resolveWorkingCommand } from "../dist/telegram/engine/engine-utils.js";
-import { deleteRecentChatMessages, shouldHandleStartCommand } from "../dist/telegram/handlers/command.js";
-import { startTypingStatus } from "../dist/telegram/handlers/message.js";
+import { deleteRecentChatMessages, registerCommands, shouldHandleStartCommand } from "../dist/telegram/handlers/command.js";
+import { registerDocumentHandler } from "../dist/telegram/handlers/document.js";
+import { executePrompt, registerMessageHandler, startTypingStatus } from "../dist/telegram/handlers/message.js";
 import { parseModelPriceInput } from "../dist/telegram/handlers/usage.js";
 import { SessionManager } from "../dist/telegram/session/manager.js";
 import { SessionStore } from "../dist/telegram/session/store.js";
@@ -89,6 +93,8 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     assert.equal(session.engine, "claude");
     assert.equal(session.status, "idle");
     assert.equal(session.setupStep, "ready");
+    assert.equal(session.botContextFingerprint, null);
+    assert.deepEqual(session.conversation, []);
     assert.deepEqual(session.providerUsage, []);
 
     const usage = manager.recordProviderUsage(session.id, {
@@ -122,8 +128,15 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     manager.addAttachment(123, { name: "a.txt", path: "/tmp/a.txt", text: "hello", createdAt: "now" });
     const withAttachment = manager.getOrCreate(123);
     assert.equal(withAttachment.attachments.length, 1);
+    const withConversation = manager.appendConversationTurn(withAttachment.id, {
+      user: "上一轮问题",
+      assistant: "上一轮回答"
+    });
+    assert.equal(withConversation.conversation.length, 1);
+    assert.equal(withConversation.conversation[0].user, "上一轮问题");
     const dirty = manager.update(withAttachment.id, {
       engineSessionId: "engine-session-1",
+      botContextFingerprint: "codex:/tmp/project:abc",
       approveAll: true,
       messageCount: 3
     });
@@ -134,9 +147,11 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     assert.equal(cleared.permissionMode, dirty.permissionMode);
     assert.equal(cleared.setupStep, dirty.setupStep);
     assert.equal(cleared.engineSessionId, null);
+    assert.equal(cleared.botContextFingerprint, null);
     assert.equal(cleared.approveAll, false);
     assert.equal(cleared.messageCount, 0);
     assert.equal(cleared.attachments.length, 0);
+    assert.equal(cleared.conversation.length, 0);
 
     const next = manager.newSession(123);
     assert.notEqual(next.id, session.id);
@@ -150,6 +165,8 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     assert.equal(setup.setupStep, "workdir");
     const custom = manager.update(setup.id, { setupStep: "custom_workdir" });
     assert.equal(custom.setupStep, "custom_workdir");
+    const profile = manager.update(setup.id, { setupStep: "agent_profile" });
+    assert.equal(profile.setupStep, "agent_profile");
     manager.rememberWorkdir(123, path.join(tempDir, "project-a"));
     assert.deepEqual(manager.getWorkdirs(123), [path.join(tempDir, "project-a")]);
     store.close();
@@ -166,6 +183,9 @@ test("formatter escapes and splits telegram text safely", () => {
   assert.doesNotMatch(Formatter.workdirList(["/Users/linlangli/Script"]), /1\.|📁/);
   assert.equal(Formatter.cliPrompt("/Users/linlangli/Script"), "🤖 确定你要使用的CLI吧");
   assert.equal(Formatter.cliRequired(), "🤖 先确定你想使用的CLI哦。");
+  assert.equal(Formatter.agentProfilePrompt(), "🤖 介绍一下我和你吧，可以帮你构建画像哦");
+  assert.match(Formatter.agentProfile("# BOT\n\n<profile>"), /<b>BOT\.md<\/b>/);
+  assert.match(Formatter.agentProfile("# BOT\n\n<profile>"), /&lt;profile&gt;/);
   const sessionCard = Formatter.sessionCard({
     id: "1350dd03abcdef",
     chatId: 1,
@@ -299,7 +319,7 @@ test("formatter escapes and splits telegram text safely", () => {
   assert.doesNotMatch(sessionCard, /blockquote|工作路径|Provider|Model|权限模式|🍺|✨|🆔|📁|🧰|🔌|🧠|🛡️/);
   assert.match(Formatter.help(), /\/claude prompt - 使用 Claude Code/);
   assert.match(Formatter.help(), /\/reset - 重置会话信息/);
-  assert.match(Formatter.help(), /\/fresh - 清空会话聊天记录/);
+  assert.match(Formatter.help(), /\/fresh - 清空聊天窗口/);
   assert.match(Formatter.help(), /\/config - 查看或编辑 Bot 配置/);
   assert.match(Formatter.help(), /\/usage - 查看当前会话额度/);
   assert.doesNotMatch(Formatter.help(), /\/mode|\/new|\/resume|\/stop|\/session|\/history/);
@@ -312,6 +332,32 @@ test("formatter escapes and splits telegram text safely", () => {
   });
   assert.equal(completed, "我现在是 Codex，基于 GPT-5 的编码代理。");
   assert.doesNotMatch(completed, /Done|Status: processing|Prompt:|18\.8s|额度|51talk-codex|gpt-5\.5|<i>/);
+  const markdownCompleted = Formatter.taskCompleted("codex", {
+    response: [
+      "你目前亏最多的基金是：**天弘中证食品饮料ETF联接C**。",
+      "",
+      "| 基金 | 当前市值 | 浮亏 | 收益率 |",
+      "|---|---:|---:|---:|",
+      "| 天弘中证食品饮料ETF联接C | ¥5,227.99 | **-¥1,034.25** | **-16.52%** |",
+      "",
+      "如果只看“亏损金额”，食品饮料亏得最多：**亏约 1034 元**。"
+    ].join("\n")
+  });
+  assert.match(markdownCompleted, /<b>天弘中证食品饮料ETF联接C<\/b>/);
+  assert.match(markdownCompleted, /当前市值：¥5,227\.99/);
+  assert.match(markdownCompleted, /浮亏：<b>-¥1,034\.25<\/b>/);
+  assert.match(markdownCompleted, /-¥1,034\.25/);
+  assert.doesNotMatch(markdownCompleted, /\*\*|\|---|<pre>基金/);
+  const strategyTable = markdownToTelegramHtml([
+    "| 策略 | 适合情况 | 优点 | 风险 |",
+    "|---|---|---|---|",
+    "| 直接割肉 | 你彻底不看好中国消费和白酒 | 释放资金，转向更强主线 | 可能卖在低位，错过修复 |",
+    "| 降低到小额定投/暂停 | 你不想割肉，但也想提高资金效率 | 保留修复机会，把新钱投向更强资产 | 回本速度可能变慢 |"
+  ].join("\n"));
+  assert.match(strategyTable, /<b>直接割肉<\/b>\n适合情况：你彻底不看好中国消费和白酒\n优点：释放资金/);
+  assert.match(strategyTable, /<b>降低到小额定投\/暂停<\/b>\n适合情况：你不想割肉/);
+  assert.doesNotMatch(strategyTable, /<pre>|-{3,}|策略\s+适合情况/);
+  assert.equal(markdownToTelegramHtml("`<x>` and [OpenAI](https://openai.com)"), "<code>&lt;x&gt;</code> and <a href=\"https://openai.com\">OpenAI</a>");
 });
 
 test("workdir setup keyboards use compact labels and absolute path buttons", () => {
@@ -327,6 +373,12 @@ test("workdir setup keyboards use compact labels and absolute path buttons", () 
     { text: "Claude Code", callback_data: "setup:cli:claude" },
     { text: "Codex", callback_data: "setup:cli:codex" }
   ]]);
+  assert.deepEqual(buildAgentProfileKeyboard().inline_keyboard, [[
+    { text: "暂不提供", callback_data: "setup:agent:skip" }
+  ]]);
+  assert.deepEqual(buildAgentProfileBackKeyboard().inline_keyboard, [[
+    { text: "back", callback_data: "ready:back" }
+  ]]);
   assert.deepEqual(buildReadyKeyboard({
     cli: "Codex",
     providerModel: "51talk-codex · gpt-5.5",
@@ -336,7 +388,8 @@ test("workdir setup keyboards use compact labels and absolute path buttons", () 
     [{ text: "Codex", callback_data: "ready:cli" }],
     [{ text: "51talk-codex · gpt-5.5", callback_data: "ready:provider" }],
     [{ text: "默认权限", callback_data: "ready:mode" }],
-    [{ text: "/Users/linlangli/Script", callback_data: "ready:workdir" }]
+    [{ text: "/Users/linlangli/Script", callback_data: "ready:workdir" }],
+    [{ text: "BOT", callback_data: "ready:agent" }]
   ]);
   assert.deepEqual(buildReadyModeKeyboard().inline_keyboard[0], [
     { text: "默认权限", callback_data: "ready:mode:pick:default" }
@@ -364,7 +417,7 @@ test("usage price input parser accepts compact price formats", () => {
 test("telegram command menu maps selected CLI slash commands", () => {
   assert.deepEqual(getBaseBotCommands().map((item) => item.command), ["claude", "codex", "reset", "fresh", "cwd", "config", "usage", "help"]);
   assert.equal(getBaseBotCommands().find((item) => item.command === "reset")?.description, "重置会话信息");
-  assert.equal(getBaseBotCommands().find((item) => item.command === "fresh")?.description, "清空会话聊天记录");
+  assert.equal(getBaseBotCommands().find((item) => item.command === "fresh")?.description, "清空聊天窗口");
   assert.equal(getBaseBotCommands().find((item) => item.command === "config")?.description, "查看或编辑 Bot 配置");
   assert.equal(getBaseBotCommands().find((item) => item.command === "usage")?.description, "查看当前会话额度");
   const claudeCommands = getChatBotCommands("claude").map((item) => item.command);
@@ -402,6 +455,483 @@ test("typing status sends Telegram chat action immediately", () => {
   }, 123);
   stop();
   assert.deepEqual(calls, [[123, "typing"]]);
+});
+
+test("agent profile text writes BOT.md and runs init", async () => {
+  await withTempHome(async (tempDir) => {
+    const projectDir = path.join(tempDir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: projectDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "51talk-codex",
+      model: "gpt-5.5",
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const setup = manager.startSetup(123);
+    manager.update(setup.id, { cwd: projectDir, engine: "codex", setupStep: "agent_profile" });
+
+    const engineCalls = [];
+    const fakeEngine = {
+      name: "codex",
+      execute: async (params) => {
+        engineCalls.push(params);
+        if (String(params.prompt).includes("PROMPT.md") && String(params.prompt).includes("BOT.md")) {
+          await fs.writeFile(path.join(params.cwd, "BOT.md"), "# BOT\n\n## 用户偏好\n喜欢直接给结论。\n", "utf8");
+        }
+        return { response: "initialized", sessionId: "engine-session", provider: "51talk-codex", model: "gpt-5.5" };
+      },
+      abort: () => undefined
+    };
+    let handler;
+    registerMessageHandler({
+      on: (_event, callback) => {
+        handler = callback;
+      }
+    }, {
+      sessionManager: manager,
+      claudeEngine: { ...fakeEngine, name: "claude" },
+      codexEngine: fakeEngine,
+      approvalManager: { request: async () => true },
+      config
+    });
+
+    const replies = [];
+    const typing = [];
+    await handler({
+      message: { text: "我是 Lin，喜欢直接给结论。" },
+      chat: { id: 123 },
+      reply: async (text) => {
+        replies.push(text);
+      },
+      api: {
+        sendChatAction: async (chatId, action) => {
+          typing.push([chatId, action]);
+          return true;
+        }
+      }
+    });
+
+    const raw = await fs.readFile(path.join(projectDir, "PROMPT.md"), "utf8");
+    const content = await fs.readFile(path.join(projectDir, "BOT.md"), "utf8");
+    assert.equal(raw, "我是 Lin，喜欢直接给结论。\n");
+    assert.match(content, /喜欢直接给结论/);
+    assert.equal(engineCalls.length, 2);
+    assert.match(engineCalls[0].prompt, /PROMPT\.md/);
+    assert.match(engineCalls[0].prompt, /BOT\.md/);
+    assert.doesNotMatch(engineCalls[0].prompt, /bot_context/);
+    assert.equal(engineCalls[0].timeoutMs, 120000);
+    assert.equal(engineCalls[1].prompt, "/init");
+    assert.equal(engineCalls[1].cwd, projectDir);
+    assert.equal(engineCalls[1].permissionMode, "bypassPermissions");
+    assert.equal(engineCalls[1].timeoutMs, 180000);
+    assert.equal(manager.getOrCreate(123).setupStep, "ready");
+    assert.equal(replies.some((text) => String(text).includes("已就绪")), true);
+    assert.equal(replies.some((text) => String(text).includes("initialized")), false);
+    assert.deepEqual(typing[0], [123, "typing"]);
+    store.close();
+  });
+});
+
+test("agent profile document writes BOT.md and runs init instead of attaching", async () => {
+  await withTempHome(async (tempDir) => {
+    const projectDir = path.join(tempDir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "claude",
+      defaultCwd: projectDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "51talk-cs",
+      model: "claude-opus-4-6",
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const setup = manager.startSetup(123);
+    manager.update(setup.id, { cwd: projectDir, engine: "claude", setupStep: "agent_profile" });
+
+    const engineCalls = [];
+    const fakeEngine = {
+      name: "claude",
+      execute: async (params) => {
+        engineCalls.push(params);
+        if (String(params.prompt).includes("PROMPT.md") && String(params.prompt).includes("BOT.md")) {
+          await fs.writeFile(path.join(params.cwd, "BOT.md"), "# BOT\n\n## 用户偏好\n偏好中文直接回复。\n", "utf8");
+        }
+        return { response: "initialized", sessionId: "engine-session", provider: "51talk-cs", model: "claude-opus-4-6" };
+      },
+      abort: () => undefined
+    };
+    let handler;
+    registerDocumentHandler({
+      on: (_event, callback) => {
+        handler = callback;
+      }
+    }, {
+      sessionManager: manager,
+      claudeEngine: fakeEngine,
+      codexEngine: { ...fakeEngine, name: "codex" },
+      approvalManager: { request: async () => true },
+      config
+    });
+
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response("我是 Lin，偏好中文直接回复。");
+    const replies = [];
+    try {
+      await handler({
+        message: {
+          document: {
+            file_name: "PROMPT.md",
+            file_size: 42
+          }
+        },
+        chat: { id: 123 },
+        getFile: async () => ({ file_path: "documents/PROMPT.md" }),
+        reply: async (text) => {
+          replies.push(text);
+        },
+        api: {
+          sendChatAction: async () => true
+        }
+      });
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+
+    const session = manager.getOrCreate(123);
+    const raw = await fs.readFile(path.join(projectDir, "PROMPT.md"), "utf8");
+    const content = await fs.readFile(path.join(projectDir, "BOT.md"), "utf8");
+    assert.equal(raw, "我是 Lin，偏好中文直接回复。\n");
+    assert.match(content, /偏好中文直接回复/);
+    assert.equal(session.setupStep, "ready");
+    assert.equal(session.attachments.length, 0);
+    assert.equal(engineCalls.length, 2);
+    assert.match(engineCalls[0].prompt, /PROMPT\.md/);
+    assert.match(engineCalls[0].prompt, /BOT\.md/);
+    assert.equal(engineCalls[0].timeoutMs, 120000);
+    assert.equal(engineCalls[1].prompt, "/init");
+    assert.equal(engineCalls[1].cwd, projectDir);
+    assert.equal(engineCalls[1].timeoutMs, 180000);
+    assert.equal(replies.some((text) => String(text).includes("Attached")), false);
+    assert.equal(replies.some((text) => String(text).includes("已就绪")), true);
+    assert.equal(replies.some((text) => String(text).includes("initialized")), false);
+    store.close();
+  });
+});
+
+test("regular telegram prompts include BOT.md context once per session", async () => {
+  await withTempHome(async (tempDir) => {
+    const projectDir = path.join(tempDir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, "BOT.md"), "# BOT\n\n偏好：回答要简洁直接。\n", "utf8");
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: projectDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "51talk-codex",
+      model: "gpt-5.5",
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.getOrCreate(123);
+    manager.update(session.id, { cwd: projectDir, engine: "codex", setupStep: "ready" });
+
+    const engineCalls = [];
+    const fakeEngine = {
+      name: "codex",
+      execute: async (params) => {
+        engineCalls.push(params);
+        return { response: "ok", sessionId: "engine-session", provider: "51talk-codex", model: "gpt-5.5" };
+      },
+      abort: () => undefined
+    };
+    let handler;
+    registerMessageHandler({
+      on: (_event, callback) => {
+        handler = callback;
+      }
+    }, {
+      sessionManager: manager,
+      claudeEngine: { ...fakeEngine, name: "claude" },
+      codexEngine: fakeEngine,
+      approvalManager: { request: async () => true },
+      config
+    });
+
+    await handler({
+      message: { text: "今天怎么规划？" },
+      chat: { id: 123 },
+      reply: async () => undefined,
+      api: {
+        sendChatAction: async () => true
+      }
+    });
+
+    assert.equal(engineCalls.length, 1);
+    assert.match(engineCalls[0].prompt, /<bot_context source="BOT\.md">/);
+    assert.match(engineCalls[0].prompt, /回答要简洁直接/);
+    assert.match(engineCalls[0].prompt, /今天怎么规划？/);
+
+    await handler({
+      message: { text: "继续" },
+      chat: { id: 123 },
+      reply: async () => undefined,
+      api: {
+        sendChatAction: async () => true
+      }
+    });
+
+    assert.equal(engineCalls.length, 2);
+    assert.doesNotMatch(engineCalls[1].prompt, /<bot_context source="BOT\.md">/);
+    assert.match(engineCalls[1].prompt, /继续/);
+    assert.equal(manager.getOrCreate(123).botContextFingerprint?.includes("codex:"), true);
+
+    const cleared = manager.clearConversation(123);
+    assert.equal(cleared.botContextFingerprint, null);
+    store.close();
+  });
+});
+
+test("telegram prompts include recent conversation when engine session id is unavailable", async () => {
+  await withTempHome(async (tempDir) => {
+    const projectDir = path.join(tempDir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: projectDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "51talk-codex",
+      model: "gpt-5.5",
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.getOrCreate(123);
+    manager.update(session.id, { cwd: projectDir, engine: "codex", setupStep: "ready" });
+
+    const engineCalls = [];
+    const fakeEngine = {
+      name: "codex",
+      execute: async (params) => {
+        engineCalls.push(params);
+        return {
+          response: engineCalls.length === 1
+            ? "亏最多的是天弘中证食品饮料ETF联接C。"
+            : "可以继续分析这支基金。",
+          provider: "51talk-codex",
+          model: "gpt-5.5"
+        };
+      },
+      abort: () => undefined
+    };
+    let handler;
+    registerMessageHandler({
+      on: (_event, callback) => {
+        handler = callback;
+      }
+    }, {
+      sessionManager: manager,
+      claudeEngine: { ...fakeEngine, name: "claude" },
+      codexEngine: fakeEngine,
+      approvalManager: { request: async () => true },
+      config
+    });
+
+    await handler({
+      message: { text: "我现在亏最多的基金是哪支？" },
+      chat: { id: 123 },
+      reply: async () => undefined,
+      api: { sendChatAction: async () => true }
+    });
+    await handler({
+      message: { text: "这支还要继续定投吗？" },
+      chat: { id: 123 },
+      reply: async () => undefined,
+      api: { sendChatAction: async () => true }
+    });
+
+    assert.equal(engineCalls.length, 2);
+    assert.equal(engineCalls[1].resume, null);
+    assert.match(engineCalls[1].prompt, /<recent_conversation purpose=/);
+    assert.match(engineCalls[1].prompt, /我现在亏最多的基金是哪支？/);
+    assert.match(engineCalls[1].prompt, /天弘中证食品饮料ETF联接C/);
+    assert.match(engineCalls[1].prompt, /这支还要继续定投吗？/);
+    assert.equal(manager.getOrCreate(123).conversation.length, 2);
+    store.close();
+  });
+});
+
+test("switching telegram engines carries recent conversation fallback", async () => {
+  await withTempHome(async (tempDir) => {
+    const projectDir = path.join(tempDir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: projectDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "51talk-cs",
+      model: "claude-opus-4-6",
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.getOrCreate(123);
+    manager.update(session.id, { cwd: projectDir, engine: "codex", setupStep: "ready" });
+    manager.appendConversationTurn(session.id, {
+      user: "Codex 上一轮问题",
+      assistant: "Codex 上一轮回答"
+    });
+
+    const engineCalls = [];
+    const claudeEngine = {
+      name: "claude",
+      execute: async (params) => {
+        engineCalls.push(params);
+        return {
+          response: "Claude 新会话回答",
+          provider: "51talk-cs",
+          model: "claude-opus-4-6"
+        };
+      },
+      abort: () => undefined
+    };
+
+    await executePrompt({
+      chat: { id: 123 },
+      reply: async () => undefined,
+      api: { sendChatAction: async () => true }
+    }, {
+      sessionManager: manager,
+      claudeEngine,
+      codexEngine: { ...claudeEngine, name: "codex" },
+      approvalManager: { request: async () => true },
+      config
+    }, "切换到 Claude 后的新问题", "claude");
+
+    assert.equal(engineCalls.length, 1);
+    assert.equal(engineCalls[0].resume, null);
+    assert.match(engineCalls[0].prompt, /<recent_conversation purpose=/);
+    assert.match(engineCalls[0].prompt, /Codex 上一轮问题/);
+    assert.match(engineCalls[0].prompt, /Codex 上一轮回答/);
+    const current = manager.getOrCreate(123);
+    assert.equal(current.engine, "claude");
+    assert.equal(current.conversation.length, 2);
+    assert.equal(current.conversation[0].user, "Codex 上一轮问题");
+    assert.equal(current.conversation[1].user, "切换到 Claude 后的新问题");
+    store.close();
+  });
+});
+
+test("fresh clears telegram window without resetting engine context", async () => {
+  await withTempHome(async (tempDir) => {
+    const projectDir = path.join(tempDir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: projectDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "51talk-codex",
+      model: "gpt-5.5",
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.getOrCreate(123);
+    const withConversation = manager.appendConversationTurn(session.id, {
+      user: "上一轮问题",
+      assistant: "上一轮回答"
+    });
+    manager.update(withConversation.id, {
+      engineSessionId: "codex-session-1",
+      botContextFingerprint: "codex:fingerprint"
+    });
+
+    const commands = new Map();
+    const bot = {
+      command: (name, callback) => {
+        commands.set(name, callback);
+      },
+      api: {
+        setMyCommands: async () => true
+      }
+    };
+    const fakeEngine = { name: "codex", execute: async () => ({ response: "ok" }), abort: () => undefined };
+    registerCommands(bot, {
+      sessionManager: manager,
+      claudeEngine: { ...fakeEngine, name: "claude" },
+      codexEngine: fakeEngine,
+      engines: {
+        claude: { ...fakeEngine, name: "claude" },
+        codex: fakeEngine
+      },
+      approvalManager: {
+        request: async () => true,
+        resolveAll: () => undefined
+      },
+      config
+    });
+
+    const replies = [];
+    await commands.get("fresh")({
+      chat: { id: 123 },
+      message: { message_id: 10 },
+      reply: async (text) => {
+        replies.push(text);
+      },
+      api: {
+        deleteMessages: async () => true,
+        deleteMessage: async () => true
+      }
+    });
+
+    const current = manager.getOrCreate(123);
+    assert.equal(current.engineSessionId, "codex-session-1");
+    assert.equal(current.botContextFingerprint, "codex:fingerprint");
+    assert.equal(current.conversation.length, 1);
+    assert.match(String(replies[0]), /聊天记录已清理/);
+    store.close();
+  });
 });
 
 test("fresh deletion scans backward and falls back to single deletes", async () => {
@@ -455,6 +985,20 @@ test("codex args map permission modes to non-interactive CLI flags", () => {
   assert.equal(proxiedArgs.includes("model_provider=\"ai_gateway_proxy\""), true);
   assert.equal(proxiedArgs.includes("model_providers.ai_gateway_proxy.base_url=\"http://127.0.0.1:12345/v1\""), true);
   assert.equal(proxiedArgs.includes("model_providers.ai_gateway_proxy.wire_api=\"responses\""), true);
+  assert.deepEqual(buildCodexArgs("again", "gpt-5.5", "/tmp/project", "default", undefined, "session-1"), [
+    "-s",
+    "workspace-write",
+    "-a",
+    "on-request",
+    "exec",
+    "resume",
+    "--json",
+    "--skip-git-repo-check",
+    "-m",
+    "gpt-5.5",
+    "session-1",
+    "again"
+  ]);
 });
 
 test("codex failure formatter hides benign diagnostics", () => {
@@ -481,6 +1025,52 @@ test("claude args include verbose stream-json output", () => {
   assert.equal(args.includes("--verbose"), true);
 });
 
+test("codex session id fallback reads local session metadata", async () => {
+  await withTempHome(async (tempDir) => {
+    const codexHome = path.join(tempDir, ".codex");
+    const cwd = path.join(tempDir, "project");
+    await fs.mkdir(cwd, { recursive: true });
+    const startedAtMs = Date.now();
+    const date = new Date(startedAtMs);
+    const sessionDir = path.join(
+      codexHome,
+      "sessions",
+      String(date.getFullYear()),
+      String(date.getMonth() + 1).padStart(2, "0"),
+      String(date.getDate()).padStart(2, "0")
+    );
+    await fs.mkdir(sessionDir, { recursive: true });
+    const sessionId = "019f4110-5969-7f73-9576-bd071405af09";
+    const filePath = path.join(sessionDir, `rollout-${sessionId}.jsonl`);
+    await fs.writeFile(filePath, [
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          session_id: sessionId,
+          id: sessionId,
+          cwd,
+          source: "exec"
+        }
+      }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [] } })
+    ].join("\n"), "utf8");
+    await fs.utimes(filePath, new Date(startedAtMs), new Date(startedAtMs));
+
+    assert.equal(findLatestCodexSessionId({
+      cwd,
+      startedAtMs: startedAtMs - 1000,
+      finishedAtMs: startedAtMs + 1000,
+      codexHome
+    }), sessionId);
+    assert.equal(findLatestCodexSessionId({
+      cwd: path.join(tempDir, "other"),
+      startedAtMs: startedAtMs - 1000,
+      finishedAtMs: startedAtMs + 1000,
+      codexHome
+    }), undefined);
+  });
+});
+
 test("engine output parsers extract final text and metadata", () => {
   const claude = parseClaudeOutput([
     JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Edit", input: { file_path: "a.ts" } }] } }),
@@ -499,6 +1089,12 @@ test("engine output parsers extract final text and metadata", () => {
   assert.equal(codex.sessionId, "cid");
   assert.deepEqual(codex.filesChanged, ["b.ts"]);
   assert.equal(codex.toolCalls.length, 1);
+
+  const nestedCodex = parseCodexOutput(JSON.stringify({
+    type: "session_configured",
+    payload: { session_id: "019f4110-5969-7f73-9576-bd071405af09" }
+  }), 100);
+  assert.equal(nestedCodex.sessionId, "019f4110-5969-7f73-9576-bd071405af09");
 });
 
 test("telegram engine command resolver skips broken codex shim when app binary exists", () => {
@@ -508,6 +1104,19 @@ test("telegram engine command resolver skips broken codex shim when app binary e
 
   const command = resolveWorkingCommand("codex");
   assert.equal(command, "/Applications/Codex.app/Contents/Resources/codex");
+});
+
+test("spawn capture times out and stops hanging processes", async () => {
+  const result = await spawnCapture({
+    command: process.execPath,
+    args: ["-e", "setInterval(() => {}, 1000)"],
+    cwd: process.cwd(),
+    env: process.env,
+    timeoutMs: 50,
+    killGraceMs: 10
+  });
+  assert.equal(result.timedOut, true);
+  assert.equal(result.aborted, false);
 });
 
 async function withTempHome(fn) {

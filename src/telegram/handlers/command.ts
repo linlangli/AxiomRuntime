@@ -2,12 +2,12 @@ import fs from "node:fs";
 import { type Bot, type CommandContext, type Context } from "grammy";
 import type { TelegramConfig, TelegramEngineName } from "../config.js";
 import type { Engine } from "../engine/types.js";
-import { safeResetChatCommandMenu } from "../interaction/command-menu.js";
+import { safeResetChatCommandMenu, safeSetChatCommandMenu } from "../interaction/command-menu.js";
 import { Formatter, escapeHtml } from "../interaction/formatter.js";
 import type { ApprovalManager } from "../interaction/approval.js";
 import type { SessionManager } from "../session/manager.js";
 import { executePrompt, type MessageHandlerDeps } from "./message.js";
-import { selectCli, showConfigPanel, startSetup } from "./setup.js";
+import { selectCli, showConfigPanel, showReadyCard, startSetup } from "./setup.js";
 import { showUsagePanel } from "./usage.js";
 
 const FRESH_DELETE_SCAN_LIMIT = 1000;
@@ -46,8 +46,7 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
       await ctx.reply("已有任务正在运行，请等待完成。");
       return;
     }
-    const cleared = deps.sessionManager.clearConversation(ctx.chat.id);
-    await ctx.reply(Formatter.sessionCleared(cleared), { parse_mode: "HTML" });
+    await ctx.reply(Formatter.sessionCleared(session), { parse_mode: "HTML" });
     await deleteRecentChatMessages(ctx, ctx.chat.id, ctx.message?.message_id);
   });
 
@@ -69,11 +68,11 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
   });
 
   bot.command("claude", async (ctx) => {
-    await runEngineCommand(ctx, deps, "claude");
+    await runEngineCommand(ctx, deps, bot, "claude");
   });
 
   bot.command("codex", async (ctx) => {
-    await runEngineCommand(ctx, deps, "codex");
+    await runEngineCommand(ctx, deps, bot, "codex");
   });
 
   bot.command("cwd", async (ctx) => {
@@ -87,7 +86,11 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
       await ctx.reply(`Directory not found: <code>${escapeHtml(cwd)}</code>`, { parse_mode: "HTML" });
       return;
     }
-    deps.sessionManager.update(session.id, { cwd });
+    deps.sessionManager.update(session.id, {
+      cwd,
+      engineSessionId: null,
+      botContextFingerprint: null
+    });
     await ctx.reply(`cwd: <code>${escapeHtml(cwd)}</code>`, { parse_mode: "HTML" });
   });
 }
@@ -110,16 +113,22 @@ async function safeDeleteCommandMessage(ctx: CommandContext<Context>): Promise<v
   }
 }
 
-async function runEngineCommand(ctx: CommandContext<Context>, deps: CommandDeps, engine: TelegramEngineName): Promise<void> {
+async function runEngineCommand(ctx: CommandContext<Context>, deps: CommandDeps, bot: Bot, engine: TelegramEngineName): Promise<void> {
   const prompt = String(ctx.match ?? "").trim();
   const session = deps.sessionManager.getOrCreate(ctx.chat.id);
   if (session.setupStep !== "ready") {
     await selectCli(ctx, deps, engine);
     return;
   }
-  deps.sessionManager.update(session.id, { engine, setupStep: "ready" });
+  const next = deps.sessionManager.update(session.id, {
+    engine,
+    engineSessionId: session.engine === engine ? session.engineSessionId : null,
+    botContextFingerprint: session.engine === engine ? session.botContextFingerprint : null,
+    setupStep: "ready"
+  });
   if (!prompt) {
-    await selectCli(ctx, deps, engine);
+    await safeSetChatCommandMenu(bot, ctx.chat.id, engine);
+    await showReadyCard(ctx, deps, next);
     return;
   }
   await executePrompt(ctx, deps, prompt, engine);

@@ -34,6 +34,16 @@ export function buildCliKeyboard(): InlineKeyboard {
     .text("Codex", "setup:cli:codex");
 }
 
+export function buildAgentProfileKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("暂不提供", "setup:agent:skip");
+}
+
+export function buildAgentProfileBackKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("back", "ready:back");
+}
+
 export function buildReadyKeyboard(input: {
   cli: string;
   providerModel: string;
@@ -47,7 +57,9 @@ export function buildReadyKeyboard(input: {
     .row()
     .text(formatPermissionModeLabel(input.permissionMode), "ready:mode")
     .row()
-    .text(input.cwd, "ready:workdir");
+    .text(input.cwd, "ready:workdir")
+    .row()
+    .text("BOT", "ready:agent");
 }
 
 export function buildReadyCliKeyboard(): InlineKeyboard {

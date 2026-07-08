@@ -2,13 +2,21 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import type { TelegramAttachment, TelegramProviderUsage, TelegramSession, TelegramSessionCreateInput, TelegramSetupStep } from "./types.js";
+import type {
+  TelegramAttachment,
+  TelegramConversationTurn,
+  TelegramProviderUsage,
+  TelegramSession,
+  TelegramSessionCreateInput,
+  TelegramSetupStep
+} from "./types.js";
 
 type SessionRow = {
   id: string;
   chat_id: number;
   engine: string;
   engine_session_id: string | null;
+  bot_context_fingerprint: string | null;
   cwd: string;
   permission_mode: string;
   approve_all: number;
@@ -16,6 +24,7 @@ type SessionRow = {
   status: string;
   message_count: number;
   attachments_json: string;
+  conversation_json: string;
   provider_usage_json: string;
   created_at: string;
   last_active_at: string;
@@ -42,6 +51,7 @@ export class SessionStore {
       chatId: input.chatId,
       engine: input.engine,
       engineSessionId: null,
+      botContextFingerprint: null,
       cwd: input.cwd,
       permissionMode: input.permissionMode,
       approveAll: input.approveAll ?? false,
@@ -49,23 +59,25 @@ export class SessionStore {
       status: input.status ?? "idle",
       messageCount: 0,
       attachments: [],
+      conversation: [],
       providerUsage: [],
       createdAt: now,
       lastActiveAt: now
     };
     this.db.prepare(
       `insert into sessions (
-        id, chat_id, engine, engine_session_id, cwd, permission_mode, approve_all, setup_step,
-        status, message_count, attachments_json, provider_usage_json, created_at, last_active_at
+        id, chat_id, engine, engine_session_id, bot_context_fingerprint, cwd, permission_mode, approve_all, setup_step,
+        status, message_count, attachments_json, conversation_json, provider_usage_json, created_at, last_active_at
       ) values (
-        @id, @chatId, @engine, @engineSessionId, @cwd, @permissionMode, @approveAll, @setupStep,
-        @status, @messageCount, @attachmentsJson, @providerUsageJson, @createdAt, @lastActiveAt
+        @id, @chatId, @engine, @engineSessionId, @botContextFingerprint, @cwd, @permissionMode, @approveAll, @setupStep,
+        @status, @messageCount, @attachmentsJson, @conversationJson, @providerUsageJson, @createdAt, @lastActiveAt
       )`
     ).run({
       ...session,
       approveAll: session.approveAll ? 1 : 0,
       setupStep: session.setupStep,
       attachmentsJson: JSON.stringify(session.attachments),
+      conversationJson: JSON.stringify(session.conversation),
       providerUsageJson: JSON.stringify(session.providerUsage)
     });
     return session;
@@ -114,6 +126,7 @@ export class SessionStore {
       ...current,
       ...patch,
       attachments: patch.attachments ?? current.attachments,
+      conversation: patch.conversation ?? current.conversation,
       providerUsage: patch.providerUsage ?? current.providerUsage,
       lastActiveAt: patch.lastActiveAt ?? new Date().toISOString()
     };
@@ -121,6 +134,7 @@ export class SessionStore {
       `update sessions set
         engine = @engine,
         engine_session_id = @engineSessionId,
+        bot_context_fingerprint = @botContextFingerprint,
         cwd = @cwd,
         permission_mode = @permissionMode,
         approve_all = @approveAll,
@@ -128,6 +142,7 @@ export class SessionStore {
         status = @status,
         message_count = @messageCount,
         attachments_json = @attachmentsJson,
+        conversation_json = @conversationJson,
         provider_usage_json = @providerUsageJson,
         last_active_at = @lastActiveAt
        where id = @id`
@@ -135,6 +150,7 @@ export class SessionStore {
       id,
       engine: next.engine,
       engineSessionId: next.engineSessionId,
+      botContextFingerprint: next.botContextFingerprint,
       cwd: next.cwd,
       permissionMode: next.permissionMode,
       approveAll: next.approveAll ? 1 : 0,
@@ -142,6 +158,7 @@ export class SessionStore {
       status: next.status,
       messageCount: next.messageCount,
       attachmentsJson: JSON.stringify(next.attachments),
+      conversationJson: JSON.stringify(next.conversation),
       providerUsageJson: JSON.stringify(next.providerUsage),
       lastActiveAt: next.lastActiveAt
     });
@@ -200,6 +217,7 @@ export class SessionStore {
         chat_id integer not null,
         engine text not null,
         engine_session_id text,
+        bot_context_fingerprint text,
         cwd text not null,
         permission_mode text not null,
         approve_all integer not null default 0,
@@ -207,6 +225,7 @@ export class SessionStore {
         status text not null,
         message_count integer not null default 0,
         attachments_json text not null default '[]',
+        conversation_json text not null default '[]',
         provider_usage_json text not null default '[]',
         created_at text not null,
         last_active_at text not null
@@ -222,6 +241,8 @@ export class SessionStore {
     `);
     this.ensureColumn("sessions", "setup_step", "setup_step text not null default 'ready'");
     this.ensureColumn("sessions", "provider_usage_json", "provider_usage_json text not null default '[]'");
+    this.ensureColumn("sessions", "bot_context_fingerprint", "bot_context_fingerprint text");
+    this.ensureColumn("sessions", "conversation_json", "conversation_json text not null default '[]'");
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -238,6 +259,7 @@ function rowToSession(row: SessionRow): TelegramSession {
     chatId: row.chat_id,
     engine: row.engine === "codex" ? "codex" : "claude",
     engineSessionId: row.engine_session_id,
+    botContextFingerprint: row.bot_context_fingerprint ?? null,
     cwd: row.cwd,
     permissionMode: row.permission_mode === "acceptEdits" || row.permission_mode === "bypassPermissions" ? row.permission_mode : "default",
     approveAll: row.approve_all === 1,
@@ -245,6 +267,7 @@ function rowToSession(row: SessionRow): TelegramSession {
     status: row.status === "running" || row.status === "waiting_approval" || row.status === "closed" ? row.status : "idle",
     messageCount: row.message_count,
     attachments: parseAttachments(row.attachments_json),
+    conversation: parseConversation(row.conversation_json),
     providerUsage: parseProviderUsage(row.provider_usage_json),
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at
@@ -258,6 +281,7 @@ function normalizeSetupStep(value: string): TelegramSetupStep {
     || value === "edit_custom_workdir"
     || value === "usage_price_input"
     || value === "cli"
+    || value === "agent_profile"
     || value === "ready"
   ) return value;
   return "ready";
@@ -267,6 +291,16 @@ function parseAttachments(value: string): TelegramAttachment[] {
   try {
     const parsed = JSON.parse(value) as TelegramAttachment[];
     return Array.isArray(parsed) ? parsed.filter(isAttachment) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseConversation(value: string): TelegramConversationTurn[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => isConversationTurn(item) ? [item] : []);
   } catch {
     return [];
   }
@@ -299,6 +333,16 @@ function parseProviderUsage(value: string): TelegramProviderUsage[] {
 function isAttachment(value: unknown): value is TelegramAttachment {
   const item = value as TelegramAttachment;
   return Boolean(item && typeof item.name === "string" && typeof item.path === "string" && typeof item.text === "string");
+}
+
+function isConversationTurn(value: unknown): value is TelegramConversationTurn {
+  const item = value as TelegramConversationTurn;
+  return Boolean(
+    item
+      && typeof item.user === "string"
+      && typeof item.assistant === "string"
+      && typeof item.createdAt === "string"
+  );
 }
 
 function isProviderUsage(value: unknown): value is TelegramProviderUsage {

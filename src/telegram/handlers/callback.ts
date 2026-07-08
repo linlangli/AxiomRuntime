@@ -4,10 +4,12 @@ import type { ApprovalManager } from "../interaction/approval.js";
 import type { SessionManager } from "../session/manager.js";
 import {
   askCustomWorkdir,
+  completeAgentProfile,
   selectCli,
   selectReadyCli,
   selectReadyMode,
   selectReadyModel,
+  showAgentProfile,
   setWorkdir,
   showReadyCard,
   showReadyCliPicker,
@@ -98,6 +100,11 @@ export function registerCallbackHandler(bot: Bot, deps: {
         await selectCli(ctx, deps, action);
         return;
       }
+      if (category === "agent" && action === "skip") {
+        await ctx.answerCallbackQuery({ text: "已跳过画像" });
+        await completeAgentProfile(ctx, deps);
+        return;
+      }
     }
 
     if (data.startsWith("ready:")) {
@@ -110,6 +117,11 @@ export function registerCallbackHandler(bot: Bot, deps: {
       if (category === "cli" && !action) {
         await ctx.answerCallbackQuery();
         await showReadyCliPicker(ctx, deps);
+        return;
+      }
+      if (category === "agent" && !action) {
+        await ctx.answerCallbackQuery();
+        await showAgentProfile(ctx, deps);
         return;
       }
       if (category === "cli" && action === "pick" && (first === "claude" || first === "codex")) {
