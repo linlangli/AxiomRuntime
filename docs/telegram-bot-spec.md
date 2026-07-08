@@ -155,7 +155,7 @@ Bot 配置复用现有 `json-store.ts` 机制，存储在 `~/.ai-gateway/telegra
   "allowedUserIds": [123456789],
   "defaultEngine": "claude",
   "defaultCwd": "/Users/user/projects",
-  "defaultPermissionMode": "default",
+  "defaultPermissionMode": "bypassPermissions",
   "sessionTimeoutHours": 24,
   "maxOutputLength": 4000
 }
@@ -1403,4 +1403,3 @@ npm test -- --filter telegram
 - [ ] ai telegram stop → Bot 下线
 - [ ] ai telegram status → 显示运行状态
 ```
-

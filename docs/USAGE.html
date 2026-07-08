@@ -716,7 +716,7 @@ ai telegram config set token &lt;bot-token&gt;
 ai telegram config set allowAllUsers true
 ai telegram config set allowedUserIds 123456789,987654321
 ai telegram config set defaultEngine claude
-ai telegram config set defaultPermissionMode full-auto
+ai telegram config set defaultPermissionMode bypassPermissions
 ai telegram config set defaultCwd /path/to/project
 ai telegram config set proxyUrl http://127.0.0.1:7890
 ai telegram start
@@ -739,11 +739,14 @@ ai telegram stop</pre>
                 <pre>/claude prompt
 /codex prompt
 /reset
+/fresh
 /cwd /path/to/project
+/config
+/usage
 /help</pre>
                 <ul>
                   <li>普通文本会发送给当前会话的默认引擎。</li>
-                  <li>默认命令菜单只注册这 5 个基础命令；选择 CLI 后，会在当前 chat 的 <code>/</code> 菜单追加该 CLI 的 slash 命令映射。</li>
+                  <li>默认命令菜单只注册这 8 个基础命令；选择 CLI 后，会在当前 chat 的 <code>/</code> 菜单追加该 CLI 的 slash 命令映射。</li>
                   <li>CLI slash 命令不会以消息列表形式额外刷屏，点击菜单项后会转发给当前 CLI 执行。</li>
                   <li>上传 UTF-8 文本文件会作为下一条 prompt 的附件上下文。</li>
                   <li><code>full-auto</code> 会映射到 Claude/Codex 的跳过审批模式，但高风险命令文本仍会在 Telegram 侧强制确认。</li>

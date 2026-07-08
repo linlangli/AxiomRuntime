@@ -154,7 +154,7 @@ ai telegram config set token <bot-token>
 ai telegram config set allowAllUsers true
 ai telegram config set allowedUserIds 123456789,987654321
 ai telegram config set defaultEngine claude
-ai telegram config set defaultPermissionMode full-auto
+ai telegram config set defaultPermissionMode bypassPermissions
 ai telegram config set defaultCwd /path/to/project
 ai telegram config set proxyUrl http://127.0.0.1:7890
 ```
@@ -179,7 +179,7 @@ ai telegram stop
 - 工作路径可从历史记录选择，也可以点“自定义”后输入名称；自定义路径固定创建或复用 `~/输入名称`。
 - 未确定工作路径时发送普通内容会提示先确定工作路径；未确定 CLI 时发送普通内容会提示先选择 CLI。
 - 选择 CLI 后只展示会话 ID、工作路径、CLI、provider、model 和权限模式。
-- Bot 默认命令菜单只保留 `/claude`、`/codex`、`/reset`、`/cwd` 和 `/help`；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射，点击后转发给当前 CLI 执行。
+- Bot 默认命令菜单只保留 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/usage` 和 `/help`；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射，点击后转发给当前 CLI 执行。
 - 文件上传支持 UTF-8 文本附件，下一条 prompt 会自动带上附件内容。
 - `full-auto` 会映射到 Claude/Codex 的跳过审批模式，但高风险命令文本仍会在 Telegram 侧强制确认。
 - 如果本机不能直连 `api.telegram.org`，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。
