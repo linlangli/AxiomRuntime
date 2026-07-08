@@ -40,6 +40,7 @@ export type UsageEvent = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheReadInputTokens?: number;
   createdAt: string;
 };
 
@@ -98,6 +99,7 @@ export type TokenUsage = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheReadInputTokens?: number;
 };
 
 export type LogLevel = "info" | "warn" | "error";

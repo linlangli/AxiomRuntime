@@ -17,6 +17,7 @@ import {
   showWorkdirList,
   showWorkdirStart
 } from "./setup.js";
+import { askUsagePrice, showUsagePanel } from "./usage.js";
 
 export function registerCallbackHandler(bot: Bot, deps: {
   bot?: Bot;
@@ -179,6 +180,20 @@ export function registerCallbackHandler(bot: Bot, deps: {
         }
         await ctx.answerCallbackQuery({ text: "工作路径已更新" });
         await setWorkdir(ctx, deps, cwd, { returnToReady: true, edit: true });
+        return;
+      }
+    }
+
+    if (data.startsWith("usage:")) {
+      const [, category, action] = data.split(":");
+      if (category === "price" && action === "input") {
+        await ctx.answerCallbackQuery();
+        await askUsagePrice(ctx, deps, { edit: true });
+        return;
+      }
+      if (category === "price" && action === "unknown") {
+        await ctx.answerCallbackQuery({ text: "只显示 token" });
+        await showUsagePanel(ctx, deps, { edit: true, tokenOnly: true });
         return;
       }
     }

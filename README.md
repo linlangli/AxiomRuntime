@@ -63,6 +63,7 @@ ai doctor
 ~/.ai-gateway/providers.json
 ~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
+~/.ai-gateway/model-pricing.json
 ~/.ai-gateway/sessions.json
 ~/.ai-gateway/hermes.json
 ~/.ai-gateway/hermes-state.json
@@ -96,6 +97,7 @@ Telegram Bot 集成说明：
 - Bot 会记录选择过的工作路径；自定义路径会按 `~/输入名称` 创建或复用。
 - Telegram 默认命令菜单只保留 `/claude`、`/codex`、`/reset`、`/cwd` 和 `/help`；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射。
 - Telegram 远程执行复用 AI Gateway 顶层 provider，不维护另一套 provider 配置。
+- Telegram Codex 执行会自动走本地 OpenAI 兼容代理记录 provider usage；`/usage` 有 provider cost 时直接展示，否则按 `model-pricing.json` 估算。
 
 更多命令用法见：
 

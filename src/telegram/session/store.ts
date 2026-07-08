@@ -252,7 +252,14 @@ function rowToSession(row: SessionRow): TelegramSession {
 }
 
 function normalizeSetupStep(value: string): TelegramSetupStep {
-  if (value === "workdir" || value === "custom_workdir" || value === "edit_custom_workdir" || value === "cli" || value === "ready") return value;
+  if (
+    value === "workdir"
+    || value === "custom_workdir"
+    || value === "edit_custom_workdir"
+    || value === "usage_price_input"
+    || value === "cli"
+    || value === "ready"
+  ) return value;
   return "ready";
 }
 
@@ -277,6 +284,10 @@ function parseProviderUsage(value: string): TelegramProviderUsage[] {
         requestCount: item.requestCount,
         costUsd: item.costUsd,
         unknownCostCount: item.unknownCostCount,
+        inputTokens: readNonNegativeNumber(item.inputTokens),
+        outputTokens: readNonNegativeNumber(item.outputTokens),
+        totalTokens: readNonNegativeNumber(item.totalTokens),
+        cacheReadInputTokens: readNonNegativeNumber(item.cacheReadInputTokens),
         updatedAt: item.updatedAt
       }];
     });
@@ -301,4 +312,8 @@ function isProviderUsage(value: unknown): value is TelegramProviderUsage {
       && Number.isFinite(item.unknownCostCount)
       && typeof item.updatedAt === "string"
   );
+}
+
+function readNonNegativeNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }

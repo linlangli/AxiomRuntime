@@ -180,6 +180,8 @@ ai telegram stop
 - 未确定工作路径时发送普通内容会提示先确定工作路径；未确定 CLI 时发送普通内容会提示先选择 CLI。
 - 选择 CLI 后只展示会话 ID、工作路径、CLI、provider、model 和权限模式。
 - Bot 默认命令菜单只保留 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/usage` 和 `/help`；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射，点击后转发给当前 CLI 执行。
+- Telegram Codex 执行会自动走 AI Gateway 本地 OpenAI 兼容代理；代理透明转发请求并记录 provider 返回的 usage，不改变 Codex CLI 请求和响应。
+- `/usage` 优先使用 provider 响应里的 cost；如果只有 token usage，会读取 `~/.ai-gateway/model-pricing.json` 按价格表估算。价格表没有命中的模型会显示额度未知。
 - 文件上传支持 UTF-8 文本附件，下一条 prompt 会自动带上附件内容。
 - `full-auto` 会映射到 Claude/Codex 的跳过审批模式，但高风险命令文本仍会在 Telegram 侧强制确认。
 - 如果本机不能直连 `api.telegram.org`，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。
@@ -294,7 +296,7 @@ token 使用量
 
 `ai status` 是轻量检查：它验证 provider 连通性、模型列表、Claude/Codex 各自的有效 baseUrl 和兼容模型，不发送真实对话请求。
 
-token 使用量来自 `usage.json` 中真实记录的 provider usage。当前只有 AI Gateway 自己发起且 provider 返回 usage 的请求会累计，例如 `ai doctor --deep`。
+token 使用量来自 `usage.json` 中真实记录的 provider usage。AI Gateway 自己发起且 provider 返回 usage 的请求会累计，例如 `ai doctor --deep`；Telegram Codex 执行也会通过本地代理记录 provider usage。
 
 ## 会话
 
@@ -505,6 +507,7 @@ ai web
 
 ```text
 ~/.ai-gateway/providers.json
+~/.ai-gateway/model-pricing.json
 ```
 
 示例：
@@ -520,6 +523,17 @@ ai web
     "model": "claude-opus-4-6"
   }
 ]
+```
+
+`model-pricing.json` 用于给只返回 token usage、不返回 cost 的模型估算费用。单位是美元 / 百万 token，可按模型名或 `provider/model` 配置：
+
+```json
+{
+  "51talk-codex/gpt-5.5": {
+    "inputPerMillionUsd": 1,
+    "outputPerMillionUsd": 3
+  }
+}
 ```
 
 内部文件：

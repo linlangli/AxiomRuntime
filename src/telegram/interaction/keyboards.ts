@@ -85,6 +85,12 @@ export function buildReadyModeKeyboard(): InlineKeyboard {
     .text("back", "ready:back");
 }
 
+export function buildUsagePricingKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("输入价格", "usage:price:input")
+    .text("未知", "usage:price:unknown");
+}
+
 export function formatPermissionModeLabel(mode: TelegramPermissionMode): string {
   if (mode === "acceptEdits") return "接受编辑";
   if (mode === "bypassPermissions") return "跳过权限";

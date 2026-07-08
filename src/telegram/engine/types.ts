@@ -1,4 +1,5 @@
 import type { TelegramEngineName, TelegramPermissionMode } from "../config.js";
+import type { TokenUsage } from "../../core/types.js";
 
 export type ExecutionResult = {
   sessionId?: string;
@@ -7,6 +8,7 @@ export type ExecutionResult = {
   filesChanged?: string[];
   diff?: string;
   cost?: number;
+  usage?: TokenUsage;
   duration?: number;
   provider?: string;
   model?: string;

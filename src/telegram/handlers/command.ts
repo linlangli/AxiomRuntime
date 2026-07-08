@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { type Bot, type CommandContext, type Context } from "grammy";
-import { resolveProviderForTool } from "../../core/runner/fallback.js";
 import type { TelegramConfig, TelegramEngineName } from "../config.js";
 import type { Engine } from "../engine/types.js";
 import { safeResetChatCommandMenu } from "../interaction/command-menu.js";
@@ -9,6 +8,7 @@ import type { ApprovalManager } from "../interaction/approval.js";
 import type { SessionManager } from "../session/manager.js";
 import { executePrompt, type MessageHandlerDeps } from "./message.js";
 import { selectCli, showConfigPanel, startSetup } from "./setup.js";
+import { showUsagePanel } from "./usage.js";
 
 const FRESH_DELETE_SCAN_LIMIT = 1000;
 const TELEGRAM_DELETE_BATCH_SIZE = 100;
@@ -57,9 +57,11 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
   });
 
   bot.command("usage", async (ctx) => {
-    const session = deps.sessionManager.getOrCreate(ctx.chat.id);
-    const resolved = await getResolvedProvider(session.engine, deps.config);
-    await ctx.reply(Formatter.sessionUsage(session, resolved.provider, resolved.error), { parse_mode: "HTML" });
+    await showUsagePanel(ctx, deps);
+  });
+
+  bot.command("usge", async (ctx) => {
+    await showUsagePanel(ctx, deps);
   });
 
   bot.command("help", async (ctx) => {
@@ -105,18 +107,6 @@ async function safeDeleteCommandMessage(ctx: CommandContext<Context>): Promise<v
     await ctx.deleteMessage();
   } catch {
     // The duplicate /start prompt is best-effort cleanup only.
-  }
-}
-
-async function getResolvedProvider(
-  engine: TelegramEngineName,
-  config: TelegramConfig
-): Promise<{ provider?: { name: string; model: string }; error?: string }> {
-  try {
-    const resolved = await resolveProviderForTool(engine, config.provider, config.model);
-    return { provider: { name: resolved.provider.name, model: resolved.model } };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
   }
 }
 

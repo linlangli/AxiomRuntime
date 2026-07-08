@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -8,7 +9,9 @@ import { normalizeProviders, swapProviderLevel } from "../dist/core/config/provi
 import { extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
 import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
+import { startOpenAiUsageProxy } from "../dist/core/runner/openai-usage-proxy.js";
 import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl } from "../dist/core/runner/tool-runner.js";
+import { estimateTokenCostUsd } from "../dist/core/usage/pricing.js";
 
 test("normalizes provider levels by priority", () => {
   const providers = normalizeProviders([
@@ -59,6 +62,41 @@ test("extracts OpenAI-compatible token usage", () => {
   );
 });
 
+test("extracts cached input token usage", () => {
+  assert.deepEqual(
+    extractTokenUsage({
+      usage: {
+        prompt_tokens: 1000,
+        completion_tokens: 50,
+        prompt_tokens_details: {
+          cached_tokens: 400
+        }
+      }
+    }),
+    {
+      inputTokens: 1000,
+      outputTokens: 50,
+      totalTokens: 1050,
+      cacheReadInputTokens: 400
+    }
+  );
+  assert.deepEqual(
+    extractTokenUsage({
+      usage: {
+        input_tokens: 100,
+        output_tokens: 20,
+        cache_read_input_tokens: 300
+      }
+    }),
+    {
+      inputTokens: 400,
+      outputTokens: 20,
+      totalTokens: 420,
+      cacheReadInputTokens: 300
+    }
+  );
+});
+
 test("extracts Anthropic-style token usage", () => {
   assert.deepEqual(
     extractTokenUsage({
@@ -73,6 +111,203 @@ test("extracts Anthropic-style token usage", () => {
       totalTokens: 10
     }
   );
+});
+
+test("estimates token cost from model pricing table", () => {
+  const usage = { inputTokens: 1000, outputTokens: 500, totalTokens: 1500 };
+  assert.equal(
+    estimateTokenCostUsd("api", "custom-model", usage, {
+      "api/custom-model": { inputPerMillionUsd: 1, outputPerMillionUsd: 3 }
+    }),
+    0.0025
+  );
+  assert.equal(
+    estimateTokenCostUsd("api", "cached-model", { ...usage, cacheReadInputTokens: 400 }, {
+      "api/cached-model": { inputPerMillionUsd: 1, outputPerMillionUsd: 3, cacheReadPerMillionUsd: 0.1 }
+    }),
+    0.00214
+  );
+  assert.equal(estimateTokenCostUsd("api", "missing-model", usage, {}), undefined);
+});
+
+test("OpenAI usage proxy forwards JSON response and records priced usage", async () => {
+  await withTempHome(async (tempDir) => {
+    await fs.writeFile(
+      path.join(tempDir, "model-pricing.json"),
+      JSON.stringify({ "charged-model": { inputPerMillionUsd: 1, outputPerMillionUsd: 3 } }),
+      "utf8"
+    );
+
+    const upstream = await startTestServer(async (req, res) => {
+      assert.equal(req.url, "/v1/chat/completions");
+      assert.equal(req.headers.authorization, "Bearer secret");
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      assert.equal(body.model, "charged-model");
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        id: "chatcmpl-test",
+        model: "charged-model",
+        choices: [],
+        usage: {
+          prompt_tokens: 1000,
+          completion_tokens: 500,
+          total_tokens: 1500
+        }
+      }));
+    });
+
+    const proxy = await startOpenAiUsageProxy({
+      provider: {
+        name: "api",
+        baseUrl: upstream.url,
+        apiKey: "secret",
+        mode: "auto",
+        level: 1,
+        model: "charged-model"
+      },
+      model: "charged-model",
+      tool: "telegram"
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer local" },
+        body: JSON.stringify({ model: "charged-model", messages: [] })
+      });
+      const json = await response.json();
+      assert.equal(json.id, "chatcmpl-test");
+      assert.equal(proxy.getRecords().length, 1);
+      assert.equal(proxy.getRecords()[0].costUsd, 0.0025);
+      assert.equal(proxy.getRecords()[0].costSource, "pricing");
+
+      const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
+      assert.equal(usage.events[0].source, "proxy");
+      assert.equal(usage.events[0].totalTokens, 1500);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("OpenAI usage proxy records one usage event from SSE response", async () => {
+  await withTempHome(async (tempDir) => {
+    const upstream = await startTestServer(async (_req, res) => {
+      res.setHeader("content-type", "text/event-stream");
+      res.write("data: {\"type\":\"response.completed\",\"response\":{\"model\":\"stream-model\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15},\"cost_usd\":0.0042}}\n\n");
+      res.write("data: [DONE]\n\n");
+      res.end();
+    });
+
+    const proxy = await startOpenAiUsageProxy({
+      provider: {
+        name: "api",
+        baseUrl: upstream.url,
+        apiKey: "secret",
+        mode: "auto",
+        level: 1,
+        model: "stream-model"
+      },
+      model: "stream-model",
+      tool: "telegram"
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "stream-model", input: "hello" })
+      });
+      const text = await response.text();
+      assert.match(text, /response.completed/);
+      assert.equal(proxy.getRecords().length, 1);
+      assert.equal(proxy.getRecords()[0].usage.totalTokens, 15);
+      assert.equal(proxy.getRecords()[0].costUsd, 0.0042);
+      assert.equal(proxy.getRecords()[0].costSource, "provider");
+
+      const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
+      assert.equal(usage.events.length, 1);
+      assert.equal(usage.events[0].totalTokens, 15);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("OpenAI usage proxy translates Responses stream to chat completions", async () => {
+  await withTempHome(async (tempDir) => {
+    const requests = [];
+    const upstream = await startTestServer(async (req, res) => {
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      requests.push({ url: req.url, body });
+
+      assert.equal(req.url, "/v1/chat/completions");
+      assert.equal(req.headers.authorization, "Bearer secret");
+      assert.equal(body.model, "gpt-5.5");
+      assert.equal(body.stream, false);
+      assert.equal(body.messages[0].role, "system");
+      assert.equal(body.messages.at(-1).content, "hello");
+      assert.equal(body.tools[0].function.name, "shell_command");
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        id: "chatcmpl-fallback",
+        model: "gpt-5.5",
+        choices: [{
+          index: 0,
+          finish_reason: "stop",
+          message: { role: "assistant", content: "OK" }
+        }],
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15
+        }
+      }));
+    });
+
+    const proxy = await startOpenAiUsageProxy({
+      provider: {
+        name: "api",
+        baseUrl: upstream.url,
+        apiKey: "secret",
+        mode: "auto",
+        level: 1,
+        model: "gpt-5.5"
+      },
+      model: "gpt-5.5",
+      tool: "telegram"
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5.5",
+          instructions: "system prompt",
+          input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] }],
+          tools: [{ type: "function", name: "shell_command", description: "run shell", parameters: { type: "object", properties: {} } }],
+          tool_choice: "auto",
+          stream: true
+        })
+      });
+      const text = await response.text();
+      assert.equal(response.status, 200);
+      assert.match(text, /response\.output_text\.delta/);
+      assert.match(text, /OK/);
+      assert.deepEqual(requests.map((request) => request.url), ["/v1/chat/completions"]);
+      assert.equal(proxy.getRecords().length, 1);
+      assert.equal(proxy.getRecords()[0].usage.totalTokens, 15);
+
+      const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
+      assert.equal(usage.events[0].totalTokens, 15);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
 });
 
 test("secret fingerprint identifies keys without exposing full value", () => {
@@ -175,3 +410,44 @@ test("resolveToolCommand skips broken codex shim when app binary exists", () => 
   assert.notEqual(command, "/opt/homebrew/bin/codex");
   assert.equal(command, appBinary);
 });
+
+async function withTempHome(fn) {
+  const previousHome = process.env.AI_GATEWAY_HOME;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-core-test-"));
+  process.env.AI_GATEWAY_HOME = tempDir;
+  try {
+    await fn(tempDir);
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.AI_GATEWAY_HOME;
+    } else {
+      process.env.AI_GATEWAY_HOME = previousHome;
+    }
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function startTestServer(handler) {
+  const server = http.createServer(handler);
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  };
+}
+
+async function readRequestBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}

@@ -23,14 +23,16 @@ import {
   buildCliKeyboard,
   buildReadyKeyboard,
   buildReadyModeKeyboard,
+  buildUsagePricingKeyboard,
   buildWorkdirListKeyboard,
   buildWorkdirStartKeyboard
 } from "../dist/telegram/interaction/keyboards.js";
-import { buildCodexArgs, parseCodexOutput } from "../dist/telegram/engine/codex-engine.js";
+import { buildCodexArgs, formatCodexFailure, parseCodexOutput } from "../dist/telegram/engine/codex-engine.js";
 import { buildClaudeArgs, parseClaudeOutput } from "../dist/telegram/engine/claude-engine.js";
 import { resolveWorkingCommand } from "../dist/telegram/engine/engine-utils.js";
 import { deleteRecentChatMessages, shouldHandleStartCommand } from "../dist/telegram/handlers/command.js";
 import { startTypingStatus } from "../dist/telegram/handlers/message.js";
+import { parseModelPriceInput } from "../dist/telegram/handlers/usage.js";
 import { SessionManager } from "../dist/telegram/session/manager.js";
 import { SessionStore } from "../dist/telegram/session/store.js";
 
@@ -101,10 +103,16 @@ test("session store creates, updates, resumes, and stores attachments", async ()
 
     const unknownUsage = manager.recordProviderUsage(session.id, {
       provider: "api",
-      model: "claude-sonnet-4-6"
+      model: "claude-sonnet-4-6",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15
+      }
     });
     assert.equal(unknownUsage.providerUsage[0].requestCount, 2);
     assert.equal(unknownUsage.providerUsage[0].unknownCostCount, 1);
+    assert.equal(unknownUsage.providerUsage[0].totalTokens, 15);
 
     manager.update(session.id, { engine: "codex", messageCount: 1 });
     const updated = manager.getOrCreate(123);
@@ -216,6 +224,78 @@ test("formatter escapes and splits telegram text safely", () => {
   assert.match(usagePanel, /Session：<code>1350dd03<\/code>/);
   assert.match(usagePanel, /Provider：<code>51talk-codex<\/code>/);
   assert.match(usagePanel, /额度：<code>\$0\.1234<\/code>/);
+  const unknownSession = {
+    id: "1350dd03abcdef",
+    chatId: 1,
+    engine: "codex",
+    engineSessionId: null,
+    cwd: "/Users/linlangli/Script",
+    permissionMode: "bypassPermissions",
+    approveAll: false,
+    setupStep: "ready",
+    status: "idle",
+    messageCount: 0,
+    attachments: [],
+    providerUsage: [{
+      provider: "51talk-codex",
+      model: "gpt-5.5",
+      requestCount: 1,
+      costUsd: 0,
+      unknownCostCount: 1,
+      inputTokens: 1000,
+      outputTokens: 25,
+      totalTokens: 1025,
+      updatedAt: "now"
+    }],
+    createdAt: "now",
+    lastActiveAt: "now"
+  };
+  const unknownUsagePanel = Formatter.sessionUsage(
+    unknownSession,
+    { name: "51talk-codex", model: "gpt-5.5" },
+    undefined,
+    { missingPrice: true }
+  );
+  assert.match(unknownUsagePanel, /额度：<code>缺少价格表<\/code>/);
+  assert.match(unknownUsagePanel, /Tokens：<code>1,025<\/code>/);
+  assert.match(unknownUsagePanel, /可以输入价格后计算额度/);
+  const tokenOnlyUsagePanel = Formatter.sessionUsage(
+    unknownSession,
+    { name: "51talk-codex", model: "gpt-5.5" },
+    undefined,
+    { tokenOnly: true }
+  );
+  assert.match(tokenOnlyUsagePanel, /当前会话 Token/);
+  assert.match(tokenOnlyUsagePanel, /Tokens：<code>1,025<\/code>/);
+  assert.doesNotMatch(tokenOnlyUsagePanel, /额度/);
+  const estimatedUsagePanel = Formatter.sessionUsage(
+    unknownSession,
+    { name: "51talk-codex", model: "gpt-5.5" },
+    undefined,
+    { estimatedCostUsd: 0.001075 }
+  );
+  assert.match(estimatedUsagePanel, /额度：<code>\$0\.0011（按价格表估算）<\/code>/);
+  const missingTokenUsagePanel = Formatter.sessionUsage(
+    {
+      ...unknownSession,
+      providerUsage: [{
+        provider: "51talk-codex",
+        model: "gpt-5.5",
+        requestCount: 1,
+        costUsd: 0,
+        unknownCostCount: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        updatedAt: "now"
+      }]
+    },
+    { name: "51talk-codex", model: "gpt-5.5" },
+    undefined,
+    { missingPrice: true }
+  );
+  assert.match(missingTokenUsagePanel, /额度：<code>额度未知<\/code>/);
+  assert.match(missingTokenUsagePanel, /可以输入价格后计算额度/);
   assert.doesNotMatch(sessionCard, /blockquote|工作路径|Provider|Model|权限模式|🍺|✨|🆔|📁|🧰|🔌|🧠|🛡️/);
   assert.match(Formatter.help(), /\/claude prompt - 使用 Claude Code/);
   assert.match(Formatter.help(), /\/reset - 重置会话信息/);
@@ -261,6 +341,24 @@ test("workdir setup keyboards use compact labels and absolute path buttons", () 
   assert.deepEqual(buildReadyModeKeyboard().inline_keyboard[0], [
     { text: "默认权限", callback_data: "ready:mode:pick:default" }
   ]);
+  assert.deepEqual(buildUsagePricingKeyboard().inline_keyboard, [[
+    { text: "输入价格", callback_data: "usage:price:input" },
+    { text: "未知", callback_data: "usage:price:unknown" }
+  ]]);
+});
+
+test("usage price input parser accepts compact price formats", () => {
+  assert.deepEqual(parseModelPriceInput("1/3/0.1"), {
+    inputPerMillionUsd: 1,
+    outputPerMillionUsd: 3,
+    cacheReadPerMillionUsd: 0.1
+  });
+  assert.deepEqual(parseModelPriceInput("$0.5 $1.25 $0.05"), {
+    inputPerMillionUsd: 0.5,
+    outputPerMillionUsd: 1.25,
+    cacheReadPerMillionUsd: 0.05
+  });
+  assert.equal(parseModelPriceInput("1/3"), null);
 });
 
 test("telegram command menu maps selected CLI slash commands", () => {
@@ -351,6 +449,23 @@ test("codex args map permission modes to non-interactive CLI flags", () => {
   const acceptEditsArgs = buildCodexArgs("hello", "gpt-5.5", "/tmp/project", "acceptEdits");
   assert.deepEqual(acceptEditsArgs.slice(0, 3), ["-a", "never", "exec"]);
   assert.equal(buildCodexArgs("hello", "gpt-5.5", "/tmp/project", "bypassPermissions").includes("--dangerously-bypass-approvals-and-sandbox"), true);
+  const proxiedArgs = buildCodexArgs("hello", "gpt-5.5", "/tmp/project", "default", {
+    baseUrl: "http://127.0.0.1:12345/v1"
+  });
+  assert.equal(proxiedArgs.includes("model_provider=\"ai_gateway_proxy\""), true);
+  assert.equal(proxiedArgs.includes("model_providers.ai_gateway_proxy.base_url=\"http://127.0.0.1:12345/v1\""), true);
+  assert.equal(proxiedArgs.includes("model_providers.ai_gateway_proxy.wire_api=\"responses\""), true);
+});
+
+test("codex failure formatter hides benign diagnostics", () => {
+  const message = formatCodexFailure([
+    "Reading additional input from stdin...",
+    "2026-07-08T06:20:12Z  WARN codex_core_plugins::remote::remote_installed_plugin_sync: remote installed plugin bundle sync failed",
+    "2026-07-08T06:20:21Z  WARN codex_core::responses_retry: stream disconnected - retrying sampling request (5/5 in 3.191s)..."
+  ].join("\n"), "51talk-codex", "gpt-5.5");
+  assert.match(message, /模型流式响应连续断开/);
+  assert.match(message, /51talk-codex \/ gpt-5\.5/);
+  assert.doesNotMatch(message, /remote_installed_plugin_sync|Reading additional input/);
 });
 
 test("claude args include verbose stream-json output", () => {

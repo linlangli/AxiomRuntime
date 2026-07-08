@@ -1,7 +1,7 @@
 import type { TelegramEngineName, TelegramPermissionMode } from "../config.js";
 
 export type TelegramSessionStatus = "idle" | "running" | "waiting_approval" | "closed";
-export type TelegramSetupStep = "workdir" | "custom_workdir" | "edit_custom_workdir" | "cli" | "ready";
+export type TelegramSetupStep = "workdir" | "custom_workdir" | "edit_custom_workdir" | "usage_price_input" | "cli" | "ready";
 
 export type TelegramAttachment = {
   name: string;
@@ -16,6 +16,10 @@ export type TelegramProviderUsage = {
   requestCount: number;
   costUsd: number;
   unknownCostCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheReadInputTokens: number;
   updatedAt: string;
 };
 

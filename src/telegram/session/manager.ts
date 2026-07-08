@@ -1,4 +1,5 @@
 import type { TelegramConfig } from "../config.js";
+import type { TokenUsage } from "../../core/types.js";
 import type { SessionStore } from "./store.js";
 import type { TelegramAttachment, TelegramProviderUsage, TelegramSession } from "./types.js";
 
@@ -6,6 +7,7 @@ export type TelegramProviderUsageInput = {
   provider: string;
   model?: string;
   costUsd?: number;
+  usage?: TokenUsage;
 };
 
 export class SessionManager {
@@ -88,7 +90,8 @@ export class SessionManager {
     const nextUsage = upsertProviderUsage(session.providerUsage, {
       provider,
       model,
-      costUsd: hasCost ? input.costUsd : undefined
+      costUsd: hasCost ? input.costUsd : undefined,
+      usage: input.usage
     });
     return this.store.update(sessionId, { providerUsage: nextUsage });
   }
@@ -149,6 +152,10 @@ function upsertProviderUsage(
     requestCount: (current?.requestCount ?? 0) + 1,
     costUsd: (current?.costUsd ?? 0) + (hasCost ? input.costUsd! : 0),
     unknownCostCount: (current?.unknownCostCount ?? 0) + (hasCost ? 0 : 1),
+    inputTokens: (current?.inputTokens ?? 0) + (input.usage?.inputTokens ?? 0),
+    outputTokens: (current?.outputTokens ?? 0) + (input.usage?.outputTokens ?? 0),
+    totalTokens: (current?.totalTokens ?? 0) + (input.usage?.totalTokens ?? 0),
+    cacheReadInputTokens: (current?.cacheReadInputTokens ?? 0) + (input.usage?.cacheReadInputTokens ?? 0),
     updatedAt: now
   };
   if (index < 0) return [...usage, next];

@@ -7,6 +7,7 @@ import { Formatter } from "../interaction/formatter.js";
 import type { SessionManager, TelegramSession } from "../session/manager.js";
 import { writeTelegramLog } from "../log.js";
 import { remindSetup, setWorkdir } from "./setup.js";
+import { handleUsagePriceInput } from "./usage.js";
 
 export type MessageHandlerDeps = {
   sessionManager: SessionManager;
@@ -32,6 +33,10 @@ export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void
     }
     if (session.setupStep === "edit_custom_workdir") {
       await setWorkdir(ctx, deps, text, { fromCustomInput: true, returnToReady: true });
+      return;
+    }
+    if (session.setupStep === "usage_price_input") {
+      await handleUsagePriceInput(ctx, deps, text);
       return;
     }
     if (await remindSetup(ctx, session)) return;
@@ -117,7 +122,8 @@ export async function executePrompt(
     deps.sessionManager.recordProviderUsage(session.id, {
       provider: result.provider ?? deps.config.provider ?? "unknown",
       model: result.model ?? deps.config.model,
-      costUsd: result.cost
+      costUsd: result.cost,
+      usage: result.usage
     });
     await sendResult(ctx, session.engine, result, deps.config.maxOutputLength);
     await writeTelegramLog({

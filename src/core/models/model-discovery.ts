@@ -198,21 +198,68 @@ export function extractTokenUsage(value: unknown): TokenUsage | undefined {
   }
 
   const data = usage as Record<string, unknown>;
-  const inputTokens = readNumber(data, ["input_tokens", "prompt_tokens", "inputTokens", "promptTokens"]);
+  const rawInputTokens = readNumber(data, ["input_tokens", "prompt_tokens", "inputTokens", "promptTokens"]);
   const outputTokens = readNumber(data, ["output_tokens", "completion_tokens", "outputTokens", "completionTokens"]);
   const totalTokens = readNumber(data, ["total_tokens", "totalTokens"]);
+  const cacheReadInputTokens = readCacheReadInputTokens(data);
+  const cacheCreationInputTokens = readNumber(data, [
+    "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
+    "cache_creation_tokens",
+    "cacheCreationTokens"
+  ]) ?? 0;
 
-  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+  if (
+    rawInputTokens === undefined
+    && outputTokens === undefined
+    && totalTokens === undefined
+    && cacheReadInputTokens === undefined
+  ) {
     return undefined;
   }
 
-  const input = inputTokens ?? 0;
+  const input = normalizeInputTokens(data, rawInputTokens ?? 0, cacheReadInputTokens ?? 0, cacheCreationInputTokens);
   const output = outputTokens ?? 0;
   return {
     inputTokens: input,
     outputTokens: output,
-    totalTokens: totalTokens ?? input + output
+    totalTokens: totalTokens ?? input + output,
+    ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {})
   };
+}
+
+function normalizeInputTokens(
+  data: Record<string, unknown>,
+  rawInputTokens: number,
+  cacheReadInputTokens: number,
+  cacheCreationInputTokens: number
+): number {
+  return hasNestedCachedTokens(data)
+    ? rawInputTokens
+    : rawInputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+}
+
+function readCacheReadInputTokens(data: Record<string, unknown>): number | undefined {
+  return readNumber(data, [
+    "cache_read_input_tokens",
+    "cacheReadInputTokens",
+    "cache_read_tokens",
+    "cacheReadTokens",
+    "cached_tokens",
+    "cachedTokens"
+  ])
+    ?? readNumberFromRecord(data.prompt_tokens_details, ["cached_tokens", "cachedTokens"])
+    ?? readNumberFromRecord(data.input_tokens_details, ["cached_tokens", "cachedTokens", "cache_read_tokens", "cacheReadTokens"]);
+}
+
+function hasNestedCachedTokens(data: Record<string, unknown>): boolean {
+  return readNumberFromRecord(data.prompt_tokens_details, ["cached_tokens", "cachedTokens"]) !== undefined
+    || readNumberFromRecord(data.input_tokens_details, ["cached_tokens", "cachedTokens", "cache_read_tokens", "cacheReadTokens"]) !== undefined;
+}
+
+function readNumberFromRecord(value: unknown, keys: string[]): number | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return readNumber(value as Record<string, unknown>, keys);
 }
 
 function readNumber(data: Record<string, unknown>, keys: string[]): number | undefined {
