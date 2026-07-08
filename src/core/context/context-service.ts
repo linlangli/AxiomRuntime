@@ -32,8 +32,8 @@ const DOC_CANDIDATES = [
   "README.md",
   "AGENTS.md",
   "CLAUDE.md",
-  "docs/PROJECT_PROFILE.md",
-  "docs/PRD.md",
+  "docs/SPEC.md",
+  "docs/CONVENTIONS.md",
   "docs/USAGE.md"
 ];
 
