@@ -1173,6 +1173,22 @@ test("hermes export defaults to full replication bundle and import restores robo
     const badImport = path.join(tempDir, "bad-hermes.json");
     await fs.writeFile(badImport, JSON.stringify({ robot: { name: "bad", provider: "api", model: "x", apiKey: "secret" } }));
     await assert.rejects(() => importHermesRobot(badImport), /must not contain API keys/);
+
+    const badBundleProvider = path.join(tempDir, "bad-hermes-provider.json");
+    await fs.writeFile(badBundleProvider, JSON.stringify({
+      format: "ai-gateway.hermes-robots.v2",
+      robots: [{ name: "robot-x", provider: "api", model: "claude-opus-4-6" }],
+      providers: [{ name: "api", baseUrl: "https://api.test/v1", apiKey: "" }]
+    }));
+    await assert.rejects(() => importHermesRobot(badBundleProvider), /providers\[0\]\.apiKey cannot be empty/);
+
+    const badBundleRobot = path.join(tempDir, "bad-hermes-robot.json");
+    await fs.writeFile(badBundleRobot, JSON.stringify({
+      format: "ai-gateway.hermes-robots.v2",
+      robots: [{ name: "robot-x", provider: "api", model: "claude-opus-4-6", tasks: {} }],
+      providers: []
+    }));
+    await assert.rejects(() => importHermesRobot(badBundleRobot), /robots\[0\]\.tasks must be an array/);
   });
 });
 

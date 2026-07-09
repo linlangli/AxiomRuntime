@@ -1,6 +1,6 @@
 import type { TelegramEngineName } from "../config.js";
 import type { TelegramSession } from "../session/types.js";
-import { truncateText } from "./formatter.js";
+import { countPromptTokens, truncateToTokenBudget } from "./token-budget.js";
 
 export type PromptMiddlewareContext = {
   chatId: number;
@@ -18,7 +18,8 @@ export type PromptMiddleware = {
 };
 
 const RECENT_CONVERSATION_TURNS = 4;
-const RECENT_CONVERSATION_CHAR_BUDGET = 5000;
+const RECENT_CONVERSATION_TOKEN_BUDGET = 1400;
+const RECENT_CONVERSATION_MESSAGE_TOKEN_BUDGET = 320;
 const promptMiddlewares: PromptMiddleware[] = [];
 
 export function registerPromptMiddleware(middleware: PromptMiddleware): void {
@@ -66,7 +67,7 @@ function buildPromptWithRecentConversation(
   if (!turns.length) return prompt;
 
   const selected: string[][] = [];
-  let usedChars = 0;
+  let usedTokens = 0;
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index]!;
     const block = [
@@ -75,12 +76,12 @@ function buildPromptWithRecentConversation(
       `<assistant>${escapeXmlLikeText(turn.assistant)}</assistant>`,
       "</turn>"
     ];
-    const blockChars = block.join("\n").length;
-    if (selected.length && usedChars + blockChars > RECENT_CONVERSATION_CHAR_BUDGET) {
+    const blockTokens = countPromptTokens(block.join("\n"));
+    if (selected.length && usedTokens + blockTokens > RECENT_CONVERSATION_TOKEN_BUDGET) {
       break;
     }
     selected.unshift(block);
-    usedChars += blockChars;
+    usedTokens += blockTokens;
   }
 
   if (!selected.length) return prompt;
@@ -94,7 +95,7 @@ function buildPromptWithRecentConversation(
 }
 
 function escapeXmlLikeText(value: string): string {
-  return truncateText(value, 1800)
+  return truncateToTokenBudget(value, RECENT_CONVERSATION_MESSAGE_TOKEN_BUDGET)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");

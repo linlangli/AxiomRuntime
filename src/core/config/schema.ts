@@ -14,6 +14,11 @@ export function readRecord(value: unknown, path: string): Record<string, unknown
   return value;
 }
 
+export function readOptionalRecord(value: unknown, path: string): Record<string, unknown> | undefined {
+  if (value === null || value === undefined) return undefined;
+  return readRecord(value, path);
+}
+
 export function readString(
   record: Record<string, unknown>,
   key: string,
@@ -22,6 +27,14 @@ export function readString(
   const value = record[key] ?? options.fallback ?? "";
   const text = String(value);
   return options.trim === false ? text : text.trim();
+}
+
+export function readRequiredString(record: Record<string, unknown>, key: string, path = key): string {
+  const value = readString(record, key);
+  if (!value) {
+    throw new ConfigValidationError(`${path} cannot be empty.`);
+  }
+  return value;
 }
 
 export function readOptionalString(record: Record<string, unknown>, key: string): string | undefined {
@@ -40,6 +53,16 @@ export function readNumber(
   return Number.isFinite(value) ? value : fallback;
 }
 
+export function readEnum<T extends string>(
+  record: Record<string, unknown>,
+  key: string,
+  values: readonly T[],
+  fallback: T
+): T {
+  const value = String(record[key] ?? fallback);
+  return values.includes(value as T) ? value as T : fallback;
+}
+
 export function readBoolean(value: unknown): boolean {
   if (typeof value === "boolean") return value;
   const text = String(value ?? "").trim().toLowerCase();
@@ -48,4 +71,11 @@ export function readBoolean(value: unknown): boolean {
 
 export function readArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+export function readRequiredArray(value: unknown, path: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new ConfigValidationError(`${path} must be an array.`);
+  }
+  return value;
 }

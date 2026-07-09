@@ -22,6 +22,7 @@ import {
 } from "../dist/telegram/interaction/command-menu.js";
 import { escapeHtml, Formatter, markdownToTelegramHtml, splitPlainText, truncateText } from "../dist/telegram/interaction/formatter.js";
 import { applyPromptMiddlewares, listPromptMiddlewares } from "../dist/telegram/interaction/prompt-middleware.js";
+import { countPromptTokens, truncateToTokenBudget } from "../dist/telegram/interaction/token-budget.js";
 import {
   buildAgentProfileBackKeyboard,
   buildAgentProfileKeyboard,
@@ -237,6 +238,53 @@ test("prompt middleware applies recent conversation and attachments", async () =
     assert.match(resumed, /<attachment name="note\.md"/);
     store.close();
   });
+});
+
+test("prompt middleware trims recent conversation by token budget", async () => {
+  await withTempHome(async (tempDir) => {
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [1],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    let session = manager.getOrCreate(123);
+    for (const marker of ["oldest", "middle-a", "middle-b", "newest"]) {
+      session = manager.appendConversationTurn(session.id, {
+        user: `${marker} ${"token ".repeat(3000)}`,
+        assistant: `${marker}-answer ${"answer ".repeat(3000)}`
+      });
+    }
+
+    const prompt = await applyPromptMiddlewares({
+      chatId: 123,
+      prompt: "继续回答",
+      session,
+      engine: "codex",
+      resume: null,
+      includeAgentContext: true
+    });
+
+    assert.match(prompt, /newest/);
+    assert.doesNotMatch(prompt, /oldest/);
+    assert.equal(countPromptTokens(prompt) < 1700, true);
+    store.close();
+  });
+});
+
+test("token budget truncation stays within requested budget", () => {
+  const value = "token ".repeat(300);
+  const truncated = truncateToTokenBudget(value, 40);
+  assert.equal(countPromptTokens(truncated) <= 40, true);
+  assert.equal(truncated.endsWith("..."), true);
 });
 
 test("telegram engine registry creates built-in engines", () => {

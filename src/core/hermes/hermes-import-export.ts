@@ -3,6 +3,17 @@ import { getHermesAllExportPath, getHermesExportPath } from "../config/paths.js"
 import { readCache, upsertProviderCache } from "../config/cache-store.js";
 import { readProviders, writeProviders } from "../config/providers-store.js";
 import { writeJsonFile } from "../config/json-store.js";
+import {
+  readArray,
+  readBoolean,
+  readEnum,
+  readNumber,
+  readOptionalRecord,
+  readRecord,
+  readRequiredArray,
+  readRequiredString,
+  readString
+} from "../config/schema.js";
 import { recordProviderChange } from "../integrations/integration-state.js";
 import { writeLog } from "../logs/log-service.js";
 import type { Provider, ProviderCache } from "../types.js";
@@ -160,11 +171,11 @@ function normalizeHermesImport(value: unknown): HermesImportBundle {
     throw new Error("Legacy Hermes robot import files must not contain API keys or secrets.");
   }
   const container = isRecord(value) && isRecord(value.robot) ? value.robot : value;
-  const providers = isRecord(value) && Array.isArray(value.providers)
-    ? value.providers.map(normalizeBundleProvider)
+  const providers = isRecord(value) && value.providers !== undefined
+    ? readRequiredArray(value.providers, "providers").map((provider, index) => normalizeBundleProvider(provider, `providers[${index}]`))
     : [];
-  const providerCache = isRecord(value) && isRecord(value.providerCache)
-    ? normalizeBundleProviderCache(value.providerCache)
+  const providerCache = isRecord(value) && value.providerCache !== undefined
+    ? normalizeBundleProviderCache(readRecord(value.providerCache, "providerCache"))
     : {};
 
   return {
@@ -175,12 +186,12 @@ function normalizeHermesImport(value: unknown): HermesImportBundle {
 }
 
 function normalizeImportedRobots(value: unknown): HermesRobot[] {
-  const rawRobots = isRecord(value) && Array.isArray(value.robots)
-    ? value.robots
+  const rawRobots = isRecord(value) && value.robots !== undefined
+    ? readRequiredArray(value.robots, "robots")
     : Array.isArray(value)
       ? value
       : [value];
-  const robots = rawRobots.map(normalizeImportedRobot);
+  const robots = rawRobots.map((robot, index) => normalizeImportedRobot(robot, `robots[${index}]`));
   if (!robots.length) {
     throw new Error("Invalid Hermes robot import file.");
   }
@@ -197,41 +208,43 @@ function normalizeImportedRobots(value: unknown): HermesRobot[] {
   return robots;
 }
 
-function normalizeImportedRobot(value: unknown): HermesRobot {
+function normalizeImportedRobot(value: unknown, path = "robot"): HermesRobot {
   const container = isRecord(value) && isRecord(value.robot) ? value.robot : value;
-  if (!isRecord(container)) {
-    throw new Error("Invalid Hermes robot import file.");
-  }
-  const telegram = isRecord(container.telegram) ? container.telegram : {};
+  const robot = readRecord(container, path);
+  const telegram = readOptionalRecord(robot.telegram, `${path}.telegram`) ?? {};
+  const tasks = robot.tasks === undefined
+    ? []
+    : readRequiredArray(robot.tasks, `${path}.tasks`).map((task, index) => normalizeImportedTask(task, `${path}.tasks[${index}]`));
   const now = new Date().toISOString();
   return {
-    name: String(container.name ?? "").trim(),
-    provider: String(container.provider ?? "").trim(),
-    model: String(container.model ?? "").trim(),
-    mode: container.mode === "ask" ? "ask" : "auto",
+    name: readRequiredString(robot, "name", `${path}.name`),
+    provider: readRequiredString(robot, "provider", `${path}.provider`),
+    model: readRequiredString(robot, "model", `${path}.model`),
+    mode: readEnum(robot, "mode", ["ask", "auto"] as const, "auto"),
     telegram: {
-      enabled: Boolean(telegram.enabled),
-      chatId: String(telegram.chatId ?? "").trim(),
-      name: String(telegram.name ?? "").trim()
+      enabled: readBoolean(telegram.enabled),
+      chatId: readString(telegram, "chatId"),
+      name: readString(telegram, "name")
     },
-    tasks: Array.isArray(container.tasks)
-      ? container.tasks.map((task) => {
-          const value = isRecord(task) ? task : {};
-          return {
-            id: String(value.id ?? ""),
-            name: String(value.name ?? value.id ?? "task"),
-            type: "cron",
-            schedule: String(value.schedule ?? ""),
-            enabled: Boolean(value.enabled),
-            state: String(value.state ?? ""),
-            provider: value.provider === undefined || value.provider === null ? "" : String(value.provider),
-            model: value.model === undefined || value.model === null ? "" : String(value.model)
-          };
-        })
-      : [],
+    tasks,
     source: undefined,
-    createdAt: String(container.createdAt ?? now),
+    createdAt: readString(robot, "createdAt", { fallback: now }),
     updatedAt: now
+  };
+}
+
+function normalizeImportedTask(value: unknown, path: string): HermesRobot["tasks"][number] {
+  const task = readRecord(value, path);
+  const id = readString(task, "id");
+  return {
+    id,
+    name: readString(task, "name", { fallback: id || "task" }) || "task",
+    type: "cron",
+    schedule: readString(task, "schedule"),
+    enabled: readBoolean(task.enabled),
+    state: readString(task, "state"),
+    provider: readString(task, "provider"),
+    model: readString(task, "model")
   };
 }
 
@@ -276,27 +289,27 @@ function isHermesRobotBundle(value: unknown): boolean {
     && Array.isArray(value.providers);
 }
 
-function normalizeBundleProvider(value: unknown): Provider {
-  const provider = isRecord(value) ? value : {};
+function normalizeBundleProvider(value: unknown, path: string): Provider {
+  const provider = readRecord(value, path);
   return {
-    name: String(provider.name ?? "").trim(),
-    baseUrl: String(provider.baseUrl ?? "").trim().replace(/\/+$/, ""),
-    apiKey: String(provider.apiKey ?? "").trim(),
-    mode: provider.mode === "ask" ? "ask" : "auto",
-    level: Number(provider.level ?? Number.MAX_SAFE_INTEGER),
-    model: String(provider.model ?? "").trim()
+    name: readRequiredString(provider, "name", `${path}.name`),
+    baseUrl: readRequiredString(provider, "baseUrl", `${path}.baseUrl`).replace(/\/+$/, ""),
+    apiKey: readRequiredString(provider, "apiKey", `${path}.apiKey`),
+    mode: readEnum(provider, "mode", ["ask", "auto"] as const, "auto"),
+    level: readNumber(provider, "level", Number.MAX_SAFE_INTEGER),
+    model: readString(provider, "model")
   };
 }
 
 function normalizeBundleProviderCache(value: Record<string, unknown>): Record<string, ProviderCache> {
   const result: Record<string, ProviderCache> = {};
   for (const [name, raw] of Object.entries(value)) {
-    if (!isRecord(raw)) continue;
+    const cache = readRecord(raw, `providerCache.${name}`);
     result[name] = {
-      status: raw.status === "ok" || raw.status === "error" ? raw.status : "unknown",
-      models: Array.isArray(raw.models) ? raw.models.map((model) => String(model)).filter(Boolean) : [],
-      lastCheckedAt: raw.lastCheckedAt === null || raw.lastCheckedAt === undefined ? null : String(raw.lastCheckedAt),
-      lastError: raw.lastError === null || raw.lastError === undefined ? null : String(raw.lastError)
+      status: readEnum(cache, "status", ["ok", "error", "unknown"] as const, "unknown"),
+      models: readArray(cache.models).map((model) => String(model)).filter(Boolean),
+      lastCheckedAt: cache.lastCheckedAt === null || cache.lastCheckedAt === undefined ? null : String(cache.lastCheckedAt),
+      lastError: cache.lastError === null || cache.lastError === undefined ? null : String(cache.lastError)
     };
   }
   return result;

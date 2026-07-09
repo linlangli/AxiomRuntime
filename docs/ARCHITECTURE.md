@@ -14,10 +14,10 @@ AI Gateway (`ai-gateway`) 是一个本地 AI Provider 网关，统一管理多�
 | 已完成 | Provider 熔断与 health score | Provider cache 已记录 consecutiveFailures、lastFailureAt、circuitOpenUntil、healthScore；CLI/Telegram 运行时失败会累计健康状态，fallback 会跳过熔断中的 provider |
 | 已完成 | Telegram 会话并发控制 | `SessionManager.runExclusive()` 为同一 chat 建立内存队列，避免同一会话同时启动多个 engine 进程 |
 | 已完成 | 注册表解耦 | 已新增 CLI 命令注册表、core runner 引擎注册表、Telegram engine registry、Telegram handler registry、integration registry；外部命令和类型保持兼容 |
-| 部分完成 | Prompt 中间件链 | recent conversation 和 attachments 已改为 Prompt middleware；上下文预算使用字符预算近似，未引入 tokenizer |
+| 已完成 | Prompt 中间件链 | recent conversation 和 attachments 已改为 Prompt middleware；recent conversation 通过 `gpt-tokenizer` 做 token 预算和裁剪 |
 | 已完成 | 大文件拆分 | `openai-usage-proxy.ts` 和 `hermes-service.ts` 已保留 facade，并拆分出协议适配、usage 记录、HTTP 工具、Hermes YAML、本地文件、导入导出、provider sync 等模块 |
-| 已完成 | 配置 schema validation | 新增 `src/core/config/schema.ts`；Provider 配置会校验对象形态、非空 name/baseUrl/apiKey；Telegram config 复用 schema helper 保持宽松归一化 |
-| 已完成 | 共享工具与测试 | 重复的 `isRecord()` 已抽到 `src/core/utils/is-record.ts`；已补 JSON store 并发、CLI fallback、Telegram fallback、Hermes provider 解析、Prompt middleware、注册表、熔断、proxy metrics 等回归测试 |
+| 已完成 | 配置 schema validation | 新增 `src/core/config/schema.ts`；Provider 配置会校验对象形态、非空 name/baseUrl/apiKey；Telegram config 和 Hermes 导入 bundle 复用 schema helper |
+| 已完成 | 共享工具与测试 | 重复的 `isRecord()` 已抽到 `src/core/utils/is-record.ts`；已补 JSON store 并发、CLI fallback、Telegram fallback、Hermes provider 解析、Prompt middleware、注册表、熔断、proxy metrics、token budget 等回归测试 |
 | 已完成 | 代理可观测性 | OpenAI usage proxy 已暴露 `getMetrics()`，统计 request/success/failure/noUsage/usageRecord、总耗时、平均耗时、上游状态码分布；fallback/usage 事件保留结构化日志 |
 | 部分完成 | 插件化解耦 | CLI 命令注册表、runner 引擎注册表、Telegram engine/handler registry、integration registry、Prompt middleware、生命周期钩子已落地；类型联合和子命令参数解析仍偏静态 |
 | 未完成 | Bot Memory | 本轮没有实现 Bot Memory，相关设计仍以 `docs/memory-system-spec.md` 为准 |
@@ -56,7 +56,7 @@ src/
 │   │   ├── json-store.ts   # 通用 JSON 文件读写（文件锁 + atomic rename + read-modify-write）
 │   │   ├── paths.ts        # 配置路径常量 (~/.ai-gateway/)
 │   │   ├── providers-store.ts  # Provider 列表持久化
-│   │   ├── schema.ts           # 轻量配置 schema helper
+│   │   ├── schema.ts           # 轻量配置 schema helper（Provider/Telegram/Hermes import）
 │   │   ├── session-store.ts    # CLI 会话记录
 │   │   └── usage-store.ts      # Token 用量存储
 │   ├── context/            # 项目上下文注入
@@ -117,7 +117,8 @@ src/
     │   ├── command-menu.ts # Telegram 命令菜单管理 + 引擎命令映射
     │   ├── formatter.ts    # HTML 消息格式化
     │   ├── keyboards.ts    # InlineKeyboard 构建器
-    │   └── prompt-middleware.ts # Prompt 注入中间件链（recent conversation / attachments）
+    │   ├── prompt-middleware.ts # Prompt 注入中间件链（recent conversation / attachments）
+    │   └── token-budget.ts      # gpt-tokenizer token 计数与裁剪
     ├── session/            # SQLite 会话管理
     │   ├── manager.ts      # SessionManager（CRUD、对话轮次、用量记录）
     │   ├── store.ts        # SQLite 建表与迁移
@@ -260,7 +261,7 @@ HermesRobot       // Hermes 机器人配置 (provider, model, tasks[], telegram)
 **会话管理**
 - SQLite 持久化，支持多 chat 并发
 - 同一 chat 的任务通过 `SessionManager.runExclusive()` 串行执行，避免重复 engine 进程并发写同一 session
-- 对话轮次记录（通过 Prompt middleware 注入最近 4 轮，并使用字符预算控制长度）
+- 对话轮次记录（通过 Prompt middleware 注入最近 4 轮，并使用 token 预算控制长度）
 - 文件附件缓存（document handler 接收上传文件并暂存）
 - Provider 用量独立统计（每个 session per-provider 记录 token/cost）
 - 运行时 provider fallback：当前 provider 执行失败后尝试同 engine 的下一个候选；fallback 成功不改默认 provider/model
@@ -294,7 +295,7 @@ HermesRobot       // Hermes 机器人配置 (provider, model, tasks[], telegram)
 - **hermes-service-core.ts** (742 行) — Robot CRUD、同步、修复、状态查询等编排逻辑
 - **hermes-yaml.ts** (254 行) — YAML/env 构建、provider block 替换、模型块修复
 - **hermes-local-files.ts** (357 行) — 本地 Hermes 文件读写、config/telegram/cron/provider 解析
-- **hermes-import-export.ts** (447 行) — Robot 导入导出、本地 Hermes 导入、provider/cache 导入
+- **hermes-import-export.ts** — Robot 导入导出、本地 Hermes 导入、provider/cache 导入，导入 bundle 走 schema helper 校验
 - **hermes-provider-sync.ts** (59 行) — 延迟 provider rename/missing fallback 修复
 - **hermes-compat.ts** (383 行) — 兼容性适配
 - **hermes-runner.ts** (176 行) — 执行器
@@ -335,6 +336,7 @@ graph TD
 | HTTP | undici ^8.7 (provider 健康检查 + Telegram 代理), node:http (usage proxy) |
 | 网络代理 | https-proxy-agent ^9.1 (Telegram API 代理) |
 | 文件锁 | proper-lockfile (JSON 配置并发写入保护) |
+| Tokenizer | gpt-tokenizer (Prompt middleware token 预算) |
 | Claude SDK | @anthropic-ai/claude-code ^2.1 (Telegram headless) |
 | 测试 | node:test (内置) |
 
@@ -353,7 +355,7 @@ graph TD
 | 已完成 | `openai-usage-proxy.ts` 大文件拆分 | 原文件变为 facade；已拆为 `openai-usage-server.ts`、`openai-usage-http.ts`、`openai-usage-responses.ts`、`openai-usage-recording.ts`、`openai-usage-types.ts`；proxy 暴露 `getMetrics()` 统计请求、失败、usage/noUsage、耗时和上游状态码 | 可后续把 metrics 持久化或接入 dashboard |
 | 已完成 | `hermes-service.ts` 大文件拆分 | 原文件变为 facade；已拆为 core/yaml/local-files/import-export/provider-sync 等模块，外部导出保持兼容 | 还可以继续把 sync/repair 编排再拆得更细，但 P0 小步重构目标已完成 |
 | 已完成 | 共享 `isRecord()` | 已新增 `src/core/utils/is-record.ts`，替换 usage/pricing、runner、Hermes、Telegram config/engine 等重复定义 | 其它通用小工具可后续按需抽取 |
-| 已完成 | 回归覆盖 | 已新增 JSON store 并发更新、CLI fallback、Telegram fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、Provider 熔断、proxy metrics、schema validation 等测试；当前 `npm test` 为 87 项通过 | 可继续补更多异常路径和持久化 metrics 测试 |
+| 已完成 | 回归覆盖 | 已新增 JSON store 并发更新、CLI fallback、Telegram fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、Provider 熔断、proxy metrics、schema validation、token budget 等测试；当前 `npm test` 为 89 项通过 | 可继续补更多异常路径和持久化 metrics 测试 |
 
 **P1 - 中优先级**
 
@@ -385,15 +387,15 @@ graph TD
    - 已抽为 `src/core/utils/is-record.ts`
    - 已替换 `claude-engine.ts`、`codex-engine.ts`、`telegram/config.ts`、`tool-runner.ts`、`hermes-store.ts`、`hermes-service-core.ts`、`pricing.ts` 等重复定义
 
-10. **部分完成：类型安全改进**
+10. **已完成：类型安全改进（轻量 schema 阶段）**
     - 已完成：新增轻量 `src/core/config/schema.ts`，Provider 配置读取不再用裸 `as Partial<Provider>`，并校验非空 name/baseUrl/apiKey
     - 已完成：Telegram config 字段读取复用 schema helper，同时保留原有宽松归一化行为
-    - 未完成：可继续引入 `zod` 或 `valibot` 做更完整的 schema validation
-    - Hermes 导入导出也是手动校验，缺乏 schema validation
+    - 已完成：Hermes 导入 bundle 的 robots/providers/providerCache 复用 schema helper 校验，非法 bundle 会明确失败
+    - 后续可选：如果需要更严格的错误聚合和 JSON schema 导出，可再引入 `zod` 或 `valibot`
 
 11. **部分完成：测试覆盖**
     - 当前 `test/` 目录在 build 后用 `node --test` 运行
-    - 已补：JSON store 并发更新、CLI runtime fallback、Telegram runtime fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、熔断策略、usage proxy metrics、schema validation
+    - 已补：JSON store 并发更新、CLI runtime fallback、Telegram runtime fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、熔断策略、usage proxy metrics、schema validation、token budget
     - 未完成：长期指标持久化、更多异常路径仍可继续补
 
 ### 5.3 性能
@@ -410,10 +412,10 @@ graph TD
 14. **未完成：Telegram Bot 启动时同步刷新所有 chat 菜单**
     - `refreshStoredChatCommandMenus` 对大量活跃 session 是 O(n) 的 API 调用，应限流或延迟
 
-15. **部分完成：对话上下文注入效率**
+15. **已完成：对话上下文注入 token 预算**
     - recent conversation 和 attachments 已迁移到 `prompt-middleware.ts`
-    - recent conversation 仍最多取最近 4 轮，但增加了字符预算，避免长上下文无限膨胀
-    - 未完成：没有引入 tokenizer，当前是字符预算近似 token 预算
+    - recent conversation 仍最多取最近 4 轮，并通过 `gpt-tokenizer` 做 token 计数与裁剪，避免长上下文无限膨胀
+    - 后续可选：如果需要 Claude 专用精确计数，可在 `token-budget.ts` 增加按 engine/model 选择 tokenizer 的策略
 
 ### 5.4 安全
 
