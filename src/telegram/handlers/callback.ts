@@ -1,7 +1,5 @@
 import type { Bot } from "grammy";
-import type { TelegramConfig, TelegramPermissionMode } from "../config.js";
-import type { ApprovalManager } from "../interaction/approval.js";
-import type { SessionManager } from "../session/manager.js";
+import type { TelegramPermissionMode } from "../config.js";
 import {
   askCustomWorkdir,
   completeAgentProfile,
@@ -9,6 +7,7 @@ import {
   selectReadyCli,
   selectReadyMode,
   selectReadyModel,
+  selectSetupModel,
   showAgentProfile,
   setWorkdir,
   showReadyCard,
@@ -16,16 +15,16 @@ import {
   showReadyModePicker,
   showReadyModelPicker,
   showReadyProviderPicker,
+  showSetupModelPicker,
+  showSetupProviderPicker,
   showWorkdirList,
   showWorkdirStart
 } from "./setup.js";
+import { runCliInit, type MessageHandlerDeps } from "./message.js";
 import { askUsagePrice, showUsagePanel } from "./usage.js";
 
-export function registerCallbackHandler(bot: Bot, deps: {
+export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
   bot?: Bot;
-  approvalManager: ApprovalManager;
-  sessionManager: SessionManager;
-  config?: TelegramConfig;
 }): void {
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
@@ -61,7 +60,23 @@ export function registerCallbackHandler(bot: Bot, deps: {
     }
 
     if (data.startsWith("setup:")) {
-      const [, category, action, value] = data.split(":");
+      const [, category, action, first, second, third] = data.split(":");
+      const forcedEngine = parseTelegramEngine(category === "model" ? third : second);
+      if (category === "provider" && action === "show") {
+        await ctx.answerCallbackQuery();
+        await showSetupProviderPicker(ctx, deps, { edit: true, forcedEngine: parseTelegramEngine(first), reselect: Boolean(first) });
+        return;
+      }
+      if (category === "provider" && action === "pick" && first) {
+        await ctx.answerCallbackQuery();
+        await showSetupModelPicker(ctx, deps, Number(first), { forcedEngine });
+        return;
+      }
+      if (category === "model" && action === "pick" && first && second) {
+        await ctx.answerCallbackQuery({ text: "Provider / Model 已选择" });
+        await selectSetupModel(ctx, deps, Number(first), Number(second), { forcedEngine });
+        return;
+      }
       if (category === "workdir" && action === "list") {
         await ctx.answerCallbackQuery();
         await showWorkdirList(ctx, deps, { edit: true });
@@ -84,15 +99,18 @@ export function registerCallbackHandler(bot: Bot, deps: {
         await showWorkdirStart(ctx, deps, { edit: true });
         return;
       }
-      if (category === "workdir" && action === "pick" && value) {
-        const cwd = resolveWorkdirCallbackValue(value, deps.sessionManager.getWorkdirs(chatId));
+      if (category === "workdir" && action === "pick" && first) {
+        const cwd = resolveWorkdirCallbackValue(first, deps.sessionManager.getWorkdirs(chatId));
         if (!cwd) {
           await ctx.answerCallbackQuery({ text: "工作路径不存在" });
           await showWorkdirList(ctx, deps);
           return;
         }
         await ctx.answerCallbackQuery({ text: "工作路径已选择" });
-        await setWorkdir(ctx, deps, cwd);
+        await setWorkdir(ctx, deps, cwd, {
+          edit: true,
+          afterSet: (next) => runCliInit(ctx, deps, next.engine)
+        });
         return;
       }
       if (category === "cli" && (action === "claude" || action === "codex")) {
@@ -102,13 +120,14 @@ export function registerCallbackHandler(bot: Bot, deps: {
       }
       if (category === "agent" && action === "skip") {
         await ctx.answerCallbackQuery({ text: "已跳过画像" });
-        await completeAgentProfile(ctx, deps);
+        await completeAgentProfile(ctx, deps, undefined, { edit: true });
         return;
       }
     }
 
     if (data.startsWith("ready:")) {
-      const [, category, action, first, second] = data.split(":");
+      const [, category, action, first, second, third] = data.split(":");
+      const forcedEngine = parseTelegramEngine(category === "model" ? third : second);
       if (category === "back") {
         await ctx.answerCallbackQuery();
         await showReadyCard(ctx, deps, deps.sessionManager.getOrCreate(chatId), { edit: true });
@@ -124,6 +143,11 @@ export function registerCallbackHandler(bot: Bot, deps: {
         await showAgentProfile(ctx, deps);
         return;
       }
+      if (category === "provider" && action === "show") {
+        await ctx.answerCallbackQuery();
+        await showReadyProviderPicker(ctx, deps, { forcedEngine: parseTelegramEngine(first), reselect: Boolean(first) });
+        return;
+      }
       if (category === "cli" && action === "pick" && (first === "claude" || first === "codex")) {
         await ctx.answerCallbackQuery({ text: `CLI: ${first}` });
         await selectReadyCli(ctx, deps, first);
@@ -136,12 +160,12 @@ export function registerCallbackHandler(bot: Bot, deps: {
       }
       if (category === "provider" && action === "pick" && first) {
         await ctx.answerCallbackQuery();
-        await showReadyModelPicker(ctx, deps, Number(first));
+        await showReadyModelPicker(ctx, deps, Number(first), { forcedEngine });
         return;
       }
       if (category === "model" && action === "pick" && first && second) {
         await ctx.answerCallbackQuery({ text: "Provider / Model 已更新" });
-        await selectReadyModel(ctx, deps, Number(first), Number(second));
+        await selectReadyModel(ctx, deps, Number(first), Number(second), { forcedEngine });
         return;
       }
       if (category === "mode" && !action) {
@@ -191,7 +215,11 @@ export function registerCallbackHandler(bot: Bot, deps: {
           return;
         }
         await ctx.answerCallbackQuery({ text: "工作路径已更新" });
-        await setWorkdir(ctx, deps, cwd, { returnToReady: true, edit: true });
+        await setWorkdir(ctx, deps, cwd, {
+          returnToReady: true,
+          edit: true,
+          afterSet: (next) => runCliInit(ctx, deps, next.engine)
+        });
         return;
       }
     }
@@ -227,4 +255,8 @@ function resolveWorkdirCallbackValue(value: string, workdirs: string[]): string 
 
 function isTelegramPermissionMode(value: string | undefined): value is TelegramPermissionMode {
   return value === "default" || value === "acceptEdits" || value === "bypassPermissions";
+}
+
+function parseTelegramEngine(value: string | undefined): "claude" | "codex" | undefined {
+  return value === "claude" || value === "codex" ? value : undefined;
 }

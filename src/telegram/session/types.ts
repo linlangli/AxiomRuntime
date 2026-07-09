@@ -2,6 +2,7 @@ import type { TelegramEngineName, TelegramPermissionMode } from "../config.js";
 
 export type TelegramSessionStatus = "idle" | "running" | "waiting_approval" | "closed";
 export type TelegramSetupStep =
+  | "model"
   | "workdir"
   | "custom_workdir"
   | "edit_custom_workdir"

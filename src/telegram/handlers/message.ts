@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-import { createHash } from "node:crypto";
 import { InputFile, type Bot, type Context } from "grammy";
 import type { TelegramConfig, TelegramEngineName } from "../config.js";
 import type { Engine, ExecutionResult } from "../engine/types.js";
@@ -9,7 +6,7 @@ import { parseTelegramCommand, resolveMappedCommand } from "../interaction/comma
 import { Formatter, truncateText } from "../interaction/formatter.js";
 import type { SessionManager, TelegramSession } from "../session/manager.js";
 import { writeTelegramLog } from "../log.js";
-import { BOT_PROFILE_FILENAME, buildAgentProfileGenerationPrompt, completeAgentProfile, remindSetup, setWorkdir, showReadyCard } from "./setup.js";
+import { completeAgentProfile, remindSetup, setWorkdir, showReadyCard } from "./setup.js";
 import { handleUsagePriceInput } from "./usage.js";
 
 export type MessageHandlerDeps = {
@@ -21,7 +18,6 @@ export type MessageHandlerDeps = {
 };
 
 export const DEFAULT_PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
-export const AGENT_PROFILE_GENERATION_TIMEOUT_MS = 2 * 60 * 1000;
 export const CLI_INIT_TIMEOUT_MS = 3 * 60 * 1000;
 const RECENT_CONVERSATION_TURNS = 4;
 
@@ -29,6 +25,7 @@ export type ExecutePromptOptions = {
   silentSuccess?: boolean;
   suppressFailureReply?: boolean;
   includeAgentContext?: boolean;
+  skipSetupReminder?: boolean;
   timeoutMs?: number;
 };
 
@@ -43,11 +40,18 @@ export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void
       return;
     }
     if (session.setupStep === "custom_workdir") {
-      await setWorkdir(ctx, deps, text, { fromCustomInput: true });
+      await setWorkdir(ctx, deps, text, {
+        fromCustomInput: true,
+        afterSet: (next) => runCliInit(ctx, deps, next.engine)
+      });
       return;
     }
     if (session.setupStep === "edit_custom_workdir") {
-      await setWorkdir(ctx, deps, text, { fromCustomInput: true, returnToReady: true });
+      await setWorkdir(ctx, deps, text, {
+        fromCustomInput: true,
+        returnToReady: true,
+        afterSet: (next) => runCliInit(ctx, deps, next.engine)
+      });
       return;
     }
     if (session.setupStep === "usage_price_input") {
@@ -56,15 +60,12 @@ export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void
     }
     if (session.setupStep === "agent_profile") {
       const next = await completeAgentProfile(ctx, deps, text, { showReady: false });
-      if (next && text.trim()) {
-        await runAgentProfileBootstrap(ctx, deps, next.engine);
-      }
       if (next) {
         await showReadyCard(ctx, deps, next);
       }
       return;
     }
-    if (await remindSetup(ctx, session)) return;
+    if (await remindSetup(ctx, deps, session)) return;
     await executePrompt(ctx, deps, text);
   });
 }
@@ -77,7 +78,7 @@ async function executeMappedSlashCommand(
 ): Promise<void> {
   const parsed = parseTelegramCommand(text);
   if (!parsed) return;
-  if (await remindSetup(ctx, session)) return;
+  if (await remindSetup(ctx, deps, session)) return;
   const mapped = resolveMappedCommand(session.engine, parsed.command);
   if (!mapped) {
     await ctx.reply("未知命令，请通过 / 打开当前 CLI 可用命令。");
@@ -87,25 +88,14 @@ async function executeMappedSlashCommand(
   await executePrompt(ctx, deps, prompt, session.engine);
 }
 
-export async function runAgentProfileBootstrap(ctx: Context, deps: MessageHandlerDeps, engine: TelegramEngineName): Promise<void> {
-  const generated = await executePrompt(ctx, deps, buildAgentProfileGenerationPrompt(), engine, {
+export async function runCliInit(ctx: Context, deps: MessageHandlerDeps, engine?: TelegramEngineName): Promise<void> {
+  await executePrompt(ctx, deps, "/init", engine, {
     silentSuccess: true,
     suppressFailureReply: true,
     includeAgentContext: false,
-    timeoutMs: AGENT_PROFILE_GENERATION_TIMEOUT_MS
-  });
-  if (!generated) {
-    await ctx.reply("🤖 画像优化暂时没有完成，已先保存简版 BOT.md", { parse_mode: "HTML" });
-  }
-
-  const initialized = await executePrompt(ctx, deps, "/init", engine, {
-    silentSuccess: true,
-    suppressFailureReply: true,
+    skipSetupReminder: true,
     timeoutMs: CLI_INIT_TIMEOUT_MS
   });
-  if (!initialized) {
-    await ctx.reply("🤖 CLI 初始化没有完成，当前配置已保存，可以先继续聊天", { parse_mode: "HTML" });
-  }
 }
 
 export async function executePrompt(
@@ -124,7 +114,7 @@ export async function executePrompt(
   }
 
   let session = deps.sessionManager.getOrCreate(chatId);
-  if (await remindSetup(ctx, session)) return false;
+  if (!options.skipSetupReminder && await remindSetup(ctx, deps, session)) return false;
   if (forcedEngine && session.engine !== forcedEngine) {
     session = deps.sessionManager.update(session.id, {
       engine: forcedEngine,
@@ -138,12 +128,9 @@ export async function executePrompt(
     return false;
   }
 
-  const botContext = options.includeAgentContext === false
-    ? { prompt: text, fingerprint: null }
-    : buildPromptWithAgentContext(text, session);
   const promptWithRecentContext = options.includeAgentContext === false
-    ? botContext.prompt
-    : buildPromptWithRecentConversation(botContext.prompt, session);
+    ? text
+    : buildPromptWithRecentConversation(text, session);
   const promptWithAttachments = buildPromptWithAttachments(promptWithRecentContext, session);
   session = deps.sessionManager.update(session.id, {
     status: "running",
@@ -180,7 +167,6 @@ export async function executePrompt(
       : session.conversation;
     deps.sessionManager.update(session.id, {
       engineSessionId: result.sessionId ?? session.engineSessionId,
-      botContextFingerprint: botContext.fingerprint ?? session.botContextFingerprint,
       conversation,
       status: "idle",
       attachments: []
@@ -288,40 +274,6 @@ function buildPromptWithRecentConversation(prompt: string, session: TelegramSess
     "",
     prompt
   ].join("\n");
-}
-
-function buildPromptWithAgentContext(prompt: string, session: TelegramSession): { prompt: string; fingerprint: string | null } {
-  if (prompt.trimStart().startsWith("/")) return { prompt, fingerprint: null };
-  const content = readAgentProfileContext(session);
-  if (!content) return { prompt, fingerprint: null };
-  const fingerprint = buildBotContextFingerprint(session, content);
-  if (session.botContextFingerprint === fingerprint) {
-    return { prompt, fingerprint: null };
-  }
-  return {
-    prompt: [
-      `<bot_context source="${BOT_PROFILE_FILENAME}">`,
-      content,
-      "</bot_context>",
-      "",
-      prompt
-    ].join("\n"),
-    fingerprint
-  };
-}
-
-function readAgentProfileContext(session: TelegramSession): string | null {
-  try {
-    const content = fs.readFileSync(path.join(session.cwd, BOT_PROFILE_FILENAME), "utf8").trim();
-    return content ? truncateText(content, 5000) : null;
-  } catch {
-    return null;
-  }
-}
-
-function buildBotContextFingerprint(session: TelegramSession, content: string): string {
-  const hash = createHash("sha256").update(content).digest("hex");
-  return `${session.engine}:${session.cwd}:${hash}`;
 }
 
 function escapeXmlLikeText(value: string): string {

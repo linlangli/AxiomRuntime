@@ -50,6 +50,16 @@ export function splitPlainText(value: string, maxLength = 3800): string[] {
 }
 
 export const Formatter = {
+  modelPrompt(reselect = false): string {
+    return reselect
+      ? "🤖 重新选择你要使用的大模型吧"
+      : "🤖 确定你要使用的大模型吧";
+  },
+
+  modelRequired(): string {
+    return "🤖 先确定你要使用的大模型吧";
+  },
+
   workdirPrompt(): string {
     return "🤖 你好呀，先确定工作路径吧";
   },
@@ -166,11 +176,11 @@ export const Formatter = {
     return [
       "<b>AI Gateway Telegram Bot</b>",
       "",
-      "首次使用会先选择工作路径和 CLI。",
+      "首次使用会先选择大模型、工作路径和会话信息。",
       "",
       "<b>Commands</b>",
-      "/claude prompt - 使用 Claude Code",
-      "/codex prompt - 使用 Codex",
+      "/claude - 切换 Claude Code 并重新选择模型",
+      "/codex - 切换 Codex 并重新选择模型",
       "/reset - 重置会话信息",
       "/fresh - 清空聊天窗口",
       "/cwd path - 查看或切换工作路径",

@@ -276,7 +276,8 @@ function rowToSession(row: SessionRow): TelegramSession {
 
 function normalizeSetupStep(value: string): TelegramSetupStep {
   if (
-    value === "workdir"
+    value === "model"
+    || value === "workdir"
     || value === "custom_workdir"
     || value === "edit_custom_workdir"
     || value === "usage_price_input"

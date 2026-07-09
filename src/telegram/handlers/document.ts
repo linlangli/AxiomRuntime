@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Bot } from "grammy";
 import { escapeHtml, truncateText } from "../interaction/formatter.js";
-import { runAgentProfileBootstrap, type MessageHandlerDeps } from "./message.js";
+import type { MessageHandlerDeps } from "./message.js";
 import { completeAgentProfile, showReadyCard } from "./setup.js";
 
 const MAX_ATTACHMENT_BYTES = 512 * 1024;
@@ -45,9 +45,6 @@ export function registerDocumentHandler(bot: Bot, deps: MessageHandlerDeps): voi
       const current = deps.sessionManager.getOrCreate(chatId);
       if (current.setupStep === "agent_profile") {
         const next = await completeAgentProfile(ctx, deps, text, { showReady: false });
-        if (next && text.trim()) {
-          await runAgentProfileBootstrap(ctx, deps, next.engine);
-        }
         if (next) {
           await showReadyCard(ctx, deps, next);
         }

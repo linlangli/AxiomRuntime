@@ -1,5 +1,7 @@
 import { InlineKeyboard } from "grammy";
-import type { TelegramPermissionMode } from "../config.js";
+import type { TelegramEngineName, TelegramPermissionMode } from "../config.js";
+
+type PickerScope = "setup" | "ready";
 
 export function buildApprovalKeyboard(id: string): InlineKeyboard {
   return new InlineKeyboard()
@@ -34,6 +36,37 @@ export function buildCliKeyboard(): InlineKeyboard {
     .text("Codex", "setup:cli:codex");
 }
 
+export function buildProviderPickerKeyboard(
+  providers: string[],
+  scope: PickerScope,
+  forcedEngine?: TelegramEngineName
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  for (const [index, provider] of providers.entries()) {
+    keyboard.text(provider, buildProviderPickCallback(scope, index, forcedEngine));
+    if (index < providers.length - 1 || scope === "ready") {
+      keyboard.row();
+    }
+  }
+  if (scope === "ready") {
+    return keyboard.text("back", "ready:back");
+  }
+  return keyboard;
+}
+
+export function buildModelPickerKeyboard(
+  models: string[],
+  providerIndex: number,
+  scope: PickerScope,
+  forcedEngine?: TelegramEngineName
+): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  for (const [index, model] of models.entries()) {
+    keyboard.text(model, buildModelPickCallback(scope, providerIndex, index, forcedEngine)).row();
+  }
+  return keyboard.text("back", buildModelBackCallback(scope, forcedEngine));
+}
+
 export function buildAgentProfileKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("暂不提供", "setup:agent:skip");
@@ -57,9 +90,7 @@ export function buildReadyKeyboard(input: {
     .row()
     .text(formatPermissionModeLabel(input.permissionMode), "ready:mode")
     .row()
-    .text(input.cwd, "ready:workdir")
-    .row()
-    .text("BOT", "ready:agent");
+    .text(input.cwd, "ready:workdir");
 }
 
 export function buildReadyCliKeyboard(): InlineKeyboard {
@@ -71,19 +102,11 @@ export function buildReadyCliKeyboard(): InlineKeyboard {
 }
 
 export function buildReadyProviderKeyboard(providers: string[]): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  for (const [index, provider] of providers.entries()) {
-    keyboard.text(provider, `ready:provider:pick:${index}`).row();
-  }
-  return keyboard.text("back", "ready:back");
+  return buildProviderPickerKeyboard(providers, "ready");
 }
 
 export function buildReadyModelKeyboard(models: string[], providerIndex: number): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  for (const [index, model] of models.entries()) {
-    keyboard.text(model, `ready:model:pick:${providerIndex}:${index}`).row();
-  }
-  return keyboard.text("back", "ready:provider");
+  return buildModelPickerKeyboard(models, providerIndex, "ready");
 }
 
 export function buildReadyModeKeyboard(): InlineKeyboard {
@@ -107,4 +130,22 @@ export function formatPermissionModeLabel(mode: TelegramPermissionMode): string 
   if (mode === "acceptEdits") return "接受编辑";
   if (mode === "bypassPermissions") return "跳过权限";
   return "默认权限";
+}
+
+function buildProviderPickCallback(scope: PickerScope, index: number, forcedEngine?: TelegramEngineName): string {
+  return ["setup", "ready"].includes(scope) && forcedEngine
+    ? `${scope}:provider:pick:${index}:${forcedEngine}`
+    : `${scope}:provider:pick:${index}`;
+}
+
+function buildModelPickCallback(scope: PickerScope, providerIndex: number, modelIndex: number, forcedEngine?: TelegramEngineName): string {
+  return forcedEngine
+    ? `${scope}:model:pick:${providerIndex}:${modelIndex}:${forcedEngine}`
+    : `${scope}:model:pick:${providerIndex}:${modelIndex}`;
+}
+
+function buildModelBackCallback(scope: PickerScope, forcedEngine?: TelegramEngineName): string {
+  if (forcedEngine) return `${scope}:provider:show:${forcedEngine}`;
+  if (scope === "setup") return "setup:provider:show";
+  return `${scope}:provider`;
 }

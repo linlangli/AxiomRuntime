@@ -6,8 +6,8 @@ import { safeResetChatCommandMenu, safeSetChatCommandMenu } from "../interaction
 import { Formatter, escapeHtml } from "../interaction/formatter.js";
 import type { ApprovalManager } from "../interaction/approval.js";
 import type { SessionManager } from "../session/manager.js";
-import { executePrompt, type MessageHandlerDeps } from "./message.js";
-import { selectCli, showConfigPanel, showReadyCard, startSetup } from "./setup.js";
+import { runCliInit, type MessageHandlerDeps } from "./message.js";
+import { showConfigPanel, showReadyProviderPicker, showSetupProviderPicker, startSetup } from "./setup.js";
 import { showUsagePanel } from "./usage.js";
 
 const FRESH_DELETE_SCAN_LIMIT = 1000;
@@ -86,11 +86,12 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
       await ctx.reply(`Directory not found: <code>${escapeHtml(cwd)}</code>`, { parse_mode: "HTML" });
       return;
     }
-    deps.sessionManager.update(session.id, {
+    const next = deps.sessionManager.update(session.id, {
       cwd,
       engineSessionId: null,
       botContextFingerprint: null
     });
+    await runCliInit(ctx, deps, next.engine);
     await ctx.reply(`cwd: <code>${escapeHtml(cwd)}</code>`, { parse_mode: "HTML" });
   });
 }
@@ -114,24 +115,13 @@ async function safeDeleteCommandMessage(ctx: CommandContext<Context>): Promise<v
 }
 
 async function runEngineCommand(ctx: CommandContext<Context>, deps: CommandDeps, bot: Bot, engine: TelegramEngineName): Promise<void> {
-  const prompt = String(ctx.match ?? "").trim();
   const session = deps.sessionManager.getOrCreate(ctx.chat.id);
   if (session.setupStep !== "ready") {
-    await selectCli(ctx, deps, engine);
+    await showSetupProviderPicker(ctx, deps, { forcedEngine: engine, reselect: true });
     return;
   }
-  const next = deps.sessionManager.update(session.id, {
-    engine,
-    engineSessionId: session.engine === engine ? session.engineSessionId : null,
-    botContextFingerprint: session.engine === engine ? session.botContextFingerprint : null,
-    setupStep: "ready"
-  });
-  if (!prompt) {
-    await safeSetChatCommandMenu(bot, ctx.chat.id, engine);
-    await showReadyCard(ctx, deps, next);
-    return;
-  }
-  await executePrompt(ctx, deps, prompt, engine);
+  await safeSetChatCommandMenu(bot, ctx.chat.id, engine);
+  await showReadyProviderPicker(ctx, deps, { forcedEngine: engine, reselect: true });
 }
 
 export async function deleteRecentChatMessages(

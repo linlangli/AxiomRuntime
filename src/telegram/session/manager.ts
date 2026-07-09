@@ -50,7 +50,7 @@ export class SessionManager {
       cwd: this.config.defaultCwd,
       permissionMode: this.config.defaultPermissionMode,
       approveAll: false,
-      setupStep: "workdir",
+      setupStep: "model",
       status: "idle"
     });
   }
