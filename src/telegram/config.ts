@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { getTelegramConfigPath, getTelegramDbPath } from "../core/config/paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../core/config/json-store.js";
-import { isRecord } from "../core/utils/is-record.js";
+import { readBoolean, readNumber, readOptionalString, readString } from "../core/config/schema.js";
 
 export type TelegramEngineName = "claude" | "codex";
 export type TelegramPermissionMode = "default" | "acceptEdits" | "bypassPermissions";
@@ -55,20 +55,20 @@ export async function setTelegramConfigValue(key: string, value: string): Promis
 
 export function normalizeTelegramConfig(value: unknown): TelegramConfig {
   const defaults = getDefaultTelegramConfig();
-  const input = isRecord(value) ? value : {};
-  const defaultEngine = String(input.defaultEngine ?? defaults.defaultEngine);
-  const defaultPermissionMode = normalizePermissionMode(String(input.defaultPermissionMode ?? defaults.defaultPermissionMode));
-  const sessionTimeoutHours = Number(input.sessionTimeoutHours ?? defaults.sessionTimeoutHours);
-  const maxOutputLength = Number(input.maxOutputLength ?? defaults.maxOutputLength);
+  const input = isConfigRecord(value) ? value : {};
+  const defaultEngine = readString(input, "defaultEngine", { fallback: defaults.defaultEngine });
+  const defaultPermissionMode = normalizePermissionMode(readString(input, "defaultPermissionMode", { fallback: defaults.defaultPermissionMode }));
+  const sessionTimeoutHours = readNumber(input, "sessionTimeoutHours", defaults.sessionTimeoutHours);
+  const maxOutputLength = readNumber(input, "maxOutputLength", defaults.maxOutputLength);
   const allowedUserIds = normalizeAllowedUserIds(input.allowedUserIds);
-  const provider = normalizeOptionalString(input.provider);
-  const model = normalizeOptionalString(input.model);
-  const proxyUrl = normalizeOptionalString(input.proxyUrl);
-  const dbPath = String(input.dbPath ?? defaults.dbPath).trim() || defaults.dbPath;
+  const provider = readOptionalString(input, "provider");
+  const model = readOptionalString(input, "model");
+  const proxyUrl = readOptionalString(input, "proxyUrl");
+  const dbPath = readString(input, "dbPath", { fallback: defaults.dbPath }) || defaults.dbPath;
 
   return {
-    token: String(input.token ?? defaults.token).trim(),
-    allowAllUsers: parseBoolean(input.allowAllUsers ?? defaults.allowAllUsers),
+    token: readString(input, "token", { fallback: defaults.token }),
+    allowAllUsers: readBoolean(input.allowAllUsers ?? defaults.allowAllUsers),
     allowedUserIds,
     defaultEngine: VALID_ENGINES.has(defaultEngine as TelegramEngineName) ? defaultEngine as TelegramEngineName : defaults.defaultEngine,
     defaultCwd: String(input.defaultCwd ?? defaults.defaultCwd).trim() || defaults.defaultCwd,
@@ -183,14 +183,11 @@ function isTelegramConfigKey(key: string): key is keyof TelegramConfig {
 }
 
 function parseBoolean(value: unknown): boolean {
-  if (typeof value === "boolean") return value;
-  const text = String(value ?? "").trim().toLowerCase();
-  return text === "true" || text === "1" || text === "yes" || text === "y" || text === "on";
+  return readBoolean(value);
 }
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  const text = String(value ?? "").trim();
-  return text || undefined;
+function isConfigRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function chmodConfigFile(): Promise<void> {

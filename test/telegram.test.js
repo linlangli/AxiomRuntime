@@ -39,6 +39,8 @@ import { buildClaudeArgs, parseClaudeOutput } from "../dist/telegram/engine/clau
 import { createTelegramEngines, listTelegramEngineNames } from "../dist/telegram/engine/registry.js";
 import { spawnCapture } from "../dist/telegram/engine/process-utils.js";
 import { resolveWorkingCommand } from "../dist/telegram/engine/engine-utils.js";
+import { TelegramHandlerRegistry } from "../dist/telegram/handler-registry.js";
+import { TelegramTaskLifecycleRegistry } from "../dist/telegram/lifecycle-registry.js";
 import { deleteRecentChatMessages, registerCommands, shouldHandleStartCommand } from "../dist/telegram/handlers/command.js";
 import { registerDocumentHandler } from "../dist/telegram/handlers/document.js";
 import { executePrompt, registerMessageHandler, runCliInit, startTypingStatus } from "../dist/telegram/handlers/message.js";
@@ -242,6 +244,47 @@ test("telegram engine registry creates built-in engines", () => {
   const engines = createTelegramEngines();
   assert.equal(engines.claude.name, "claude");
   assert.equal(engines.codex.name, "codex");
+});
+
+test("telegram handler registry installs handlers in registration order", () => {
+  const registry = new TelegramHandlerRegistry();
+  const installed = [];
+  registry.register("first", () => installed.push("first"));
+  registry.register("second", () => installed.push("second"));
+
+  registry.install({}, {});
+
+  assert.deepEqual(registry.list(), ["first", "second"]);
+  assert.deepEqual(installed, ["first", "second"]);
+});
+
+test("telegram task lifecycle registry emits completion and failure hooks", async () => {
+  const registry = new TelegramTaskLifecycleRegistry();
+  const events = [];
+  registry.register({
+    onTaskCompleted: (event) => events.push(["completed", event.chatId, event.engine]),
+    onTaskFailed: (event) => events.push(["failed", event.chatId, event.engine])
+  });
+
+  await registry.emitTaskCompleted({
+    chatId: 1,
+    engine: "codex",
+    session: { id: "s1" },
+    result: { response: "ok" },
+    fallbackFrom: null,
+    preferredProvider: true
+  });
+  await registry.emitTaskFailed({
+    chatId: 2,
+    engine: "claude",
+    session: { id: "s2" },
+    error: new Error("failed")
+  });
+
+  assert.deepEqual(events, [
+    ["completed", 1, "codex"],
+    ["failed", 2, "claude"]
+  ]);
 });
 
 test("formatter escapes and splits telegram text safely", () => {

@@ -14,7 +14,7 @@ export async function recordUsageFromResponse(input: {
   tool: RunToolType;
   records: OpenAiUsageProxyRecord[];
   onUsage?: (record: OpenAiUsageProxyRecord) => void | Promise<void>;
-}): Promise<void> {
+}): Promise<boolean> {
   const candidate = extractBestUsageCandidate(input.text, input.contentType, input.fallbackModel);
   if (!candidate) {
     await writeLog({
@@ -28,7 +28,7 @@ export async function recordUsageFromResponse(input: {
         contentType: input.contentType
       }
     });
-    return;
+    return false;
   }
 
   const pricedCost = candidate.costUsd ?? await estimateTokenCostUsdFromConfig(input.provider, candidate.model, candidate.usage);
@@ -68,6 +68,7 @@ export async function recordUsageFromResponse(input: {
     }
   });
   await Promise.resolve(input.onUsage?.(record)).catch(() => undefined);
+  return true;
 }
 
 type UsageCandidate = {

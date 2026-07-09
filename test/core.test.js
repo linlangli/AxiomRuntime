@@ -29,6 +29,21 @@ test("normalizes provider levels by priority", () => {
   assert.equal(providers[1].baseUrl, "https://b.test");
 });
 
+test("provider config validation rejects empty connection fields", () => {
+  assert.throws(
+    () => normalizeProviders([
+      { name: "api", baseUrl: "", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]),
+    /baseUrl cannot be empty/
+  );
+  assert.throws(
+    () => normalizeProviders([
+      { name: "api", baseUrl: "https://api.test", apiKey: "", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]),
+    /apiKey cannot be empty/
+  );
+});
+
 test("swaps provider levels", () => {
   const providers = normalizeProviders([
     { name: "a", baseUrl: "https://a.test", apiKey: "a", mode: "auto", level: 1, model: "gpt-5" },
@@ -252,6 +267,12 @@ test("OpenAI usage proxy forwards JSON response and records priced usage", async
       assert.equal(proxy.getRecords().length, 1);
       assert.equal(proxy.getRecords()[0].costUsd, 0.0025);
       assert.equal(proxy.getRecords()[0].costSource, "pricing");
+      assert.equal(proxy.getMetrics().requestCount, 1);
+      assert.equal(proxy.getMetrics().successCount, 1);
+      assert.equal(proxy.getMetrics().failureCount, 0);
+      assert.equal(proxy.getMetrics().usageRecordCount, 1);
+      assert.equal(proxy.getMetrics().noUsageCount, 0);
+      assert.equal(proxy.getMetrics().upstreamStatusCounts["200"], 1);
 
       const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
       assert.equal(usage.events[0].source, "proxy");

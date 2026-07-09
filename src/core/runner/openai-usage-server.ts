@@ -16,14 +16,31 @@ import {
   type ResponsesChatFallbackInput
 } from "./openai-usage-responses.js";
 import { extractRequestModel, recordUsageFromResponse } from "./openai-usage-recording.js";
-import type { OpenAiUsageProxy, OpenAiUsageProxyRecord, StartOpenAiUsageProxyInput } from "./openai-usage-types.js";
+import type { OpenAiUsageProxy, OpenAiUsageProxyMetrics, OpenAiUsageProxyRecord, StartOpenAiUsageProxyInput } from "./openai-usage-types.js";
 import { getToolBaseUrl } from "./tool-runner.js";
 
 export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): Promise<OpenAiUsageProxy> {
   const upstreamBaseUrl = getToolBaseUrl("codex", input.provider);
   const records: OpenAiUsageProxyRecord[] = [];
+  const metrics = createEmptyMetrics();
 
   const server = http.createServer(async (req, res) => {
+    const startedAt = Date.now();
+    metrics.requestCount += 1;
+    let finalized = false;
+    const finalizeMetrics = (success: boolean, upstreamStatus?: number | string): void => {
+      if (finalized) return;
+      finalized = true;
+      if (success) {
+        metrics.successCount += 1;
+      } else {
+        metrics.failureCount += 1;
+      }
+      metrics.totalDurationMs += Date.now() - startedAt;
+      if (upstreamStatus !== undefined) {
+        incrementStatusCount(metrics, upstreamStatus);
+      }
+    };
     try {
       const requestBody = await readRequestBody(req);
       const requestModel = extractRequestModel(requestBody) ?? input.model;
@@ -58,8 +75,9 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
           tool: input.tool,
           records,
           onUsage: input.onUsage,
+          metrics,
           res
-        });
+        }).then((result) => finalizeMetrics(result.status >= 200 && result.status < 400, result.status));
         return;
       }
 
@@ -92,14 +110,15 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
           tool: input.tool,
           records,
           onUsage: input.onUsage,
+          metrics,
           res
-        });
+        }).then((result) => finalizeMetrics(result.status >= 200 && result.status < 400, result.status));
         return;
       }
 
       writeResponseHead(res, upstreamResponse);
       const captured = await streamResponse(upstreamResponse, res);
-      await recordUsageFromResponse({
+      const recordedUsage = await recordUsageFromResponse({
         text: captured.toString("utf8"),
         contentType: upstreamResponse.headers.get("content-type") ?? "",
         fallbackModel: requestModel,
@@ -108,12 +127,15 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
         records,
         onUsage: input.onUsage
       });
+      recordUsageMetric(metrics, recordedUsage);
       res.end();
+      finalizeMetrics(upstreamResponse.status >= 200 && upstreamResponse.status < 400, upstreamResponse.status);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       res.statusCode = 502;
       res.setHeader("content-type", "application/json; charset=utf-8");
       res.end(JSON.stringify({ error: { message: `AI Gateway proxy failed: ${message}` } }));
+      finalizeMetrics(false, "proxy_error");
     }
   });
 
@@ -140,6 +162,9 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
     },
     getRecords() {
       return [...records];
+    },
+    getMetrics() {
+      return snapshotMetrics(metrics);
     }
   };
 }
@@ -150,10 +175,11 @@ type SendChatCompletionsResponsesSseInput = ResponsesChatFallbackInput & {
   tool: RunToolType;
   records: OpenAiUsageProxyRecord[];
   onUsage?: (record: OpenAiUsageProxyRecord) => void | Promise<void>;
+  metrics: OpenAiUsageProxyMetrics;
   res: http.ServerResponse;
 };
 
-async function sendChatCompletionsResponsesSse(input: SendChatCompletionsResponsesSseInput): Promise<void> {
+async function sendChatCompletionsResponsesSse(input: SendChatCompletionsResponsesSseInput): Promise<{ status: number }> {
   const fallbackResponse = await buildChatCompletionsResponsesSse({
     upstreamBaseUrl: input.upstreamBaseUrl,
     requestBody: input.requestBody,
@@ -162,7 +188,7 @@ async function sendChatCompletionsResponsesSse(input: SendChatCompletionsRespons
   input.res.statusCode = fallbackResponse.status;
   input.res.statusMessage = fallbackResponse.statusText;
   input.res.setHeader("content-type", fallbackResponse.contentType);
-  await recordUsageFromResponse({
+  const recordedUsage = await recordUsageFromResponse({
     text: fallbackResponse.body.toString("utf8"),
     contentType: fallbackResponse.contentType,
     fallbackModel: input.requestModel,
@@ -171,5 +197,41 @@ async function sendChatCompletionsResponsesSse(input: SendChatCompletionsRespons
     records: input.records,
     onUsage: input.onUsage
   });
+  recordUsageMetric(input.metrics, recordedUsage);
   input.res.end(fallbackResponse.body);
+  return { status: fallbackResponse.status };
+}
+
+function createEmptyMetrics(): OpenAiUsageProxyMetrics {
+  return {
+    requestCount: 0,
+    successCount: 0,
+    failureCount: 0,
+    noUsageCount: 0,
+    usageRecordCount: 0,
+    totalDurationMs: 0,
+    averageDurationMs: 0,
+    upstreamStatusCounts: {}
+  };
+}
+
+function recordUsageMetric(metrics: OpenAiUsageProxyMetrics, recordedUsage: boolean): void {
+  if (recordedUsage) {
+    metrics.usageRecordCount += 1;
+  } else {
+    metrics.noUsageCount += 1;
+  }
+}
+
+function incrementStatusCount(metrics: OpenAiUsageProxyMetrics, status: number | string): void {
+  const key = String(status);
+  metrics.upstreamStatusCounts[key] = (metrics.upstreamStatusCounts[key] ?? 0) + 1;
+}
+
+function snapshotMetrics(metrics: OpenAiUsageProxyMetrics): OpenAiUsageProxyMetrics {
+  return {
+    ...metrics,
+    averageDurationMs: metrics.requestCount ? metrics.totalDurationMs / metrics.requestCount : 0,
+    upstreamStatusCounts: { ...metrics.upstreamStatusCounts }
+  };
 }

@@ -5,6 +5,7 @@ import { registerCallbackHandler } from "./handlers/callback.js";
 import { registerCommands } from "./handlers/command.js";
 import { registerDocumentHandler } from "./handlers/document.js";
 import { registerMessageHandler } from "./handlers/message.js";
+import { installTelegramHandlers, registerTelegramHandler } from "./handler-registry.js";
 import { ApprovalManager } from "./interaction/approval.js";
 import { safeResetChatCommandMenu, safeSetChatCommandMenu, safeSetDefaultCommandMenu } from "./interaction/command-menu.js";
 import { SessionManager } from "./session/manager.js";
@@ -92,10 +93,8 @@ export async function createBot(): Promise<TelegramRuntime> {
     config,
     engines
   };
-  registerCommands(bot, deps);
-  registerCallbackHandler(bot, deps);
-  registerDocumentHandler(bot, deps);
-  registerMessageHandler(bot, deps);
+  registerBuiltInTelegramHandlers();
+  installTelegramHandlers(bot, deps);
 
   await safeSetDefaultCommandMenu(bot);
   await refreshStoredChatCommandMenus(bot, sessionManager);
@@ -107,6 +106,13 @@ export async function createBot(): Promise<TelegramRuntime> {
     sessionManager,
     engines
   };
+}
+
+function registerBuiltInTelegramHandlers(): void {
+  registerTelegramHandler("commands", registerCommands);
+  registerTelegramHandler("callbacks", registerCallbackHandler);
+  registerTelegramHandler("documents", registerDocumentHandler);
+  registerTelegramHandler("messages", registerMessageHandler);
 }
 
 async function refreshStoredChatCommandMenus(bot: Bot, sessionManager: SessionManager): Promise<void> {

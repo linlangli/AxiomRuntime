@@ -1,5 +1,6 @@
 export type {
   OpenAiUsageProxy,
+  OpenAiUsageProxyMetrics,
   OpenAiUsageProxyRecord,
   StartOpenAiUsageProxyInput
 } from "./openai-usage-types.js";

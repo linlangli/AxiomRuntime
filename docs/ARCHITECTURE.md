@@ -11,13 +11,15 @@ AI Gateway (`ai-gateway`) 是一个本地 AI Provider 网关，统一管理多�
 | 已完成 | 配置并发安全 | JSON 配置写入已通过 `proper-lockfile` 加锁，并使用 atomic rename 与 `updateJsonFile()` 处理 read-modify-write，降低 CLI 与 Telegram 并发覆盖风险 |
 | 已完成 | 运行时 provider fallback | CLI `ai use` 和 Telegram `executePrompt()` 都已支持 provider 候选列表，首选 provider 执行失败后会尝试下一个可用 provider |
 | 已完成 | Provider 健康检查增强 | 模型发现和模型探测请求已支持临时错误 retry/backoff，并记录 attempts、duration、retryErrors；深度 callable 检查已改为有限并发 |
+| 已完成 | Provider 熔断与 health score | Provider cache 已记录 consecutiveFailures、lastFailureAt、circuitOpenUntil、healthScore；CLI/Telegram 运行时失败会累计健康状态，fallback 会跳过熔断中的 provider |
 | 已完成 | Telegram 会话并发控制 | `SessionManager.runExclusive()` 为同一 chat 建立内存队列，避免同一会话同时启动多个 engine 进程 |
-| 已完成 | 注册表解耦 | 已新增 CLI 命令注册表、core runner 引擎注册表、Telegram engine registry；外部命令和类型保持兼容 |
+| 已完成 | 注册表解耦 | 已新增 CLI 命令注册表、core runner 引擎注册表、Telegram engine registry、Telegram handler registry、integration registry；外部命令和类型保持兼容 |
 | 部分完成 | Prompt 中间件链 | recent conversation 和 attachments 已改为 Prompt middleware；上下文预算使用字符预算近似，未引入 tokenizer |
 | 已完成 | 大文件拆分 | `openai-usage-proxy.ts` 和 `hermes-service.ts` 已保留 facade，并拆分出协议适配、usage 记录、HTTP 工具、Hermes YAML、本地文件、导入导出、provider sync 等模块 |
-| 已完成 | 共享工具与测试 | 重复的 `isRecord()` 已抽到 `src/core/utils/is-record.ts`；已补 JSON store 并发、CLI fallback、Telegram fallback、Hermes provider 解析、Prompt middleware、注册表等回归测试 |
-| 部分完成 | 代理可观测性 | fallback/usage 事件已有结构化日志；请求延迟、失败率、统一错误指标仍未实现 |
-| 部分完成 | 插件化解耦 | CLI 命令注册表、引擎注册表、Prompt 中间件链已落地；Telegram handler 注册表、集成注册表、生命周期钩子仍未完成 |
+| 已完成 | 配置 schema validation | 新增 `src/core/config/schema.ts`；Provider 配置会校验对象形态、非空 name/baseUrl/apiKey；Telegram config 复用 schema helper 保持宽松归一化 |
+| 已完成 | 共享工具与测试 | 重复的 `isRecord()` 已抽到 `src/core/utils/is-record.ts`；已补 JSON store 并发、CLI fallback、Telegram fallback、Hermes provider 解析、Prompt middleware、注册表、熔断、proxy metrics 等回归测试 |
+| 已完成 | 代理可观测性 | OpenAI usage proxy 已暴露 `getMetrics()`，统计 request/success/failure/noUsage/usageRecord、总耗时、平均耗时、上游状态码分布；fallback/usage 事件保留结构化日志 |
+| 部分完成 | 插件化解耦 | CLI 命令注册表、runner 引擎注册表、Telegram engine/handler registry、integration registry、Prompt middleware、生命周期钩子已落地；类型联合和子命令参数解析仍偏静态 |
 | 未完成 | Bot Memory | 本轮没有实现 Bot Memory，相关设计仍以 `docs/memory-system-spec.md` 为准 |
 
 ```mermaid
@@ -54,6 +56,7 @@ src/
 │   │   ├── json-store.ts   # 通用 JSON 文件读写（文件锁 + atomic rename + read-modify-write）
 │   │   ├── paths.ts        # 配置路径常量 (~/.ai-gateway/)
 │   │   ├── providers-store.ts  # Provider 列表持久化
+│   │   ├── schema.ts           # 轻量配置 schema helper
 │   │   ├── session-store.ts    # CLI 会话记录
 │   │   └── usage-store.ts      # Token 用量存储
 │   ├── context/            # 项目上下文注入
@@ -68,7 +71,7 @@ src/
 │   │   ├── hermes-runner.ts    # 执行器
 │   │   ├── hermes-store.ts     # 配置存储
 │   │   └── hermes-types.ts     # 类型定义
-│   ├── integrations/       # 集成状态管理
+│   ├── integrations/       # 集成状态管理（provider revision / sync registry）
 │   ├── logs/               # 结构化日志服务
 │   ├── models/             # 模型发现与兼容性过滤
 │   │   ├── model-discovery.ts  # 模型列表发现
@@ -84,7 +87,7 @@ src/
 │   │   ├── openai-usage-http.ts        # HTTP/header 工具
 │   │   ├── openai-usage-responses.ts   # Responses/Chat 协议适配
 │   │   ├── openai-usage-recording.ts   # usage 提取与记录
-│   │   ├── openai-usage-types.ts       # proxy 类型
+│   │   ├── openai-usage-types.ts       # proxy 类型与 metrics
 │   │   └── tool-runner.ts          # 构建运行环境、注入 API 密钥
 │   ├── sessions/           # CLI 会话管理
 │   ├── status/             # 状态诊断 (doctor/status)
@@ -122,7 +125,9 @@ src/
     ├── templates/          # 消息模板
     ├── bot.ts              # Bot 初始化入口 (createBot)
     ├── config.ts           # Telegram 配置 (JSON 持久化，支持 12 个可配置项)
+    ├── handler-registry.ts # Telegram handler 注册表
     ├── index.ts            # Telegram 子系统导出
+    ├── lifecycle-registry.ts # Telegram task 生命周期钩子
     ├── log.ts              # Telegram 专用日志
     └── network.ts          # 代理配置 (HTTPS_PROXY/自定义 proxyUrl)
 ```
@@ -344,19 +349,19 @@ graph TD
 | 已完成 | 配置并发安全 | `json-store.ts` 已新增 `withJsonFileLock()`、`updateJsonFile()`；公共写入走文件锁 + atomic rename；providers/cache/usage/session/integration/telegram config/pricing/hermes state 等更新路径已迁移 | 未把所有配置迁移到 SQLite；当前仍保持 JSON 文件方案 |
 | 已完成 | CLI 运行时 provider fallback | `ai use` 已改为候选列表执行；子进程非 0 退出时尝试下一个 provider；CLI 不存在、用户取消、无候选不 fallback；fallback 事件写结构化日志 | 无 |
 | 已完成 | Telegram 运行时 provider fallback | `executePrompt()` 已按当前 engine 获取候选 provider；失败后尝试下一个；fallback 成功不修改默认 provider/model；fallback 成功时清空跨 provider resume，依靠 recent conversation 续上下文 | 无 |
-| 已完成 | Provider 健康检查 retry/backoff | `checkProvider()`、`runDeepCheck()`、模型 probe 已对临时错误做 retry/backoff；日志记录 attempts/duration/retryErrors；深度 callable 检查使用有限并发 | 未做长期 provider health score / 熔断策略 |
-| 已完成 | `openai-usage-proxy.ts` 大文件拆分 | 原文件变为 facade；已拆为 `openai-usage-server.ts`、`openai-usage-http.ts`、`openai-usage-responses.ts`、`openai-usage-recording.ts`、`openai-usage-types.ts` | 更细粒度指标如延迟、失败率仍未实现 |
+| 已完成 | Provider 健康检查 retry/backoff + 熔断 | `checkProvider()`、`runDeepCheck()`、模型 probe 已对临时错误做 retry/backoff；日志记录 attempts/duration/retryErrors；深度 callable 检查使用有限并发；运行时失败会累计 health score 并在连续失败后打开 circuit breaker | 熔断阈值目前是固定常量，后续可配置化 |
+| 已完成 | `openai-usage-proxy.ts` 大文件拆分 | 原文件变为 facade；已拆为 `openai-usage-server.ts`、`openai-usage-http.ts`、`openai-usage-responses.ts`、`openai-usage-recording.ts`、`openai-usage-types.ts`；proxy 暴露 `getMetrics()` 统计请求、失败、usage/noUsage、耗时和上游状态码 | 可后续把 metrics 持久化或接入 dashboard |
 | 已完成 | `hermes-service.ts` 大文件拆分 | 原文件变为 facade；已拆为 core/yaml/local-files/import-export/provider-sync 等模块，外部导出保持兼容 | 还可以继续把 sync/repair 编排再拆得更细，但 P0 小步重构目标已完成 |
 | 已完成 | 共享 `isRecord()` | 已新增 `src/core/utils/is-record.ts`，替换 usage/pricing、runner、Hermes、Telegram config/engine 等重复定义 | 其它通用小工具可后续按需抽取 |
-| 已完成 | 回归覆盖 | 已新增 JSON store 并发更新、CLI fallback、Telegram fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列等测试；当前 `npm test` 为 82 项通过 | 可继续补熔断/长期指标类测试 |
+| 已完成 | 回归覆盖 | 已新增 JSON store 并发更新、CLI fallback、Telegram fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、Provider 熔断、proxy metrics、schema validation 等测试；当前 `npm test` 为 87 项通过 | 可继续补更多异常路径和持久化 metrics 测试 |
 
 **P1 - 中优先级**
 
-5. **部分完成：OpenAI Usage Proxy 可观测性不足**
-   - 代理错误静默吞掉 (`catch(() => undefined)`)，应接入结构化日志
-   - 缺少请求延迟、失败率等指标收集
-   - 已完成：usage 记录职责已拆到 `openai-usage-recording.ts`，部分 fallback/usage 事件已有结构化日志
-   - 未完成：请求延迟、失败率、统一错误指标仍未实现
+5. **已完成：OpenAI Usage Proxy 可观测性基础**
+   - 已完成：usage 记录职责拆到 `openai-usage-recording.ts`
+   - 已完成：`OpenAiUsageProxy.getMetrics()` 提供请求量、成功/失败量、usage/noUsage、总耗时、平均耗时和上游状态码分布
+   - 已完成：usage/no-usage、Responses fallback/translation 继续写结构化日志
+   - 后续可选：metrics 持久化、按 provider/model 维度聚合、接入 CLI `ai status` 或 dashboard
 
 6. **部分完成：命令解析缺少框架**
    - 已完成：`cli/index.ts` 顶层命令路由已改为 `src/cli/registry.ts` 注册表，不再使用 raw `switch`
@@ -380,15 +385,16 @@ graph TD
    - 已抽为 `src/core/utils/is-record.ts`
    - 已替换 `claude-engine.ts`、`codex-engine.ts`、`telegram/config.ts`、`tool-runner.ts`、`hermes-store.ts`、`hermes-service-core.ts`、`pricing.ts` 等重复定义
 
-10. **未完成：类型安全改进**
-    - `normalizeProviderShape` 中大量 `as Partial<Provider>` 断言可以用 `zod` 或 `valibot` 替代
+10. **部分完成：类型安全改进**
+    - 已完成：新增轻量 `src/core/config/schema.ts`，Provider 配置读取不再用裸 `as Partial<Provider>`，并校验非空 name/baseUrl/apiKey
+    - 已完成：Telegram config 字段读取复用 schema helper，同时保留原有宽松归一化行为
+    - 未完成：可继续引入 `zod` 或 `valibot` 做更完整的 schema validation
     - Hermes 导入导出也是手动校验，缺乏 schema validation
-    - `TelegramConfig` 的 `normalizeTelegramConfig` 同样是手动字段提取
 
 11. **部分完成：测试覆盖**
     - 当前 `test/` 目录在 build 后用 `node --test` 运行
-    - 已补：JSON store 并发更新、CLI runtime fallback、Telegram runtime fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列
-    - 未完成：熔断策略、长期指标聚合、更多异常路径仍可继续补
+    - 已补：JSON store 并发更新、CLI runtime fallback、Telegram runtime fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、熔断策略、usage proxy metrics、schema validation
+    - 未完成：长期指标持久化、更多异常路径仍可继续补
 
 ### 5.3 性能
 
@@ -425,7 +431,7 @@ graph TD
 
 ### 5.5 插件化架构 — 高解耦 · 热插拔
 
-**当前状态：部分完成 / 继续小步推进。** 当前已完成 CLI 命令注册表、runner 引擎注册表、Telegram engine registry、Prompt 中间件链；Telegram handler 注册表、集成注册表、生命周期钩子、Bot Memory 业务仍未落地。
+**当前状态：部分完成 / 继续小步推进。** 当前已完成 CLI 命令注册表、runner 引擎注册表、Telegram engine registry、Telegram handler registry、integration registry、Prompt 中间件链和 Telegram lifecycle hooks；Bot Memory 业务和类型联合动态化仍未落地。
 
 当前代码的核心耦合问题是**所有模块通过硬编码 import + switch/if 分支连接**，新增或删除一个功能需要修改多处入口文件。以下是系统性解耦方案：
 
@@ -543,64 +549,57 @@ const args = engine.buildArgs(provider, model, settingsPath);
 
 #### 问题 3：Telegram Handler 硬编码（`bot.ts`）
 
-**现状**：`bot.ts` 手动 import 并调用 4 个 `registerXxxHandler()`，且 `TelegramRuntime.engines` 类型写死。
+**已完成**：`bot.ts` 不再手动调用 4 个 `registerXxxHandler()`，而是通过 `src/telegram/handler-registry.ts` 安装已注册 handler。
 
-**方案：Handler 注册表**
+**当前实现：Handler 注册表**
 
 ```typescript
 // telegram/handler-registry.ts
 export type HandlerRegistrar = (bot: Bot, deps: TelegramDeps) => void;
 
-const handlers: HandlerRegistrar[] = [];
+const handlers = new Map<string, HandlerRegistrar>();
 
-export function registerHandler(registrar: HandlerRegistrar): void {
-  handlers.push(registrar);
+export function registerTelegramHandler(name: string, registrar: HandlerRegistrar): void {
+  handlers.set(name, registrar);
 }
 
-export function installAllHandlers(bot: Bot, deps: TelegramDeps): void {
-  handlers.forEach(h => h(bot, deps));
+export function installTelegramHandlers(bot: Bot, deps: TelegramDeps): void {
+  for (const registrar of handlers.values()) registrar(bot, deps);
 }
 ```
 
 ```typescript
-// telegram/handlers/command.ts
-import { registerHandler } from "../handler-registry.js";
-registerHandler((bot, deps) => {
-  bot.command("start", async (ctx) => { /* ... */ });
-  // ...
-});
+// telegram/bot.ts
+registerTelegramHandler("commands", registerCommands);
+registerTelegramHandler("callbacks", registerCallbackHandler);
+registerTelegramHandler("documents", registerDocumentHandler);
+registerTelegramHandler("messages", registerMessageHandler);
+installTelegramHandlers(bot, deps);
 ```
 
-```typescript
-// telegram/bot.ts — 只调一行
-installAllHandlers(bot, deps);
-```
-
-效果：新增 handler = 新建文件 + 加一行 import；bot.ts 不再膨胀。
+效果：新增 handler 只需要注册到 registry；安装顺序可测试，`bot.ts` 不再直接编排每个 handler 的安装细节。
 
 #### 问题 4：集成状态硬编码（`integration-state.ts`）
 
-**现状**：`IntegrationState` 类型中 `hermes` 字段写死，每加一个集成就要改类型定义和所有使用处。
+**已完成**：`IntegrationState` 新增通用 `integrations` map，同时保留 `hermes` 字段作为向后兼容镜像。
 
-**方案：通用集成接口**
+**当前实现：通用集成状态注册**
 
 ```typescript
-// core/integrations/integration-registry.ts
-export type Integration = {
+// core/integrations/integration-state.ts
+export type IntegrationRegistration = {
   name: string;
-  onProviderChange?(change: ProviderChange): Promise<void>;
-  getSyncStatus?(): Promise<{ synced: boolean; pending: number }>;
 };
 
-const integrations = new Map<string, Integration>();
+const registeredIntegrations = new Set<string>(["hermes"]);
 
-export function registerIntegration(integration: Integration): void {
-  integrations.set(integration.name, integration);
+export function registerIntegration(registration: IntegrationRegistration): void {
+  registeredIntegrations.add(registration.name);
 }
 
-// IntegrationState 改为通用结构
 export type IntegrationState = {
   providerRevision: number;
+  hermes: IntegrationProviderSyncState; // backward-compatible mirror
   integrations: Record<string, {
     syncedProviderRevision: number;
     pendingProviderChanges: ProviderChange[];
@@ -608,7 +607,7 @@ export type IntegrationState = {
 };
 ```
 
-效果：`integration-state.ts` 不再知道任何具体集成的存在。
+效果：Provider 变更会写入已注册集成的 pending changes；Hermes 继续通过兼容 wrapper 工作，新集成不需要再修改状态文件结构。
 
 #### 问题 5：类型联合硬编码（`types.ts`）
 
@@ -714,24 +713,21 @@ const finalPrompt = await applyPromptMiddlewares({
 | 扩展点 | 接口 | 未来用途 |
 |--------|------|----------|
 | Prompt 中间件 | `PromptMiddleware` | Bot Memory 注入、Skill 加载 |
-| Session 生命周期钩子 | `SessionLifecycleHook` | 记忆蒸馏触发（每 N 次对话）、usage 统计 |
+| Session 生命周期钩子 | `TelegramTaskLifecycleHook`（已有） | 记忆蒸馏触发（每 N 次对话）、usage 统计 |
 | 命令注册表 | `CliCommand`（已有） | `/remember` `/forget` `/memories` 命令 |
 | Handler 注册表 | `HandlerRegistrar`（已有） | memory callback handler |
 | 引擎结果后处理 | `ResultPostProcessor` | Skill Learning 提炼（分析 toolCalls 数量） |
 
 ```typescript
-// telegram/lifecycle-registry.ts — Session 生命周期钩子（预留）
-export type SessionLifecycleHook = {
-  name: string;
-  onTaskComplete?(ctx: { chatId: number; session: TelegramSession; result: ExecutionResult }): Promise<void>;
-  onSessionCreate?(ctx: { chatId: number; session: TelegramSession }): Promise<void>;
-  onSessionExpire?(ctx: { chatId: number; session: TelegramSession }): Promise<void>;
+// telegram/lifecycle-registry.ts — 已落地的 task 生命周期钩子
+export type TelegramTaskLifecycleHook = {
+  onTaskCompleted?(event: TelegramTaskCompletedEvent): void | Promise<void>;
+  onTaskFailed?(event: TelegramTaskFailedEvent): void | Promise<void>;
 };
 
 // 未来 skill learning 自注册
-registerLifecycleHook({
-  name: "skill-learning",
-  async onTaskComplete({ session, result }) {
+registerTelegramTaskLifecycleHook({
+  async onTaskCompleted({ session, result }) {
     if ((result.toolCalls?.length ?? 0) >= 5) {
       await skillService.extractSkill(session, result);
     }
@@ -805,10 +801,10 @@ graph TD
 |--------|--------|------|----------|--------|
 | P0 | CLI 命令注册表 | 已完成 | `cli/index.ts` + `src/cli/registry.ts` | 中（纯重构，无功能变更） |
 | P0 | 引擎注册表 | 已完成 | `tool-runner.ts` + `bot.ts` + `core/runner/engine-registry.ts` + `telegram/engine/registry.ts` | 中 |
-| P1 | Handler 注册表 | 未完成 | `bot.ts` + handlers/ | 小 |
-| P1 | 集成注册表 | 未完成 | `integration-state.ts` + hermes/ | 小（可与删除 hermes 同步做） |
+| P1 | Handler 注册表 | 已完成 | `bot.ts` + `telegram/handler-registry.ts` + handlers/ | 小 |
+| P1 | 集成注册表 | 已完成 | `integration-state.ts` + hermes/ | 小 |
 | P1 | Prompt 中间件链 | 已完成 | `message.ts` executePrompt + `telegram/interaction/prompt-middleware.ts` | 小（将现有 buildPromptWithXxx 改为中间件） |
-| P1 | 生命周期钩子 | 未完成 | `message.ts` + `session/manager.ts` | 小（预留接口，暂不实现 hook） |
+| P1 | 生命周期钩子 | 已完成 | `message.ts` + `telegram/lifecycle-registry.ts` | 小 |
 | P2 | 类型联合改造 | 未完成 | `types.ts` + 全局引用 | 小（但需全量回归测试） |
 | P2 | 共享 util 抽取 | 已完成 | `isRecord` 等重复函数 | 小 |
 

@@ -8,6 +8,7 @@ import type { ApprovalManager } from "../interaction/approval.js";
 import { parseTelegramCommand, resolveMappedCommand } from "../interaction/command-menu.js";
 import { Formatter, truncateText } from "../interaction/formatter.js";
 import { applyPromptMiddlewares } from "../interaction/prompt-middleware.js";
+import { emitTelegramTaskCompleted, emitTelegramTaskFailed } from "../lifecycle-registry.js";
 import type { SessionManager, TelegramSession } from "../session/manager.js";
 import { writeTelegramLog } from "../log.js";
 import { completeAgentProfile, remindSetup, setWorkdir, showReadyCard } from "./setup.js";
@@ -232,7 +233,7 @@ async function executePromptLocked(
           assistant: result.response || "(empty)"
         }).conversation
       : session.conversation;
-    deps.sessionManager.update(session.id, {
+    const completedSession = deps.sessionManager.update(session.id, {
       engineSessionId: successfulAttempt.preferred ? result.sessionId ?? session.engineSessionId : null,
       conversation,
       status: "idle",
@@ -261,15 +262,29 @@ async function executePromptLocked(
         preferredProvider: successfulAttempt.preferred
       }
     });
+    await emitTelegramTaskCompleted({
+      chatId,
+      engine: session.engine,
+      session: completedSession,
+      result,
+      fallbackFrom: successfulAttempt.fallbackFrom ?? null,
+      preferredProvider: successfulAttempt.preferred
+    });
     return true;
   } catch (error) {
-    deps.sessionManager.update(session.id, { status: "idle" });
+    const failedSession = deps.sessionManager.update(session.id, { status: "idle" });
     const message = error instanceof Error ? error.message : String(error);
     await writeTelegramLog({
       level: "error",
       action: "task_failed",
       message,
       metadata: { chatId, engine: session.engine }
+    });
+    await emitTelegramTaskFailed({
+      chatId,
+      engine: session.engine,
+      session: failedSession,
+      error
     });
     if (!options.suppressFailureReply) {
       await ctx.reply(Formatter.taskFailed(message), { parse_mode: "HTML" });
