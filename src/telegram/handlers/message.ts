@@ -2,6 +2,7 @@ import { InputFile, type Bot, type Context } from "grammy";
 import type { TelegramConfig, TelegramEngineName } from "../config.js";
 import type { Engine, ExecutionResult } from "../engine/types.js";
 import { getTelegramEngine, type TelegramEngineMap } from "../engine/registry.js";
+import { recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../../core/config/cache-store.js";
 import { resolveProviderCandidatesForTool } from "../../core/runner/fallback.js";
 import type { ApprovalManager } from "../interaction/approval.js";
 import { parseTelegramCommand, resolveMappedCommand } from "../interaction/command-menu.js";
@@ -196,10 +197,16 @@ async function executePromptLocked(
           }
         });
         successfulAttempt = attempt;
+        if (attempt.providerName) {
+          await recordProviderRuntimeSuccess(attempt.providerName);
+        }
         break;
       } catch (error) {
         lastError = error;
         const next = attempts[index + 1];
+        if (attempt.providerName && !isNonFallbackTelegramError(error)) {
+          await recordProviderRuntimeFailure(attempt.providerName, error);
+        }
         if (!next || isNonFallbackTelegramError(error)) {
           throw error;
         }

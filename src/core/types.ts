@@ -20,6 +20,10 @@ export type ProviderCache = {
   models: string[];
   lastCheckedAt: string | null;
   lastError: string | null;
+  consecutiveFailures?: number;
+  lastFailureAt?: string | null;
+  circuitOpenUntil?: string | null;
+  healthScore?: number;
 };
 
 export type CacheFile = {

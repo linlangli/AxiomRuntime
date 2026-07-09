@@ -1,5 +1,5 @@
 import { readProviders } from "../config/providers-store.js";
-import { readIntegrationState } from "../integrations/integration-state.js";
+import { getIntegrationProviderState, readIntegrationState } from "../integrations/integration-state.js";
 import type { Provider } from "../types.js";
 import type { HermesRobot, UpdateHermesRobotInput } from "./hermes-types.js";
 
@@ -9,7 +9,8 @@ type UpdateHermesRobot = (name: string, patch: UpdateHermesRobotInput) => Promis
 
 export async function applyPendingProviderRenamesToHermesRobots(switchProvider: SwitchHermesRobotsProvider): Promise<number> {
   const state = await readIntegrationState();
-  const renameChanges = state.hermes.pendingProviderChanges.filter(
+  const hermesState = getIntegrationProviderState(state, "hermes");
+  const renameChanges = hermesState.pendingProviderChanges.filter(
     (change) => change.type === "updated" && change.previousProvider && change.previousProvider !== change.provider
   );
   if (!renameChanges.length) return 0;

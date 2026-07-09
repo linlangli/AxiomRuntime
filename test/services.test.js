@@ -4,14 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { addProvider, deleteProvider, updateProvider } from "../dist/core/providers/provider-service.js";
-import { readCache, upsertProviderCache } from "../dist/core/config/cache-store.js";
+import { readCache, recordProviderRuntimeFailure, upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
 import { getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveProviderForTool } from "../dist/core/runner/fallback.js";
 import { clearAllSessions, finishSession, getSession, listRecentSessions, startSession } from "../dist/core/sessions/session-service.js";
 import { generateSessionReport } from "../dist/core/reports/report-service.js";
-import { readIntegrationState } from "../dist/core/integrations/integration-state.js";
+import {
+  getIntegrationProviderState,
+  hasPendingProviderChanges,
+  markIntegrationProvidersSynced,
+  readIntegrationState,
+  registerIntegration
+} from "../dist/core/integrations/integration-state.js";
 import {
   addHermesRobot,
   clearHermesRobot,
@@ -215,6 +221,55 @@ test("resolveProviderForTool skips unhealthy providers and falls back", async ()
     const resolved = await resolveProviderForTool("codex");
     assert.equal(resolved.provider.name, "good");
     assert.equal(resolved.model, "gpt-5.4");
+  });
+});
+
+test("runtime provider failures open a circuit breaker after repeated errors", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "flaky", baseUrl: "https://flaky.test/v1", apiKey: "bad", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "good", baseUrl: "https://good.test/v1", apiKey: "good", mode: "auto", level: 2, model: "gpt-5.4" }
+    ]);
+    await upsertProviderCache("flaky", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("good", { status: "ok", models: ["gpt-5.4"], lastCheckedAt: "now", lastError: null });
+
+    await recordProviderRuntimeFailure("flaky", "stream disconnected");
+    await recordProviderRuntimeFailure("flaky", "stream disconnected");
+    await recordProviderRuntimeFailure("flaky", "stream disconnected");
+
+    const cache = await readCache();
+    const resolved = await resolveProviderForTool("codex");
+
+    assert.equal(cache.providers.flaky.consecutiveFailures, 3);
+    assert.equal(typeof cache.providers.flaky.circuitOpenUntil, "string");
+    assert.equal(cache.providers.flaky.healthScore < 100, true);
+    assert.equal(resolved.provider.name, "good");
+  });
+});
+
+test("integration registry tracks provider revisions independently from Hermes compatibility state", async () => {
+  await withTempHome(async () => {
+    registerIntegration({ name: "example" });
+
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+    await deleteProvider("api");
+
+    const state = await readIntegrationState();
+    const custom = getIntegrationProviderState(state, "example");
+
+    assert.equal(await hasPendingProviderChanges("example"), true);
+    assert.equal(custom.pendingProviderChanges.length, 1);
+    assert.equal(state.hermes.pendingProviderChanges.length, 1);
+    assert.equal(state.integrations.hermes.pendingProviderChanges.length, 1);
+
+    await markIntegrationProvidersSynced("example");
+    const synced = await readIntegrationState();
+
+    assert.equal(await hasPendingProviderChanges("example"), false);
+    assert.equal(getIntegrationProviderState(synced, "example").pendingProviderChanges.length, 0);
+    assert.equal(synced.hermes.pendingProviderChanges.length, 1);
   });
 });
 

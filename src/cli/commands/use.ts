@@ -1,4 +1,4 @@
-import { readCache } from "../../core/config/cache-store.js";
+import { readCache, recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../../core/config/cache-store.js";
 import { writeLog } from "../../core/logs/log-service.js";
 import { refreshAllProviders } from "../../core/providers/provider-service.js";
 import { resolveProviderCandidatesForTool, type ResolvedRun } from "../../core/runner/fallback.js";
@@ -90,10 +90,12 @@ export async function runResolvedProviderCandidates(
 
     const code = await runner(candidate, fallbackFrom);
     if (code === 0) {
+      await recordProviderRuntimeSuccess(candidate.provider.name);
       return 0;
     }
 
     lastExitCode = code;
+    await recordProviderRuntimeFailure(candidate.provider.name, `exit_code_${code}`);
     const next = candidates[index + 1];
     if (next) {
       runtimeFallbackFrom = candidate.provider.name;

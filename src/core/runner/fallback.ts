@@ -1,4 +1,4 @@
-import { readCache } from "../config/cache-store.js";
+import { isProviderCircuitOpen, readCache } from "../config/cache-store.js";
 import { readProviders } from "../config/providers-store.js";
 import { writeLog } from "../logs/log-service.js";
 import { isModelCompatible, pickCompatibleModel } from "../models/model-filter.js";
@@ -52,6 +52,17 @@ export async function resolveProviderCandidatesForTool(
   const resolved: ResolvedRun[] = [];
   for (const provider of candidates) {
     const cached = cache.providers[provider.name];
+    if (isProviderCircuitOpen(cached)) {
+      await writeLog({
+        level: "warn",
+        category: "strategy",
+        action: "fallback_skip_provider",
+        message: `Skipped provider ${provider.name} because circuit breaker is open.`,
+        metadata: { provider: provider.name, tool, reason: "circuit_open", circuitOpenUntil: cached?.circuitOpenUntil ?? null }
+      });
+      continue;
+    }
+
     if (cached?.status === "error") {
       await writeLog({
         level: "warn",

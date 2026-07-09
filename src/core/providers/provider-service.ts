@@ -1,4 +1,4 @@
-import { deleteProviderCache, readCache, renameProviderCache, upsertProviderCache } from "../config/cache-store.js";
+import { buildProviderHealthCache, deleteProviderCache, readCache, renameProviderCache, upsertProviderCache } from "../config/cache-store.js";
 import { appendUsageEvent } from "../config/usage-store.js";
 import { recordProviderChange } from "../integrations/integration-state.js";
 import { writeLog } from "../logs/log-service.js";
@@ -46,12 +46,12 @@ export async function addProvider(input: AddProviderInput): Promise<Provider> {
   if (!provider) {
     throw new Error("Provider add failed.");
   }
-  await upsertProviderCache(provider.name, {
+  await upsertProviderCache(provider.name, buildProviderHealthCache(undefined, {
     status: result.status,
     models: result.models,
     lastCheckedAt: result.checkedAt,
     lastError: result.error
-  });
+  }));
   await recordProviderChange({ type: "added", provider: provider.name });
   return provider;
 }
@@ -139,12 +139,13 @@ export async function refreshProvider(provider: Provider, options: RefreshProvid
     ? `No callable models found. ${result.error ?? ""}`.trim()
     : result.error;
 
-  await upsertProviderCache(provider.name, {
+  const cache = await readCache();
+  await upsertProviderCache(provider.name, buildProviderHealthCache(cache.providers[provider.name], {
     status,
     models,
     lastCheckedAt: result.checkedAt,
     lastError
-  });
+  }));
   await writeLog({
     level: status === "ok" ? "info" : "error",
     category: "provider",
