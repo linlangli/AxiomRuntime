@@ -14,10 +14,9 @@
 
 ## 技术栈
 
-- **现有**: Node.js 20+, TypeScript ESM, 零外部运行时依赖
+- **现有**: Node.js 20+, TypeScript ESM，Claude Code/Codex/Hermes 作为外部本机 CLI
 - **新增依赖**:
   - `grammy` — Telegram Bot 框架（轻量、TS 原生）
-  - `@anthropic-ai/claude-code` — Claude Code SDK
   - `better-sqlite3` — Bot 会话持久化
 
 ---
@@ -38,7 +37,7 @@ ai-gateway/
 │       ├── config.ts             # Bot 配置（token、白名单等）
 │       ├── engine/
 │       │   ├── types.ts          # 引擎公共接口
-│       │   ├── claude-engine.ts  # Claude Code SDK 封装
+│       │   ├── claude-engine.ts  # Claude Code CLI 子进程封装
 │       │   └── codex-engine.ts   # Codex CLI 子进程封装
 │       ├── handlers/
 │       │   ├── message.ts        # 文本消息 → 引擎调度
@@ -227,87 +226,39 @@ export interface Engine {
 
 ### 2. Claude Code Engine (`telegram/engine/claude-engine.ts`)
 
-使用 `@anthropic-ai/claude-code` SDK 完整封装，保留所有能力。
+通过外部 `claude` CLI 子进程执行。AI Gateway 负责解析本机 CLI、生成临时 settings 注入 provider 环境变量、捕获 `stream-json` 输出，并把 Telegram 侧的权限模式映射为 Claude Code 启动参数。
 
 ```typescript
-import { query } from '@anthropic-ai/claude-code';
+import { spawn } from 'node:child_process';
 
 export class ClaudeEngine implements Engine {
   readonly name = 'claude';
-  private controllers: Map<number, AbortController> = new Map();
+  private processes: Map<number, ChildProcess> = new Map();
 
   async execute(params: EngineExecuteParams): Promise<ExecutionResult> {
-    const controller = new AbortController();
-    this.controllers.set(params.chatId, controller);
-
-    const startTime = Date.now();
-    const toolCalls: ToolCallResult[] = [];
-
-    try {
-      const result = await query({
-        prompt: params.prompt,
-        abortSignal: controller.signal,
-        options: {
-          cwd: params.cwd,
-          sessionId: params.resume,
-          permissionMode: params.permissionMode ?? 'default',
-          allowedTools: params.allowedTools,
-          maxTurns: 50,
-        },
-        // 权限拦截 → 转发到 Telegram
-        permissionRequestHandler: async (toolName, input, description) => {
-          const approved = await params.onPermission({
-            id: crypto.randomUUID(),
-            tool: toolName,
-            description: description ?? `Execute ${toolName}`,
-            command: toolName === 'Bash' ? input?.command as string : undefined,
-            filePath: input?.file_path as string ?? input?.path as string,
-            params: input ?? {},
-          });
-          return { approved };
-        },
-        // 进度回调
-        messageHandler: (msg) => {
-          if (params.onProgress) {
-            if (msg.type === 'tool_use') {
-              params.onProgress({ phase: 'tool_calling', tool: msg.name });
-              toolCalls.push({
-                tool: msg.name,
-                input: msg.input,
-                output: '',
-                status: 'success',
-              });
-            }
-          }
-        },
-      });
-
-      return {
-        sessionId: result.sessionId,
-        response: result.text,
-        toolCalls,
-        filesChanged: this.extractFilesChanged(toolCalls),
-        cost: result.cost,
-        duration: Date.now() - startTime,
-      };
-    } finally {
-      this.controllers.delete(params.chatId);
-    }
+    const args = [
+      '-p',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--model', params.model,
+      params.prompt,
+    ];
+    const child = spawn('claude', args, {
+      cwd: params.cwd,
+      env: {
+        ...process.env,
+        CLAUDE_CODE_HEADLESS: '1',
+        ANTHROPIC_API_KEY: params.provider.apiKey,
+        ANTHROPIC_BASE_URL: params.provider.baseUrl,
+      },
+    });
+    this.processes.set(params.chatId, child);
+    return captureAndParseClaudeOutput(child);
   }
 
   abort(chatId: number): void {
-    this.controllers.get(chatId)?.abort();
-    this.controllers.delete(chatId);
-  }
-
-  private extractFilesChanged(calls: ToolCallResult[]): string[] {
-    const files = new Set<string>();
-    for (const call of calls) {
-      if (['Write', 'Edit'].includes(call.tool) && call.input.file_path) {
-        files.add(call.input.file_path as string);
-      }
-    }
-    return [...files];
+    this.processes.get(chatId)?.kill('SIGTERM');
+    this.processes.delete(chatId);
   }
 }
 ```
@@ -1288,7 +1239,6 @@ const ALWAYS_CONFIRM_PATTERNS = [
 {
   "dependencies": {
     "grammy": "^1.30.0",
-    "@anthropic-ai/claude-code": "^1.0.0",
     "better-sqlite3": "^11.0.0"
   },
   "devDependencies": {
@@ -1317,7 +1267,7 @@ case "telegram":
 
 1. `src/telegram/` 目录初始化 + 类型定义
 2. `telegram/config.ts` — 读取 `~/.ai-gateway/telegram.json`
-3. `telegram/engine/claude-engine.ts` — Claude Code SDK 完整封装
+3. `telegram/engine/claude-engine.ts` — Claude Code CLI 子进程封装
 4. `telegram/bot.ts` — Grammy 实例 + 鉴权 middleware
 5. `telegram/handlers/message.ts` — 消息 → 引擎 → 返回结果
 6. `telegram/interaction/approval.ts` — 权限请求 → inline button
@@ -1346,13 +1296,13 @@ case "telegram":
 
 ## 关键注意事项
 
-### Claude Code SDK
+### Claude Code CLI
 
 - 设置环境变量 `CLAUDE_CODE_HEADLESS=1`，确保无 TTY 也能运行
-- `permissionRequestHandler` 是同步阻塞的，返回前 Claude Code 不会继续
-- 每次执行后保存 `result.sessionId`，用于下次 resume 多轮对话
-- `maxTurns: 50` 防止无限循环
-- 通过 `AbortController` 实现 /stop 终止
+- 通过临时 settings 和环境变量注入 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`
+- 使用 `--output-format stream-json --verbose` 获取结构化输出
+- 每次执行后解析 CLI 输出中的 session id，用于下次 resume 多轮对话
+- 通过终止子进程实现 /stop
 
 ### Codex CLI
 

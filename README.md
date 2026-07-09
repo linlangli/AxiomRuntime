@@ -8,6 +8,16 @@
 npm install
 ```
 
+## 本机 CLI 前置条件
+
+AI Gateway 不内置 Claude Code、Codex 或 Hermes。它们作为彼此独立的外部 CLI 使用，需要先在本机安装并能通过 `PATH` 或常见安装路径找到。
+
+可用下面的命令检查：
+
+```bash
+ai doctor
+```
+
 ## 构建
 
 ```bash

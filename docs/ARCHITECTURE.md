@@ -337,7 +337,7 @@ graph TD
 | 网络代理 | https-proxy-agent ^9.1 (Telegram API 代理) |
 | 文件锁 | proper-lockfile (JSON 配置并发写入保护) |
 | Tokenizer | gpt-tokenizer (Prompt middleware token 预算) |
-| Claude SDK | @anthropic-ai/claude-code ^2.1 (Telegram headless) |
+| 外部 CLI | Claude Code、Codex、Hermes 均由本机已安装 CLI 提供，AI Gateway 只负责解析命令、注入 provider 环境并启动子进程 |
 | 测试 | node:test (内置) |
 
 ## 5. 优化建议
