@@ -130,37 +130,103 @@ function readWorkspaceContext(cwd: string): string | null {
 
 ## 记忆数据存放位置
 
-### 结论
+### 多 Bot 隔离设计
 
-**Memory 数据存在 `~/.ai-gateway/telegram.sqlite` 的 `memories` 表中**（与 sessions 表同库）。
+用户可能同时运行多个 Telegram Bot 实例（如日常助手 bot、工作专用 bot、学习 bot 等），每个 bot 的数据必须完全隔离。
 
-### 为什么不是独立文件/独立数据库
+**隔离策略：按 botId 独立目录 + 独立数据库**
 
-| 方案 | 否决原因 |
-|------|----------|
-| `~/.ai-gateway/memory/{chatId}/` 目录下的 markdown 文件 | 管理复杂、无事务保证、搜索要遍历文件系统 |
-| 独立 `~/.ai-gateway/memory.sqlite` | 多余一个 DB 连接，sessions 和 memories 经常需要联合操作（比如查 chatId 的 session + memory 一起注入） |
-| 存在 `${cwd}` 下 | 违背"跨目录"原则 |
-| 存在云端 / Telegram 自带存储 | 增加外部依赖、安全性差 |
+botId 由 bot token 的前半段（`token.split(":")[0]`）决定，这是 Telegram 分配的唯一 bot 用户 ID。
 
-### 最终数据拓扑
+### 数据拓扑
 
 ```
 ~/.ai-gateway/
-├── telegram.json          ← Bot 配置（含 memory 开关等）
-├── telegram.sqlite        ← 唯一数据库
-│   ├── sessions 表        ← 已有：会话管理
-│   ├── workdirs 表        ← 已有：工作目录历史
-│   ├── memories 表        ← 【新增】per-chatId 记忆条目
-│   └── memory_keys 表     ← 【新增】per-chatId 加密 PIN 配置
-├── telegram.log           ← Bot 日志
-└── telegram.pid           ← 进程 PID
+├── telegram.json              ← 全局配置（默认 bot token、全局设置）
+└── bots/
+    ├── {botId-1}/             ← Bot 实例 1（如日常助手）
+    │   ├── config.json        ← 该 bot 的专属配置覆盖
+    │   ├── bot.sqlite         ← 该 bot 唯一数据库
+    │   │   ├── sessions 表
+    │   │   ├── workdirs 表
+    │   │   ├── memories 表    ← per-chatId 记忆
+    │   │   └── memory_keys 表 ← per-chatId 加密 PIN
+    │   ├── bot.log
+    │   └── bot.pid
+    ├── {botId-2}/             ← Bot 实例 2（如工作专用）
+    │   ├── config.json
+    │   ├── bot.sqlite
+    │   ├── bot.log
+    │   └── bot.pid
+    └── ...
 
 ${cwd}/
-├── WORKSPACE.md           ← 【改名】工作目录级项目描述（原 BOT.md）
-├── CLAUDE.md              ← Claude Code 原生（不触碰）
-└── AGENTS.md              ← Codex 原生（不触碰）
+├── WORKSPACE.md               ← 工作目录级项目描述（原 BOT.md）
+├── CLAUDE.md                  ← Claude Code 原生（不触碰）
+└── AGENTS.md                  ← Codex 原生（不触碰）
 ```
+
+### botId 计算
+
+```typescript
+function getBotId(token: string): string {
+  // Telegram bot token 格式: "123456789:ABCdefGHIjklMNO"
+  // 前半段是 bot 的 Telegram user ID，天然唯一
+  return token.split(":")[0];
+}
+
+function getBotDataDir(token: string): string {
+  return path.join(getConfigRoot(), "bots", getBotId(token));
+}
+
+function getBotDbPath(token: string): string {
+  return path.join(getBotDataDir(token), "bot.sqlite");
+}
+```
+
+### 向后兼容
+
+现有的 `~/.ai-gateway/telegram.sqlite` 作为默认 bot 的数据库。迁移策略：
+
+```typescript
+function resolveBotDbPath(config: TelegramConfig): string {
+  const botDir = getBotDataDir(config.token);
+  const newPath = path.join(botDir, "bot.sqlite");
+  // 新目录已存在 → 用新路径
+  if (fs.existsSync(newPath)) return newPath;
+  // 旧文件存在 + 新目录不存在 → 迁移
+  const legacyPath = path.join(getConfigRoot(), "telegram.sqlite");
+  if (fs.existsSync(legacyPath)) {
+    fs.mkdirSync(botDir, { recursive: true });
+    fs.renameSync(legacyPath, newPath);
+    return newPath;
+  }
+  // 全新安装
+  fs.mkdirSync(botDir, { recursive: true });
+  return newPath;
+}
+```
+
+### 多 bot 的共享与隔离边界
+
+| 数据 | 隔离级别 | 说明 |
+|------|----------|------|
+| sessions | per-bot | 不同 bot 的会话完全独立 |
+| memories | per-bot + per-chatId | 同一用户在不同 bot 里的记忆独立（因为用途不同） |
+| workdirs | per-bot | 不同 bot 可能用于不同项目集 |
+| WORKSPACE.md | per-cwd（共享） | 项目描述与 bot 无关，所有 bot 访问同一 cwd 时读同一份 |
+| telegram.json | 全局 | 保留作为默认 bot token 和全局设置 |
+| bots/{id}/config.json | per-bot | 覆盖全局设置的 bot 专属配置 |
+
+### 未来扩展：跨 bot 共享记忆
+
+如果用户希望某些记忆跨 bot 共享（如个人背景信息），可在 memories 表增加 `scope` 字段：
+
+```sql
+scope TEXT NOT NULL DEFAULT 'bot'  -- 'bot' = 仅本 bot | 'global' = 跨所有 bot
+```
+
+global scope 的记忆存在一个公共位置 `~/.ai-gateway/global-memory.sqlite`，各 bot 启动时合并读取。但这是 Phase 3+ 的事，MVP 阶段每个 bot 完全独立即可。
 
 ---
 
