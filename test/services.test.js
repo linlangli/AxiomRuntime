@@ -30,6 +30,7 @@ import {
   syncHermesProvidersToLocalConfig,
   updateHermesRobot
 } from "../dist/core/hermes/hermes-service.js";
+import { parseLocalHermesProviderRecords } from "../dist/core/hermes/hermes-local-files.js";
 import { getHermesRobotHome, readHermesState, upsertHermesRobotState, writeHermesRobots } from "../dist/core/hermes/hermes-store.js";
 import { prepareHermesRuntime } from "../dist/core/hermes/hermes-runner.js";
 
@@ -1267,6 +1268,49 @@ test("imports local Hermes config and cron jobs as robots", async () => {
     assert.equal(robotsAfterRename.length, 1);
     assert.equal(robotsAfterRename[0].name, "capital-sentinel");
   });
+});
+
+test("parses local Hermes provider records from native config blocks", () => {
+  const parsed = parseLocalHermesProviderRecords([
+    "model:",
+    "  default: claude-opus-4-6",
+    "  provider: active-provider",
+    "  base_url: https://active.test/v1",
+    "  api_key: sk-active",
+    "",
+    "providers:",
+    "  managed:",
+    "    name: managed",
+    "    api: https://managed.test/v1",
+    "    api_key: sk-managed",
+    "    default_model: gpt-5.5",
+    "    transport: chat_completions",
+    "    models:",
+    "      - gpt-5.5",
+    "      - gpt-5-mini",
+    "",
+    "custom_providers:",
+    "  - name: custom",
+    "    base_url: https://custom.test/v1",
+    "    api_key: sk-custom",
+    "    model: claude-haiku",
+    "    api_mode: anthropic_messages",
+    "    models:",
+    "      claude-haiku:",
+    "        context_length: null"
+  ].join("\n"));
+
+  const providers = Object.fromEntries(parsed.providers.map((provider) => [provider.name, provider]));
+
+  assert.equal(parsed.activeProvider, "active-provider");
+  assert.equal(providers["active-provider"].active, true);
+  assert.deepEqual(providers["active-provider"].models, ["claude-opus-4-6"]);
+  assert.equal(providers.managed.baseUrl, "https://managed.test/v1");
+  assert.equal(providers.managed.apiMode, "chat_completions");
+  assert.deepEqual(providers.managed.models, ["gpt-5.5", "gpt-5-mini"]);
+  assert.equal(providers.custom.defaultModel, "claude-haiku");
+  assert.equal(providers.custom.apiMode, "anthropic_messages");
+  assert.deepEqual(providers.custom.models, ["claude-haiku"]);
 });
 
 async function withTempHome(fn) {
