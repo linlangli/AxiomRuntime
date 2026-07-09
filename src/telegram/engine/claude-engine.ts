@@ -4,6 +4,7 @@ import { cleanupRuntime, createCommandPermissionRequest, formatEngineTimeout, pr
 import { extractJsonLines, spawnCapture, stripAnsi, terminateProcessTree } from "./process-utils.js";
 import { requiresDangerousConfirmation } from "../interaction/approval.js";
 import { writeTelegramLog } from "../log.js";
+import { isRecord } from "../../core/utils/is-record.js";
 
 export class ClaudeEngine implements Engine {
   readonly name = "claude" as const;
@@ -221,8 +222,4 @@ function extractFilesChanged(calls: ToolCallResult[]): string[] {
     }
   }
   return [...files];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

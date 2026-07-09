@@ -1,6 +1,7 @@
 import { getModelPricingPath } from "../config/paths.js";
 import { readJsonFile, updateJsonFile } from "../config/json-store.js";
 import type { TokenUsage } from "../types.js";
+import { isRecord } from "../utils/is-record.js";
 
 export type ModelPrice = {
   inputPerMillionUsd: number;
@@ -130,8 +131,4 @@ function readFiniteNumber(data: Record<string, unknown>, keys: string[]): number
     }
   }
   return undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

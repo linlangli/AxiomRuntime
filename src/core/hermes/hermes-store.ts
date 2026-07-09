@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getHermesRobotsPath, getHermesStatePath, getLegacyHermesRobotsPath } from "../config/paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../config/json-store.js";
+import { isRecord } from "../utils/is-record.js";
 import type { HermesRobot, HermesRobotsFile, HermesRobotState, HermesStateFile } from "./hermes-types.js";
 
 const EMPTY_ROBOTS: HermesRobotsFile = { robots: [] };
@@ -273,8 +274,4 @@ function normalizeSource(value: unknown): HermesRobot["source"] {
     enabled: value.enabled === undefined ? undefined : Boolean(value.enabled),
     state: value.state === undefined ? undefined : String(value.state)
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

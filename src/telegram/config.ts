@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { getTelegramConfigPath, getTelegramDbPath } from "../core/config/paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../core/config/json-store.js";
+import { isRecord } from "../core/utils/is-record.js";
 
 export type TelegramEngineName = "claude" | "codex";
 export type TelegramPermissionMode = "default" | "acceptEdits" | "bypassPermissions";
@@ -190,10 +191,6 @@ function parseBoolean(value: unknown): boolean {
 function normalizeOptionalString(value: unknown): string | undefined {
   const text = String(value ?? "").trim();
   return text || undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function chmodConfigFile(): Promise<void> {

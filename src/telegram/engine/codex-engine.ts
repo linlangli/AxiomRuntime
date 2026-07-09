@@ -9,6 +9,7 @@ import { extractJsonLines, spawnCapture, stripAnsi, terminateProcessTree } from 
 import { startOpenAiUsageProxy, type OpenAiUsageProxy, type OpenAiUsageProxyRecord } from "../../core/runner/openai-usage-proxy.js";
 import { requiresDangerousConfirmation } from "../interaction/approval.js";
 import { writeTelegramLog } from "../log.js";
+import { isRecord } from "../../core/utils/is-record.js";
 
 export class CodexEngine implements Engine {
   readonly name = "codex" as const;
@@ -414,10 +415,6 @@ function readChangedFiles(event: Record<string, unknown>): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
   if (typeof event.path === "string" && /patch|edit|write/i.test(String(event.type ?? ""))) return [event.path];
   return [];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function sumKnownProxyCosts(records: OpenAiUsageProxyRecord[]): number | undefined {

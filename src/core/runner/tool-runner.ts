@@ -5,6 +5,7 @@ import path from "node:path";
 import { saveLastSelection } from "../config/cache-store.js";
 import { writeLog } from "../logs/log-service.js";
 import type { CliToolType, Provider } from "../types.js";
+import { isRecord } from "../utils/is-record.js";
 import { resolveToolCommand } from "./command-resolver.js";
 import { finishSession, startSession } from "../sessions/session-service.js";
 
@@ -109,10 +110,6 @@ function readClaudeSettings(filePath: string): Record<string, unknown> {
     return {};
   }
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function cleanupTemporaryFiles(filePaths: string[]): void {
