@@ -118,7 +118,9 @@ src/
     │   ├── formatter.ts    # HTML 消息格式化
     │   ├── keyboards.ts    # InlineKeyboard 构建器
     │   ├── prompt-middleware.ts # Prompt 注入中间件链（recent conversation / attachments）
-    │   └── token-budget.ts      # gpt-tokenizer token 计数与裁剪
+    │   ├── progress-reporter.ts # Telegram 进度流式状态消息
+    │   ├── token-budget.ts      # gpt-tokenizer token 计数与裁剪
+    │   └── tool-name.ts         # 工具名解析（builtin / MCP / command）
     ├── session/            # SQLite 会话管理
     │   ├── manager.ts      # SessionManager（CRUD、对话轮次、用量记录）
     │   ├── store.ts        # SQLite 建表与迁移
@@ -249,7 +251,7 @@ HermesRobot       // Hermes 机器人配置 (provider, model, tasks[], telegram)
 - CodexEngine (439 行): Codex CLI headless 模式，捕获结构化输出
 - Telegram engine registry: `createTelegramEngines()` 统一创建内置引擎，消息执行通过 engine map 查找
 - 共享 engine-utils.ts: `prepareEngineRuntime()` 复用 core runner 的 Provider 解析和环境变量构建
-- 进度回调: thinking → tool_calling → writing → done
+- 进度回调: thinking → tool_calling → writing → done（已通过 `ProgressReporter` 接入 Telegram 状态消息；见 §3.5 进度流式）
 
 **Setup 引导流程**
 ```
@@ -324,6 +326,191 @@ graph TD
   Store --> Pricing["pricing.ts 成本估算"]
 ```
 
+### 3.5 进度流式（Progress Streaming）
+
+> **状态：已实现。** 引擎已有的进度事件已接到 Telegram：长任务执行期间会编辑同一条状态消息展示阶段/工具；任务完成后，短结果会直接把这条状态消息编辑成最终回复，避免“删除状态消息再新发结果”的割裂感。
+
+#### 3.5.1 现状：进度流式已接通
+
+底层管道本来就是流式的，本轮已补齐 Telegram 展示层：
+
+- **引擎到 CLI 一层本就是流式**：ClaudeEngine 用 `--output-format stream-json --verbose`；CodexEngine 用 `codex exec --json` + `wire_api=responses`。
+- **子进程 stdout 边跑边收**：`spawnCapture({ onStdout })` 实时把 chunk 交给 `handleClaudeProgress()` / `handleCodexProgress()`，已能解析出 `tool_calling` / `writing` 等 `ProgressUpdate`（见 `engine/types.ts` 的 `ProgressUpdate`）。
+- **message.ts 已接线**：`executePromptLocked()` 构造 `ProgressReporter`，把 `onProgress` 透传给 `engine.execute()`；成功或失败时优先用最终内容覆盖状态消息，只有无法覆盖时才由 `finally` 清理。
+- **最终文本一次性解析**：进程整体结束后 `parseClaudeOutput()` / `parseCodexOutput()` 从完整 stdout 取 `result` / `last_message`，再由 `sendResult()` 优先编辑已有状态消息；没有状态消息、内容过长或编辑失败时回退到 `ctx.reply` / 附件。
+- 用户端现在同时保留每 4 秒一次的 `startTypingStatus()` 输入指示，以及 `ProgressReporter` 维护的一条可编辑状态消息。
+
+结论：进度阶段现在会通过一条可编辑状态消息展示；最终答案仍保持非 token 级流式，避免 Telegram edit 限流和中间工具日志刷屏。
+
+#### 3.5.2 设计目标与取舍
+
+| 方案 | 是否采用 | 理由 |
+|------|----------|------|
+| 进度流式（编辑一条状态消息展示阶段/工具） | ✅ 采用 | 复用现成 `onProgress` 管道，低风险；长任务里用户能看到「在思考 / 在跑命令 / 在整理回复」 |
+| Token 级流式（逐字吐最终答案） | ❌ 不采用 | Telegram `editMessageText` 对同一 chat 有硬限流（约 1 次/秒，超限 429）；且 Codex/Claude 是 agent，用户真正要的是结尾 `last_message`，中间是工具日志，逐字吐意义有限 |
+
+**核心原则**：编辑**同一条**状态消息（不是每次进度都新发消息），节流更新；任务结束时短结果直接覆盖这条消息，长结果继续走文件附件，保留 HTML 降级、diff 附件等行为。
+
+#### 3.5.3 改动点总览
+
+| 文件 | 改动 | 说明 |
+|------|------|------|
+| `telegram/engine/types.ts` | 扩展 `ProgressUpdate` | 增加 `toolKind?` / `mcpServer?` 等字段（见 §3.5.6.1）；`toolCount` 由 reporter 内部统计 |
+| `telegram/interaction/tool-name.ts` | **新增** | 共享 helper `parseToolName()`：解析 `mcp__` 前缀、归一 `toolKind`（见 §3.5.6.1） |
+| `telegram/interaction/progress-reporter.ts` | **新增** | 节流状态消息更新器（发送/编辑/清理一条状态消息），核心组件 |
+| `telegram/interaction/formatter.ts` | 新增 `Formatter.progress()` | 把 `ProgressUpdate` 渲染为状态文案（emoji + 阶段 + 工具名 + 已用时） |
+| `telegram/handlers/message.ts` | 接线 | `executePromptLocked()` 构造 `ProgressReporter`，透传 `onProgress`，最终结果优先覆盖状态消息 |
+| `telegram/engine/claude-engine.ts` | **不改** | MCP 前缀 `mcp__` 在 `tool_use.name` 里，由 `parseToolName()` 解析，引擎无需改动 |
+| `telegram/engine/codex-engine.ts` | 小改 `handleCodexProgress` | Codex 无 `mcp__` 前缀，`toolKind` 需按事件 type 判定后写入 `ProgressUpdate` |
+
+#### 3.5.4 ProgressReporter 组件设计
+
+新增 `telegram/interaction/progress-reporter.ts`，职责单一：把高频 `ProgressUpdate` 合并成低频的状态消息编辑。
+
+```typescript
+export type ProgressReporterOptions = {
+  throttleMs?: number;   // 默认 1500，两次 editMessageText 的最小间隔
+  silent?: boolean;      // silentSuccess 场景全程 no-op
+};
+
+export class ProgressReporter {
+  private messageId?: number;     // 状态消息 id；首个 update 时惰性 sendMessage
+  private lastSignature = "";     // 上次状态签名，去重用（忽略单纯秒数变化）
+  private pending?: ProgressUpdate;// 节流窗口内最后一次 update，窗口到点后 flush
+  private startedAt = Date.now();
+  private toolCount = 0;
+
+  constructor(api: Pick<Context["api"], "sendMessage" | "editMessageText" | "deleteMessage">, chatId: number, options?: ProgressReporterOptions);
+
+  // onProgress 回调入口：记录 pending，按 throttle 决定立即 flush 还是等定时器
+  update(u: ProgressUpdate): Promise<void>;
+
+  // 任务结束但没有被最终结果覆盖时调用：删除状态消息、清定时器
+  async finalize(): Promise<void>;
+
+  // 任务成功/失败时优先调用：把状态消息原地编辑成最终内容
+  async replaceWithHtml(html: string, fallbackText: string): Promise<boolean>;
+}
+```
+
+**节流与去重规则**：
+- 窗口内多次 `update()` 只保留最后一个，窗口到点 flush 一次；`done` 阶段不展示，由 `finalize()` 清理。
+- flush 前用 `Formatter.progress()` 渲染文本，若阶段/工具/消息签名未变则跳过编辑（避免无谓 API 调用和「message is not modified」错误）。
+- 首次有内容时 `sendMessage` 建状态消息并记住 `messageId`；之后一律 `editMessageText`。
+- 所有 Telegram API 调用 best-effort：`try/catch` 吞掉错误（含 429），**绝不影响主任务执行**。
+
+#### 3.5.5 message.ts 接线
+
+在 `executePromptLocked()` 中用 `ProgressReporter` 替换/补充现有的 `startTypingStatus()`：
+
+```typescript
+const reporter = new ProgressReporter(ctx.api, chatId, {
+  silent: options.silentSuccess === true,  // /init 等静默任务全程 no-op
+});
+const stopTypingStatus = startTypingStatus(ctx, chatId); // 保留：typing 与状态消息可并存
+
+try {
+  // ... provider 候选循环内：
+  result = await engine.execute({
+    chatId,
+    prompt: promptWithContext,
+    // ... 其余参数不变
+    onPermission: async (req) => { /* 不变 */ },
+    onProgress: (u) => reporter.update(u),   // ← 新增：唯一的接线点
+  });
+  // ...
+  if (!options.silentSuccess) {
+    await sendResult(ctx, session.engine, result, deps.config.maxOutputLength, reporter);
+  }
+} catch (error) {
+  // ... 失败时也优先 reporter.replaceWithHtml()，失败再 ctx.reply()
+} finally {
+  await reporter.finalize();                 // 幂等：成功路径已替换则 no-op；未替换才删除状态
+  stopTypingStatus();
+}
+```
+
+**要点**：
+- `onProgress` 是唯一接线点，引擎无需改动。
+- `replaceWithHtml()` / `finalize()` 必须幂等：成功替换后 `finally` 不再删除；未替换时 `finally` 负责清理残留状态。
+- provider fallback 时**复用同一个 reporter**，可选地在切换时 `update` 一帧「↻ 正在切换 provider…」。
+- 与 `SessionManager.runExclusive()` 天然兼容：同一 chat 串行执行，任意时刻只有一个 reporter 活跃。
+
+#### 3.5.6 状态文案（Formatter.progress）
+
+| phase | 状态文案示例 |
+|-------|-------------|
+| `thinking` | `🧠 思考中…（12s）` |
+| `tool_calling` | `🔧 正在运行 Bash（第 3 个操作 · 25s）` |
+| `writing` | `✍️ 正在整理回复…（40s）` |
+| `done` | 不再展示（由 `finalize()` 清理） |
+
+- 已用时基于 `reporter.startedAt`，秒级；**若两次 update 仅秒数变化、阶段/工具未变，则不触发编辑**（避免为跳秒刷屏）。
+- 工具名与 MCP 识别见 §3.5.6.1；`toolCount` 由 reporter 侧对 `tool_calling` 事件累加得到。
+
+#### 3.5.6.1 工具名解析（含 MCP 识别）
+
+新增共享 helper `telegram/interaction/tool-name.ts`，把原始工具标识归一为结构化字段，供 `Formatter.progress()` 渲染。`ProgressUpdate` 扩展：
+
+- `toolKind?: "builtin" | "mcp" | "command"`
+- `mcpServer?: string`（仅 MCP 调用有值）
+
+**解析规则（两引擎差异）**：
+
+- **Claude**：`tool_use.name` 若以 `mcp__` 开头，按约定 `mcp__<server>__<tool>` 拆分 → `toolKind="mcp"`、`mcpServer=<server>`、展示名取 `<tool>`（如 `mcp__codegraph__codegraph_context` → server=`codegraph`, tool=`codegraph_context`）；否则 `toolKind="builtin"`，名字原样（`Bash`/`Edit`/`Read`…）。**解析全在 `parseToolName()` 内完成，`claude-engine.ts` 不改。**
+- **Codex**：事件里没有 `mcp__` 前缀，需在 `handleCodexProgress` 按事件 type 判定：`exec`/`command` → `"command"`；MCP 调用事件 → `"mcp"`（server/tool 从事件字段取）；其余 → `"builtin"`。判定结果写入 `ProgressUpdate.toolKind`。
+
+**Formatter.progress() 按 toolKind 渲染**：
+
+| toolKind | 展示示例 |
+|----------|---------|
+| `mcp` | `🔌 调用 MCP · codegraph / codegraph_context（第 3 个操作 · 25s）` |
+| `command` | `⌨️ 执行命令 · npm test（25s）` |
+| `builtin`（编辑类 Write/Edit） | `✏️ 编辑文件 · a.ts（25s）` |
+| `builtin`（其它） | `🔧 运行 Bash（第 2 个操作 · 25s）` |
+
+- server 名 / tool 名 / 命令各做长度截断（建议 ≤ 24 字符），避免状态消息过长。
+- 未知 kind 或解析失败兜底为 `🔧 运行 <原始名>`，**绝不因出现新工具类型而崩溃**。
+
+#### 3.5.7 最终替换策略与边界情况
+
+`ProgressReporter` 的收尾分两类：
+
+- **成功替换**：`replaceWithHtml()` 把已有状态消息直接编辑成最终回复；HTML 解析失败时再用纯文本 fallback 编辑一次。成功后 reporter 标记为 finalized，`finally` 不再删除。
+- **清理残留**：如果没有状态消息、编辑失败、静默任务或需要中止清理，`finalize()` 仍可删除状态消息。删除失败（用户已删、超时）吞错即可。
+
+边界情况处理：
+
+| 情况 | 处理 |
+|------|------|
+| 任务极快（< throttle 窗口，进度消息还没发出） | `replaceWithHtml()` 会取消 pending 进度并返回 false，用户只看到最终结果，不会在结果后补闪状态消息 |
+| `editMessageText` 返回 429 | 吞错并适度拉长 `throttleMs`（退避），不阻塞、不重试风暴 |
+| `editMessageText` 报 "message is not modified" | 去重逻辑应已避免；万一触发，吞错 |
+| 状态消息被用户手动删除 | 后续 edit 报错，吞错；下次 update 可惰性重建或放弃 |
+| `silent: true`（如 `/init`） | `update()` / `finalize()` 全程 no-op，不产生任何状态消息 |
+| 短最终结果 | 优先编辑原状态消息为最终回复 |
+| 长最终结果 / 附件 | 原状态消息优先编辑为附件提示，再发送完整输出文件和 diff 文件 |
+| 任务失败 | 优先编辑原状态消息为失败内容；编辑失败再单独发送失败消息 |
+| 任务中止 / 静默失败 | `finally` 中 `finalize()` 保证状态消息被清理 |
+
+#### 3.5.8 测试与实施要求
+
+**单元测试**（`node:test`，mock `ctx.api`）：
+- 高频 `update()` 在节流窗口内被合并为有限次 `editMessageText` 调用。
+- 相同渲染文本不重复编辑（去重）。
+- `silent: true` 时 `sendMessage` / `editMessageText` / `deleteMessage` 零调用。
+- 成功路径下短结果会编辑原状态消息，且 `finalize()` 不再删除。
+- 失败或编辑失败路径下 `finalize()` 仍被调用且状态消息被清理。
+- `editMessageText` 抛错时不冒泡到主流程（主任务结果不受影响）。
+- `parseToolName()`：`mcp__codegraph__codegraph_context` → kind=`mcp`/server=`codegraph`/tool=`codegraph_context`；`Bash` → kind=`builtin`；超长名被截断；未知输入走兜底不抛错。
+
+**手动验证**：长任务（多工具调用）能看到状态滚动更新；结果出现时同一条消息原地变成最终回复；短任务无残留状态消息。
+
+**实施原则**：
+- 已新增 `progress-reporter.ts` + `tool-name.ts` + `Formatter.progress()` + message.ts 接线；Claude 引擎解析零改动，Codex 仅补充 progress metadata。
+- reporter 不存在或 `silent` 时，行为与当前代码等价（零功能回退）。
+- 最终结果发送逻辑保留 `sendResult` 的附件/HTML 降级/diff 能力，并新增“有状态消息时原地替换”的优先路径。
+
 ## 4. 技术栈
 
 | 层级 | 技术 |
@@ -355,7 +542,7 @@ graph TD
 | 已完成 | `openai-usage-proxy.ts` 大文件拆分 | 原文件变为 facade；已拆为 `openai-usage-server.ts`、`openai-usage-http.ts`、`openai-usage-responses.ts`、`openai-usage-recording.ts`、`openai-usage-types.ts`；proxy 暴露 `getMetrics()` 统计请求、失败、usage/noUsage、耗时和上游状态码 | 可后续把 metrics 持久化或接入 dashboard |
 | 已完成 | `hermes-service.ts` 大文件拆分 | 原文件变为 facade；已拆为 core/yaml/local-files/import-export/provider-sync 等模块，外部导出保持兼容 | 还可以继续把 sync/repair 编排再拆得更细，但 P0 小步重构目标已完成 |
 | 已完成 | 共享 `isRecord()` | 已新增 `src/core/utils/is-record.ts`，替换 usage/pricing、runner、Hermes、Telegram config/engine 等重复定义 | 其它通用小工具可后续按需抽取 |
-| 已完成 | 回归覆盖 | 已新增 JSON store 并发更新、CLI fallback、Telegram fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、Provider 熔断、proxy metrics、schema validation、token budget 等测试；当前 `npm test` 为 89 项通过 | 可继续补更多异常路径和持久化 metrics 测试 |
+| 已完成 | 回归覆盖 | 已新增 JSON store 并发更新、CLI fallback、Telegram fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、Provider 熔断、proxy metrics、schema validation、token budget、progress streaming 等测试；当前 `npm test` 为 94 项通过 | 可继续补更多异常路径和持久化 metrics 测试 |
 
 **P1 - 中优先级**
 

@@ -8,6 +8,7 @@ import type { ApprovalManager } from "../interaction/approval.js";
 import { parseTelegramCommand, resolveMappedCommand } from "../interaction/command-menu.js";
 import { Formatter, truncateText } from "../interaction/formatter.js";
 import { applyPromptMiddlewares } from "../interaction/prompt-middleware.js";
+import { ProgressReporter } from "../interaction/progress-reporter.js";
 import { emitTelegramTaskCompleted, emitTelegramTaskFailed } from "../lifecycle-registry.js";
 import type { SessionManager, TelegramSession } from "../session/manager.js";
 import { writeTelegramLog } from "../log.js";
@@ -41,6 +42,7 @@ export type ExecutePromptOptions = {
   includeAgentContext?: boolean;
   skipSetupReminder?: boolean;
   timeoutMs?: number;
+  progressThrottleMs?: number;
 };
 
 export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void {
@@ -161,6 +163,10 @@ async function executePromptLocked(
     messageCount: session.messageCount + 1
   });
   const stopTypingStatus = startTypingStatus(ctx, chatId);
+  const reporter = new ProgressReporter(ctx.api, chatId, {
+    silent: options.silentSuccess ?? false,
+    throttleMs: options.progressThrottleMs
+  });
 
   try {
     const engine = resolveMessageEngine(deps, session.engine);
@@ -189,6 +195,7 @@ async function executePromptLocked(
           providerName: attempt.providerName,
           modelName: attempt.modelName,
           timeoutMs: options.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS,
+          onProgress: (update) => reporter.update(update),
           onPermission: async (req) => {
             if (session.approveAll) return true;
             deps.sessionManager.update(session.id, { status: "waiting_approval" });
@@ -220,6 +227,10 @@ async function executePromptLocked(
           nextModel: next.modelLabel,
           error
         });
+        await reporter.update({
+          phase: "thinking",
+          message: `正在切换 provider：${attempt.providerLabel} → ${next.providerLabel}`
+        });
       }
     }
 
@@ -246,7 +257,7 @@ async function executePromptLocked(
       usage: result.usage
     });
     if (!options.silentSuccess) {
-      await sendResult(ctx, session.engine, result, deps.config.maxOutputLength);
+      await sendResult(ctx, session.engine, result, deps.config.maxOutputLength, reporter);
     }
     await writeTelegramLog({
       action: "task_completed",
@@ -287,10 +298,11 @@ async function executePromptLocked(
       error
     });
     if (!options.suppressFailureReply) {
-      await ctx.reply(Formatter.taskFailed(message), { parse_mode: "HTML" });
+      await sendFailure(ctx, reporter, message);
     }
     return false;
   } finally {
+    await reporter.finalize();
     stopTypingStatus();
   }
 }
@@ -310,19 +322,23 @@ async function sendResult(
   ctx: Context,
   engine: TelegramEngineName,
   result: ExecutionResult,
-  maxOutputLength: number
+  maxOutputLength: number,
+  reporter?: ProgressReporter
 ): Promise<void> {
   const formatted = Formatter.taskCompleted(engine, result, Math.min(maxOutputLength, 2500));
   if (formatted.length <= 4000 && result.response.length <= maxOutputLength) {
+    if (await reporter?.replaceWithHtml(formatted, truncateText((result.response || "(empty)").trim(), maxOutputLength))) {
+      return;
+    }
     await replyHtmlWithPlainFallback(ctx, formatted, truncateText((result.response || "(empty)").trim(), maxOutputLength));
     return;
   }
 
   const attachmentNotice = "Output is attached as a file.";
-  await ctx.reply(
-    Formatter.taskCompleted(engine, { ...result, response: attachmentNotice }, 800),
-    { parse_mode: "HTML" }
-  );
+  const formattedNotice = Formatter.taskCompleted(engine, { ...result, response: attachmentNotice }, 800);
+  if (!(await reporter?.replaceWithHtml(formattedNotice, attachmentNotice))) {
+    await ctx.reply(formattedNotice, { parse_mode: "HTML" });
+  }
   await ctx.replyWithDocument(new InputFile(Buffer.from(result.response || "(empty)", "utf8"), "ai-gateway-output.md"), {
     caption: "Full output"
   });
@@ -331,6 +347,14 @@ async function sendResult(
       caption: "Diff"
     });
   }
+}
+
+async function sendFailure(ctx: Context, reporter: ProgressReporter, message: string): Promise<void> {
+  const html = Formatter.taskFailed(message);
+  if (await reporter.replaceWithHtml(html, `Failed\n\n${truncateText(message, 1500)}`)) {
+    return;
+  }
+  await ctx.reply(html, { parse_mode: "HTML" });
 }
 
 async function replyHtmlWithPlainFallback(ctx: Context, html: string, fallbackText: string): Promise<void> {

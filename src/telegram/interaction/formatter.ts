@@ -1,6 +1,7 @@
 import type { TelegramEngineName } from "../config.js";
-import type { ExecutionResult } from "../engine/types.js";
+import type { ExecutionResult, ProgressUpdate } from "../engine/types.js";
 import type { TelegramSession } from "../session/types.js";
+import { parseToolName } from "./tool-name.js";
 
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
 
@@ -168,6 +169,38 @@ export const Formatter = {
     return [`<b>Failed</b>`, "", `<pre>${escapeHtml(truncateText(error, 1500))}</pre>`].join("\n");
   },
 
+  progress(update: ProgressUpdate, options: { elapsedMs?: number; toolCount?: number } = {}): string {
+    const elapsed = formatElapsed(options.elapsedMs ?? 0);
+    if (update.phase === "thinking") {
+      if (update.message && /fallback|切换|provider/i.test(update.message)) {
+        return `↻ ${escapeHtml(truncateText(update.message, 80))}（${elapsed}）`;
+      }
+      return `🧠 思考中…（${elapsed}）`;
+    }
+    if (update.phase === "writing") {
+      return `✍️ 正在整理回复…（${elapsed}）`;
+    }
+    if (update.phase === "tool_calling") {
+      const tool = parseToolName(update.tool, {
+        kind: update.toolKind,
+        mcpServer: update.mcpServer
+      });
+      const count = options.toolCount && options.toolCount > 0 ? `第 ${options.toolCount} 个操作 · ` : "";
+      if (tool.kind === "mcp") {
+        const server = tool.mcpServer ? `${escapeHtml(tool.mcpServer)} / ` : "";
+        return `🔌 调用 MCP · <code>${server}${escapeHtml(tool.name)}</code>（${count}${elapsed}）`;
+      }
+      if (tool.kind === "command") {
+        return `⌨️ 执行命令 · <code>${escapeHtml(tool.name)}</code>（${elapsed}）`;
+      }
+      if (isEditingTool(tool.raw)) {
+        return `✏️ 编辑文件 · <code>${escapeHtml(tool.name)}</code>（${elapsed}）`;
+      }
+      return `🔧 运行 <code>${escapeHtml(tool.name)}</code>（${count}${elapsed}）`;
+    }
+    return `🧠 思考中…（${elapsed}）`;
+  },
+
   taskAborted(): string {
     return "<b>Stopped</b>";
   },
@@ -198,6 +231,18 @@ export const Formatter = {
     ].join("\n");
   }
 };
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remaining = seconds % 60;
+  return remaining ? `${minutes}m ${remaining}s` : `${minutes}m`;
+}
+
+function isEditingTool(tool: string): boolean {
+  return /^(Write|Edit|MultiEdit|NotebookEdit|apply_patch|patch)$/i.test(tool);
+}
 
 function renderMarkdownBlocks(value: string): string {
   const lines = value.replace(/\r\n?/g, "\n").split("\n");

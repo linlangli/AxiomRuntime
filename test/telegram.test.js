@@ -22,7 +22,9 @@ import {
 } from "../dist/telegram/interaction/command-menu.js";
 import { escapeHtml, Formatter, markdownToTelegramHtml, splitPlainText, truncateText } from "../dist/telegram/interaction/formatter.js";
 import { applyPromptMiddlewares, listPromptMiddlewares } from "../dist/telegram/interaction/prompt-middleware.js";
+import { ProgressReporter } from "../dist/telegram/interaction/progress-reporter.js";
 import { countPromptTokens, truncateToTokenBudget } from "../dist/telegram/interaction/token-budget.js";
+import { parseToolName } from "../dist/telegram/interaction/tool-name.js";
 import {
   buildAgentProfileBackKeyboard,
   buildAgentProfileKeyboard,
@@ -523,6 +525,141 @@ test("formatter escapes and splits telegram text safely", () => {
   assert.match(strategyTable, /<b>降低到小额定投\/暂停<\/b>\n适合情况：你不想割肉/);
   assert.doesNotMatch(strategyTable, /<pre>|-{3,}|策略\s+适合情况/);
   assert.equal(markdownToTelegramHtml("`<x>` and [OpenAI](https://openai.com)"), "<code>&lt;x&gt;</code> and <a href=\"https://openai.com\">OpenAI</a>");
+});
+
+test("progress formatter and tool parser render structured status", () => {
+  assert.deepEqual(parseToolName("mcp__codegraph__codegraph_context"), {
+    raw: "mcp__codegraph__codegraph_context",
+    name: "codegraph_context",
+    kind: "mcp",
+    mcpServer: "codegraph"
+  });
+  assert.equal(parseToolName("Bash").kind, "builtin");
+  assert.equal(parseToolName("npm test -- --watch=false", { kind: "command" }).kind, "command");
+  assert.match(Formatter.progress({ phase: "thinking" }, { elapsedMs: 12_000 }), /思考中.*12s/);
+  assert.match(Formatter.progress({
+    phase: "tool_calling",
+    tool: "mcp__codegraph__codegraph_context"
+  }, { elapsedMs: 25_000, toolCount: 3 }), /调用 MCP · <code>codegraph \/ codegraph_context<\/code>（第 3 个操作 · 25s）/);
+  assert.match(Formatter.progress({
+    phase: "tool_calling",
+    tool: "npm test",
+    toolKind: "command"
+  }, { elapsedMs: 1000 }), /执行命令 · <code>npm test<\/code>/);
+  assert.match(Formatter.progress({
+    phase: "tool_calling",
+    tool: "Edit"
+  }, { elapsedMs: 1000 }), /编辑文件 · <code>Edit<\/code>/);
+});
+
+test("progress reporter throttles updates and deletes status message", async () => {
+  const calls = [];
+  const reporter = new ProgressReporter({
+    sendMessage: async (chatId, text) => {
+      calls.push(["send", chatId, text]);
+      return { message_id: 77 };
+    },
+    editMessageText: async (chatId, messageId, text) => {
+      calls.push(["edit", chatId, messageId, text]);
+      return true;
+    },
+    deleteMessage: async (chatId, messageId) => {
+      calls.push(["delete", chatId, messageId]);
+      return true;
+    }
+  }, 123, { throttleMs: 5 });
+
+  await reporter.update({ phase: "thinking" });
+  await reporter.update({ phase: "tool_calling", tool: "Bash" });
+  await reporter.update({ phase: "writing" });
+  await sleep(12);
+  await reporter.update({ phase: "tool_calling", tool: "Edit" });
+  await sleep(12);
+  await reporter.finalize();
+
+  assert.equal(calls.filter((call) => call[0] === "send").length, 1);
+  assert.equal(calls.filter((call) => call[0] === "edit").length, 1);
+  assert.deepEqual(calls.at(-1), ["delete", 123, 77]);
+  assert.match(String(calls[0][2]), /整理回复/);
+});
+
+test("progress reporter skips silent, duplicate, and failed edits", async () => {
+  const silentCalls = [];
+  const silent = new ProgressReporter({
+    sendMessage: async () => {
+      silentCalls.push("send");
+      return { message_id: 1 };
+    },
+    editMessageText: async () => {
+      silentCalls.push("edit");
+      return true;
+    },
+    deleteMessage: async () => {
+      silentCalls.push("delete");
+      return true;
+    }
+  }, 123, { silent: true, throttleMs: 5 });
+  await silent.update({ phase: "thinking" });
+  await sleep(10);
+  await silent.finalize();
+  assert.deepEqual(silentCalls, []);
+
+  const calls = [];
+  const reporter = new ProgressReporter({
+    sendMessage: async (chatId, text) => {
+      calls.push(["send", chatId, text]);
+      return { message_id: 88 };
+    },
+    editMessageText: async () => {
+      calls.push(["edit"]);
+      throw new Error("Too Many Requests: 429");
+    },
+    deleteMessage: async (chatId, messageId) => {
+      calls.push(["delete", chatId, messageId]);
+      return true;
+    }
+  }, 123, { throttleMs: 5 });
+
+  await reporter.update({ phase: "thinking" });
+  await sleep(10);
+  await reporter.update({ phase: "thinking" });
+  await sleep(10);
+  await reporter.update({ phase: "tool_calling", tool: "Bash" });
+  await sleep(10);
+  await reporter.finalize();
+
+  assert.equal(calls.filter((call) => call[0] === "send").length, 1);
+  assert.equal(calls.filter((call) => call[0] === "edit").length, 1);
+  assert.deepEqual(calls.at(-1), ["delete", 123, 88]);
+});
+
+test("progress reporter can replace status message with final text", async () => {
+  const calls = [];
+  const reporter = new ProgressReporter({
+    sendMessage: async (chatId, text) => {
+      calls.push(["send", chatId, text]);
+      return { message_id: 91 };
+    },
+    editMessageText: async (chatId, messageId, text, options) => {
+      calls.push(["edit", chatId, messageId, text, options?.parse_mode]);
+      return true;
+    },
+    deleteMessage: async (chatId, messageId) => {
+      calls.push(["delete", chatId, messageId]);
+      return true;
+    }
+  }, 123, { throttleMs: 5 });
+
+  await reporter.update({ phase: "thinking" });
+  await sleep(10);
+  const replaced = await reporter.replaceWithHtml("<b>done</b>", "done");
+  await reporter.finalize();
+
+  assert.equal(replaced, true);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].slice(0, 2), ["send", 123]);
+  assert.match(String(calls[0][2]), /思考中/);
+  assert.deepEqual(calls[1], ["edit", 123, 91, "<b>done</b>", "HTML"]);
 });
 
 test("workdir setup keyboards use compact labels and absolute path buttons", () => {
@@ -1118,6 +1255,87 @@ test("telegram executePrompt serializes tasks for the same chat", async () => {
   });
 });
 
+test("telegram executePrompt streams progress and edits status message into result", async () => {
+  await withTempHome(async (tempDir) => {
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "51talk-codex",
+      model: "gpt-5.5",
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.getOrCreate(123);
+    manager.update(session.id, { setupStep: "ready", engine: "codex" });
+
+    const codexEngine = {
+      name: "codex",
+      execute: async (params) => {
+        await params.onProgress?.({ phase: "thinking" });
+        await sleep(8);
+        await params.onProgress?.({ phase: "tool_calling", tool: "mcp__codegraph__codegraph_context" });
+        await sleep(8);
+        return {
+          response: "ok",
+          provider: "51talk-codex",
+          model: "gpt-5.5"
+        };
+      },
+      abort: () => undefined
+    };
+
+    const progressMessages = [];
+    const progressEdits = [];
+    const deleted = [];
+    const replies = [];
+    const ok = await executePrompt({
+      chat: { id: 123 },
+      reply: async (text) => {
+        replies.push(text);
+      },
+      api: {
+        sendChatAction: async () => true,
+        sendMessage: async (_chatId, text) => {
+          progressMessages.push(text);
+          return { message_id: 44 };
+        },
+        editMessageText: async (_chatId, _messageId, text) => {
+          progressEdits.push(text);
+          return true;
+        },
+        deleteMessage: async (chatId, messageId) => {
+          deleted.push([chatId, messageId]);
+          return true;
+        }
+      }
+    }, {
+      sessionManager: manager,
+      claudeEngine: { ...codexEngine, name: "claude" },
+      codexEngine,
+      approvalManager: { request: async () => true },
+      config
+    }, "执行一个长任务", undefined, { progressThrottleMs: 5 });
+
+    assert.equal(ok, true);
+    assert.equal(progressMessages.length, 1);
+    assert.match(progressMessages[0], /思考中/);
+    assert.equal(progressEdits.length, 2);
+    assert.match(progressEdits[0], /调用 MCP/);
+    assert.equal(progressEdits[1], "ok");
+    assert.deepEqual(deleted, []);
+    assert.equal(replies.length, 0);
+    store.close();
+  });
+});
+
 test("switching telegram engines carries recent conversation fallback", async () => {
   await withTempHome(async (tempDir) => {
     const projectDir = path.join(tempDir, "project");
@@ -1446,6 +1664,10 @@ test("spawn capture times out and stops hanging processes", async () => {
   assert.equal(result.timedOut, true);
   assert.equal(result.aborted, false);
 });
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function withTempHome(fn) {
   const previousHome = process.env.AI_GATEWAY_HOME;

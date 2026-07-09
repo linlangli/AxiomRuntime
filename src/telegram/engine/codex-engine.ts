@@ -356,13 +356,50 @@ function handleCodexProgress(chunk: string, onProgress?: (update: ProgressUpdate
     if (!isRecord(event)) continue;
     const toolCall = readCodexToolCall(event);
     if (toolCall) {
-      void onProgress({ phase: "tool_calling", tool: toolCall.tool });
+      void onProgress(readCodexProgressUpdate(event, toolCall.tool));
       continue;
     }
     if (String(event.type ?? "").includes("message")) {
       void onProgress({ phase: "writing" });
     }
   }
+}
+
+function readCodexProgressUpdate(event: Record<string, unknown>, fallbackTool: string): ProgressUpdate {
+  const type = String(event.type ?? event.kind ?? "");
+  const input = isRecord(event.input) ? event.input : {};
+  const command = readFirstString(event.command, input.command, event.cmd, input.cmd);
+  if (command || /exec|command|shell/i.test(type)) {
+    return {
+      phase: "tool_calling",
+      tool: command ?? fallbackTool,
+      toolKind: "command"
+    };
+  }
+
+  const mcpServer = readFirstString(event.mcpServer, event.mcp_server, event.server, input.mcpServer, input.server);
+  const mcpTool = readFirstString(event.tool, event.name, input.tool, input.name);
+  if (mcpServer || /mcp/i.test(type)) {
+    return {
+      phase: "tool_calling",
+      tool: mcpTool ?? fallbackTool,
+      toolKind: "mcp",
+      mcpServer
+    };
+  }
+
+  return {
+    phase: "tool_calling",
+    tool: fallbackTool,
+    toolKind: "builtin"
+  };
+}
+
+function readFirstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
 }
 
 function readCodexSessionId(event: Record<string, unknown>, depth = 0): string | null {

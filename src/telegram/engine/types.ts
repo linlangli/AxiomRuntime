@@ -51,6 +51,8 @@ export type ProgressUpdate = {
   phase: "thinking" | "tool_calling" | "writing" | "done";
   message?: string;
   tool?: string;
+  toolKind?: "builtin" | "mcp" | "command";
+  mcpServer?: string;
 };
 
 export interface Engine {
