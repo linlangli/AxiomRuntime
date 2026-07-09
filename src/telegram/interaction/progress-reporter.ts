@@ -17,7 +17,6 @@ export class ProgressReporter {
   private lastSignature = "";
   private toolCount = 0;
   private throttleMs: number;
-  private readonly startedAt = Date.now();
   private readonly silent: boolean;
 
   constructor(
@@ -84,7 +83,6 @@ export class ProgressReporter {
     const signature = buildProgressSignature(update, this.toolCount);
     if (signature === this.lastSignature) return;
     const text = Formatter.progress(update, {
-      elapsedMs: Date.now() - this.startedAt,
       toolCount: this.toolCount
     });
     try {

@@ -169,36 +169,35 @@ export const Formatter = {
     return [`<b>Failed</b>`, "", `<pre>${escapeHtml(truncateText(error, 1500))}</pre>`].join("\n");
   },
 
-  progress(update: ProgressUpdate, options: { elapsedMs?: number; toolCount?: number } = {}): string {
-    const elapsed = formatElapsed(options.elapsedMs ?? 0);
+  progress(update: ProgressUpdate, options: { toolCount?: number } = {}): string {
     if (update.phase === "thinking") {
       if (update.message && /fallback|切换|provider/i.test(update.message)) {
-        return `↻ ${escapeHtml(truncateText(update.message, 80))}（${elapsed}）`;
+        return `↻ ${escapeHtml(truncateText(update.message, 80))}`;
       }
-      return `🧠 思考中…（${elapsed}）`;
+      return "🧠 思考中…";
     }
     if (update.phase === "writing") {
-      return `✍️ 正在整理回复…（${elapsed}）`;
+      return "✍️ 正在整理回复…";
     }
     if (update.phase === "tool_calling") {
       const tool = parseToolName(update.tool, {
         kind: update.toolKind,
         mcpServer: update.mcpServer
       });
-      const count = options.toolCount && options.toolCount > 0 ? `第 ${options.toolCount} 个操作 · ` : "";
+      const count = options.toolCount && options.toolCount > 0 ? `（第 ${options.toolCount} 个操作）` : "";
       if (tool.kind === "mcp") {
         const server = tool.mcpServer ? `${escapeHtml(tool.mcpServer)} / ` : "";
-        return `🔌 调用 MCP · <code>${server}${escapeHtml(tool.name)}</code>（${count}${elapsed}）`;
+        return `🔌 调用 MCP · <code>${server}${escapeHtml(tool.name)}</code>${count}`;
       }
       if (tool.kind === "command") {
-        return `⌨️ 执行命令 · <code>${escapeHtml(tool.name)}</code>（${elapsed}）`;
+        return `⌨️ 执行命令 · <code>${escapeHtml(tool.name)}</code>`;
       }
       if (isEditingTool(tool.raw)) {
-        return `✏️ 编辑文件 · <code>${escapeHtml(tool.name)}</code>（${elapsed}）`;
+        return `✏️ 编辑文件 · <code>${escapeHtml(tool.name)}</code>`;
       }
-      return `🔧 运行 <code>${escapeHtml(tool.name)}</code>（${count}${elapsed}）`;
+      return `🔧 运行 <code>${escapeHtml(tool.name)}</code>${count}`;
     }
-    return `🧠 思考中…（${elapsed}）`;
+    return "🧠 思考中…";
   },
 
   taskAborted(): string {
@@ -231,14 +230,6 @@ export const Formatter = {
     ].join("\n");
   }
 };
-
-function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remaining = seconds % 60;
-  return remaining ? `${minutes}m ${remaining}s` : `${minutes}m`;
-}
 
 function isEditingTool(tool: string): boolean {
   return /^(Write|Edit|MultiEdit|NotebookEdit|apply_patch|patch)$/i.test(tool);

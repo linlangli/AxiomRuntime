@@ -358,7 +358,7 @@ graph TD
 | `telegram/engine/types.ts` | 扩展 `ProgressUpdate` | 增加 `toolKind?` / `mcpServer?` 等字段（见 §3.5.6.1）；`toolCount` 由 reporter 内部统计 |
 | `telegram/interaction/tool-name.ts` | **新增** | 共享 helper `parseToolName()`：解析 `mcp__` 前缀、归一 `toolKind`（见 §3.5.6.1） |
 | `telegram/interaction/progress-reporter.ts` | **新增** | 节流状态消息更新器（发送/编辑/清理一条状态消息），核心组件 |
-| `telegram/interaction/formatter.ts` | 新增 `Formatter.progress()` | 把 `ProgressUpdate` 渲染为状态文案（emoji + 阶段 + 工具名 + 已用时） |
+| `telegram/interaction/formatter.ts` | 新增 `Formatter.progress()` | 把 `ProgressUpdate` 渲染为状态文案（emoji + 阶段 + 工具名，不展示耗时） |
 | `telegram/handlers/message.ts` | 接线 | `executePromptLocked()` 构造 `ProgressReporter`，透传 `onProgress`，最终结果优先覆盖状态消息 |
 | `telegram/engine/claude-engine.ts` | **不改** | MCP 前缀 `mcp__` 在 `tool_use.name` 里，由 `parseToolName()` 解析，引擎无需改动 |
 | `telegram/engine/codex-engine.ts` | 小改 `handleCodexProgress` | Codex 无 `mcp__` 前缀，`toolKind` 需按事件 type 判定后写入 `ProgressUpdate` |
@@ -440,12 +440,12 @@ try {
 
 | phase | 状态文案示例 |
 |-------|-------------|
-| `thinking` | `🧠 思考中…（12s）` |
-| `tool_calling` | `🔧 正在运行 Bash（第 3 个操作 · 25s）` |
-| `writing` | `✍️ 正在整理回复…（40s）` |
+| `thinking` | `🧠 思考中…` |
+| `tool_calling` | `🔧 正在运行 Bash（第 3 个操作）` |
+| `writing` | `✍️ 正在整理回复…` |
 | `done` | 不再展示（由 `finalize()` 清理） |
 
-- 已用时基于 `reporter.startedAt`，秒级；**若两次 update 仅秒数变化、阶段/工具未变，则不触发编辑**（避免为跳秒刷屏）。
+- 状态消息不展示耗时，避免出现 `（2s）` 这类跳秒信息；若阶段/工具/消息签名未变则不触发编辑（避免无意义刷新）。
 - 工具名与 MCP 识别见 §3.5.6.1；`toolCount` 由 reporter 侧对 `tool_calling` 事件累加得到。
 
 #### 3.5.6.1 工具名解析（含 MCP 识别）
@@ -464,10 +464,10 @@ try {
 
 | toolKind | 展示示例 |
 |----------|---------|
-| `mcp` | `🔌 调用 MCP · codegraph / codegraph_context（第 3 个操作 · 25s）` |
-| `command` | `⌨️ 执行命令 · npm test（25s）` |
-| `builtin`（编辑类 Write/Edit） | `✏️ 编辑文件 · a.ts（25s）` |
-| `builtin`（其它） | `🔧 运行 Bash（第 2 个操作 · 25s）` |
+| `mcp` | `🔌 调用 MCP · codegraph / codegraph_context（第 3 个操作）` |
+| `command` | `⌨️ 执行命令 · npm test` |
+| `builtin`（编辑类 Write/Edit） | `✏️ 编辑文件 · a.ts` |
+| `builtin`（其它） | `🔧 运行 Bash（第 2 个操作）` |
 
 - server 名 / tool 名 / 命令各做长度截断（建议 ≤ 24 字符），避免状态消息过长。
 - 未知 kind 或解析失败兜底为 `🔧 运行 <原始名>`，**绝不因出现新工具类型而崩溃**。

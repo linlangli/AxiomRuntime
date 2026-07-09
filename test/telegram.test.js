@@ -536,20 +536,21 @@ test("progress formatter and tool parser render structured status", () => {
   });
   assert.equal(parseToolName("Bash").kind, "builtin");
   assert.equal(parseToolName("npm test -- --watch=false", { kind: "command" }).kind, "command");
-  assert.match(Formatter.progress({ phase: "thinking" }, { elapsedMs: 12_000 }), /思考中.*12s/);
+  assert.equal(Formatter.progress({ phase: "thinking" }), "🧠 思考中…");
   assert.match(Formatter.progress({
     phase: "tool_calling",
     tool: "mcp__codegraph__codegraph_context"
-  }, { elapsedMs: 25_000, toolCount: 3 }), /调用 MCP · <code>codegraph \/ codegraph_context<\/code>（第 3 个操作 · 25s）/);
+  }, { toolCount: 3 }), /调用 MCP · <code>codegraph \/ codegraph_context<\/code>（第 3 个操作）/);
   assert.match(Formatter.progress({
     phase: "tool_calling",
     tool: "npm test",
     toolKind: "command"
-  }, { elapsedMs: 1000 }), /执行命令 · <code>npm test<\/code>/);
+  }), /执行命令 · <code>npm test<\/code>/);
   assert.match(Formatter.progress({
     phase: "tool_calling",
     tool: "Edit"
-  }, { elapsedMs: 1000 }), /编辑文件 · <code>Edit<\/code>/);
+  }), /编辑文件 · <code>Edit<\/code>/);
+  assert.doesNotMatch(Formatter.progress({ phase: "thinking" }), /\(\d+s\)|（\d+s）/);
 });
 
 test("progress reporter throttles updates and deletes status message", async () => {
