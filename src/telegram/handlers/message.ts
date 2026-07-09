@@ -1,6 +1,7 @@
 import { InputFile, type Bot, type Context } from "grammy";
 import type { TelegramConfig, TelegramEngineName } from "../config.js";
 import type { Engine, ExecutionResult } from "../engine/types.js";
+import { resolveProviderCandidatesForTool } from "../../core/runner/fallback.js";
 import type { ApprovalManager } from "../interaction/approval.js";
 import { parseTelegramCommand, resolveMappedCommand } from "../interaction/command-menu.js";
 import { Formatter, truncateText } from "../interaction/formatter.js";
@@ -20,6 +21,15 @@ export type MessageHandlerDeps = {
 export const DEFAULT_PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
 export const CLI_INIT_TIMEOUT_MS = 3 * 60 * 1000;
 const RECENT_CONVERSATION_TURNS = 4;
+
+type ProviderAttempt = {
+  providerName?: string;
+  modelName?: string;
+  providerLabel: string;
+  modelLabel?: string;
+  fallbackFrom?: string;
+  preferred: boolean;
+};
 
 export type ExecutePromptOptions = {
   silentSuccess?: boolean;
@@ -128,10 +138,6 @@ export async function executePrompt(
     return false;
   }
 
-  const promptWithRecentContext = options.includeAgentContext === false
-    ? text
-    : buildPromptWithRecentConversation(text, session);
-  const promptWithAttachments = buildPromptWithAttachments(promptWithRecentContext, session);
   session = deps.sessionManager.update(session.id, {
     status: "running",
     messageCount: session.messageCount + 1
@@ -140,24 +146,58 @@ export async function executePrompt(
 
   try {
     const engine = session.engine === "codex" ? deps.codexEngine : deps.claudeEngine;
+    const attempts = await resolveTelegramProviderAttempts(session.engine, deps.config);
+    let result: ExecutionResult | null = null;
+    let successfulAttempt: ProviderAttempt | null = null;
+    let lastError: unknown = null;
 
-    const result = await engine.execute({
-      chatId,
-      prompt: promptWithAttachments,
-      cwd: session.cwd,
-      resume: session.engineSessionId,
-      permissionMode: session.permissionMode,
-      providerName: deps.config.provider,
-      modelName: deps.config.model,
-      timeoutMs: options.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS,
-      onPermission: async (req) => {
-        if (session.approveAll) return true;
-        deps.sessionManager.update(session.id, { status: "waiting_approval" });
-        const approved = await deps.approvalManager.request(chatId, req);
-        deps.sessionManager.update(session.id, { status: "running" });
-        return approved;
+    for (const [index, attempt] of attempts.entries()) {
+      const resume = attempt.preferred ? session.engineSessionId : null;
+      const promptWithRecentContext = options.includeAgentContext === false
+        ? text
+        : buildPromptWithRecentConversation(text, session, resume);
+      const promptWithAttachments = buildPromptWithAttachments(promptWithRecentContext, session);
+      try {
+        result = await engine.execute({
+          chatId,
+          prompt: promptWithAttachments,
+          cwd: session.cwd,
+          resume,
+          permissionMode: session.permissionMode,
+          providerName: attempt.providerName,
+          modelName: attempt.modelName,
+          timeoutMs: options.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS,
+          onPermission: async (req) => {
+            if (session.approveAll) return true;
+            deps.sessionManager.update(session.id, { status: "waiting_approval" });
+            const approved = await deps.approvalManager.request(chatId, req);
+            deps.sessionManager.update(session.id, { status: "running" });
+            return approved;
+          }
+        });
+        successfulAttempt = attempt;
+        break;
+      } catch (error) {
+        lastError = error;
+        const next = attempts[index + 1];
+        if (!next || isNonFallbackTelegramError(error)) {
+          throw error;
+        }
+        await writeTelegramFallbackLog({
+          chatId,
+          engine: session.engine,
+          from: attempt.providerLabel,
+          to: next.providerLabel,
+          model: attempt.modelLabel,
+          nextModel: next.modelLabel,
+          error
+        });
       }
-    });
+    }
+
+    if (!result || !successfulAttempt) {
+      throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Telegram task failed."));
+    }
 
     const conversation = !options.silentSuccess && !text.trimStart().startsWith("/")
       ? deps.sessionManager.appendConversationTurn(session.id, {
@@ -166,7 +206,7 @@ export async function executePrompt(
         }).conversation
       : session.conversation;
     deps.sessionManager.update(session.id, {
-      engineSessionId: result.sessionId ?? session.engineSessionId,
+      engineSessionId: successfulAttempt.preferred ? result.sessionId ?? session.engineSessionId : null,
       conversation,
       status: "idle",
       attachments: []
@@ -189,7 +229,9 @@ export async function executePrompt(
         provider: result.provider,
         model: result.model,
         sessionId: result.sessionId,
-        duration: result.duration
+        duration: result.duration,
+        fallbackFrom: successfulAttempt.fallbackFrom ?? null,
+        preferredProvider: successfulAttempt.preferred
       }
     });
     return true;
@@ -256,8 +298,91 @@ function buildPromptWithAttachments(prompt: string, session: TelegramSession): s
   return [prompt, "", "Attached files:", ...blocks].join("\n");
 }
 
-function buildPromptWithRecentConversation(prompt: string, session: TelegramSession): string {
-  if (session.engineSessionId) return prompt;
+async function resolveTelegramProviderAttempts(
+  engine: TelegramEngineName,
+  config: TelegramConfig
+): Promise<ProviderAttempt[]> {
+  try {
+    const candidates = await resolveProviderCandidatesForTool(engine, config.provider, config.model);
+    if (candidates.length) {
+      return candidates.map((candidate, index) => ({
+        providerName: candidate.provider.name,
+        modelName: candidate.model,
+        providerLabel: candidate.provider.name,
+        modelLabel: candidate.model,
+        fallbackFrom: candidate.fallbackFrom,
+        preferred: isPreferredProviderAttempt(index, candidate.provider.name, candidate.model, candidate.fallbackFrom, config)
+      }));
+    }
+  } catch (error) {
+    await writeTelegramLog({
+      level: "warn",
+      action: "provider_candidates_unavailable",
+      message: error instanceof Error ? error.message : String(error),
+      metadata: { engine, provider: config.provider ?? null, model: config.model ?? null }
+    });
+  }
+
+  return [{
+    providerName: config.provider,
+    modelName: config.model,
+    providerLabel: config.provider ?? "auto",
+    modelLabel: config.model,
+    preferred: true
+  }];
+}
+
+function isPreferredProviderAttempt(
+  index: number,
+  providerName: string,
+  model: string,
+  fallbackFrom: string | undefined,
+  config: TelegramConfig
+): boolean {
+  if (fallbackFrom) return false;
+  if (index !== 0) return false;
+  if (config.provider && providerName !== config.provider) return false;
+  if (config.model && model !== config.model) return false;
+  return true;
+}
+
+function isNonFallbackTelegramError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Dangerous command denied|任务已停止|Failed to find .* CLI|Run `ai doctor`/.test(message);
+}
+
+async function writeTelegramFallbackLog(input: {
+  chatId: number;
+  engine: TelegramEngineName;
+  from: string;
+  to: string;
+  model?: string;
+  nextModel?: string;
+  error: unknown;
+}): Promise<void> {
+  const error = input.error instanceof Error ? input.error.message : String(input.error);
+  await writeTelegramLog({
+    level: "warn",
+    action: "runtime_provider_fallback_retry",
+    message: `Provider fallback ${input.from} -> ${input.to} for Telegram ${input.engine}.`,
+    metadata: {
+      chatId: input.chatId,
+      engine: input.engine,
+      from: input.from,
+      to: input.to,
+      model: input.model ?? null,
+      nextModel: input.nextModel ?? null,
+      error: summarizeError(error)
+    }
+  });
+}
+
+function summarizeError(message: string): string {
+  return message.replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function buildPromptWithRecentConversation(prompt: string, session: TelegramSession, resume?: string | null): string {
+  if (resume) return prompt;
   if (prompt.trimStart().startsWith("/")) return prompt;
   const turns = session.conversation.slice(-RECENT_CONVERSATION_TURNS);
   if (!turns.length) return prompt;

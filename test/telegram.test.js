@@ -11,6 +11,8 @@ import {
   saveTelegramConfig,
   setTelegramConfigValue
 } from "../dist/telegram/config.js";
+import { upsertProviderCache } from "../dist/core/config/cache-store.js";
+import { writeProviders } from "../dist/core/config/providers-store.js";
 import { requiresDangerousConfirmation } from "../dist/telegram/interaction/approval.js";
 import {
   getBaseBotCommands,
@@ -794,6 +796,98 @@ test("telegram prompts include recent conversation when engine session id is una
     assert.match(engineCalls[1].prompt, /天弘中证食品饮料ETF联接C/);
     assert.match(engineCalls[1].prompt, /这支还要继续定投吗？/);
     assert.equal(manager.getOrCreate(123).conversation.length, 2);
+    store.close();
+  });
+});
+
+test("telegram provider fallback clears cross-provider resume and keeps recent context", async () => {
+  await withTempHome(async (tempDir) => {
+    const projectDir = path.join(tempDir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    await writeProviders([
+      { name: "bad", baseUrl: "https://bad.test/v1", apiKey: "bad", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "good", baseUrl: "https://good.test/v1", apiKey: "good", mode: "auto", level: 2, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("bad", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("good", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: projectDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "bad",
+      model: "gpt-5.5",
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.getOrCreate(123);
+    manager.update(session.id, {
+      cwd: projectDir,
+      engine: "codex",
+      setupStep: "ready",
+      engineSessionId: "bad-session"
+    });
+    manager.appendConversationTurn(session.id, {
+      user: "上一轮问题",
+      assistant: "上一轮回答"
+    });
+
+    const engineCalls = [];
+    const codexEngine = {
+      name: "codex",
+      execute: async (params) => {
+        engineCalls.push(params);
+        if (params.providerName === "bad") {
+          throw new Error("provider upstream failed");
+        }
+        return {
+          sessionId: "good-session",
+          response: "备用 provider 已回答",
+          provider: "good",
+          model: "gpt-5.5"
+        };
+      },
+      abort: () => undefined
+    };
+
+    const replies = [];
+    const ok = await executePrompt({
+      chat: { id: 123 },
+      reply: async (text) => {
+        replies.push(text);
+      },
+      api: { sendChatAction: async () => true }
+    }, {
+      sessionManager: manager,
+      claudeEngine: { ...codexEngine, name: "claude" },
+      codexEngine,
+      approvalManager: { request: async () => true },
+      config
+    }, "继续分析");
+
+    assert.equal(ok, true);
+    assert.equal(engineCalls.length, 2);
+    assert.equal(engineCalls[0].providerName, "bad");
+    assert.equal(engineCalls[0].resume, "bad-session");
+    assert.doesNotMatch(engineCalls[0].prompt, /<recent_conversation purpose=/);
+    assert.equal(engineCalls[1].providerName, "good");
+    assert.equal(engineCalls[1].resume, null);
+    assert.match(engineCalls[1].prompt, /<recent_conversation purpose=/);
+    assert.match(engineCalls[1].prompt, /上一轮问题/);
+    assert.match(engineCalls[1].prompt, /上一轮回答/);
+
+    const current = manager.getOrCreate(123);
+    assert.equal(current.engineSessionId, null);
+    assert.equal(current.providerUsage[0].provider, "good");
+    assert.equal(config.provider, "bad");
+    assert.equal(replies.length, 1);
     store.close();
   });
 });

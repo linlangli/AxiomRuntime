@@ -12,6 +12,7 @@ import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resol
 import { startOpenAiUsageProxy } from "../dist/core/runner/openai-usage-proxy.js";
 import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl } from "../dist/core/runner/tool-runner.js";
 import { estimateTokenCostUsd } from "../dist/core/usage/pricing.js";
+import { runResolvedProviderCandidates } from "../dist/cli/commands/use.js";
 
 test("normalizes provider levels by priority", () => {
   const providers = normalizeProviders([
@@ -432,6 +433,56 @@ test("resolveToolCommand skips broken codex shim when app binary exists", () => 
 
   assert.notEqual(command, "/opt/homebrew/bin/codex");
   assert.equal(command, appBinary);
+});
+
+test("CLI provider fallback tries next candidate after non-zero exit", async () => {
+  await withTempHome(async () => {
+    const attempts = [];
+    const candidates = [
+      {
+        provider: { name: "bad", baseUrl: "https://bad.test/v1", apiKey: "bad", mode: "auto", level: 1, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      },
+      {
+        provider: { name: "good", baseUrl: "https://good.test/v1", apiKey: "good", mode: "auto", level: 2, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      }
+    ];
+
+    const code = await runResolvedProviderCandidates("codex", candidates, {
+      runner: async (candidate, fallbackFrom) => {
+        attempts.push({ provider: candidate.provider.name, fallbackFrom });
+        return candidate.provider.name === "bad" ? 42 : 0;
+      }
+    });
+
+    assert.equal(code, 0);
+    assert.deepEqual(attempts, [
+      { provider: "bad", fallbackFrom: null },
+      { provider: "good", fallbackFrom: "bad" }
+    ]);
+  });
+});
+
+test("CLI provider fallback returns last non-zero exit when all candidates fail", async () => {
+  await withTempHome(async () => {
+    const candidates = [
+      {
+        provider: { name: "bad", baseUrl: "https://bad.test/v1", apiKey: "bad", mode: "auto", level: 1, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      },
+      {
+        provider: { name: "worse", baseUrl: "https://worse.test/v1", apiKey: "worse", mode: "auto", level: 2, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      }
+    ];
+
+    const code = await runResolvedProviderCandidates("codex", candidates, {
+      runner: async (candidate) => candidate.provider.name === "bad" ? 42 : 43
+    });
+
+    assert.equal(code, 43);
+  });
 });
 
 async function withTempHome(fn) {
