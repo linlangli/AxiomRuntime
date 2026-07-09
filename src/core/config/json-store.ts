@@ -1,6 +1,19 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import lockfile from "proper-lockfile";
+
+const LOCK_OPTIONS = {
+  realpath: false,
+  stale: 10_000,
+  update: 5_000,
+  retries: {
+    retries: 100,
+    factor: 1.2,
+    minTimeout: 25,
+    maxTimeout: 500
+  }
+} satisfies lockfile.LockOptions;
 
 export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T> {
   try {
@@ -16,6 +29,34 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
 
 export async function writeJsonFile<T>(filePath: string, value: T): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await withJsonFileLock(filePath, () => writeJsonFileUnlocked(filePath, value));
+}
+
+export async function updateJsonFile<T>(
+  filePath: string,
+  fallback: T,
+  updater: (current: T) => T | Promise<T>
+): Promise<T> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  return withJsonFileLock(filePath, async () => {
+    const current = await readJsonFile(filePath, fallback);
+    const next = await updater(current);
+    await writeJsonFileUnlocked(filePath, next);
+    return next;
+  });
+}
+
+export async function withJsonFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const release = await lockfile.lock(filePath, LOCK_OPTIONS);
+  try {
+    return await fn();
+  } finally {
+    await release();
+  }
+}
+
+async function writeJsonFileUnlocked<T>(filePath: string, value: T): Promise<void> {
   const temporaryPath = path.join(
     path.dirname(filePath),
     `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`

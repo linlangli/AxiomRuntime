@@ -1,5 +1,5 @@
 import { getProvidersPath } from "./paths.js";
-import { readJsonFile, writeJsonFile } from "./json-store.js";
+import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
 import type { Provider, ProviderMode } from "../types.js";
 
 const VALID_MODES = new Set<ProviderMode>(["ask", "auto"]);
@@ -14,6 +14,15 @@ export async function readProviders(): Promise<Provider[]> {
 
 export async function writeProviders(providers: Provider[]): Promise<void> {
   await writeJsonFile(getProvidersPath(), normalizeProviders(providers));
+}
+
+export async function updateProviders(updater: (providers: Provider[]) => Provider[] | Promise<Provider[]>): Promise<Provider[]> {
+  return updateJsonFile<Provider[]>(getProvidersPath(), [], async (raw) => {
+    if (!Array.isArray(raw)) {
+      throw new Error("providers.json must contain a JSON array.");
+    }
+    return normalizeProviders(await updater(normalizeProviders(raw.map(normalizeProviderShape))));
+  });
 }
 
 export function normalizeProviders(providers: Provider[]): Provider[] {

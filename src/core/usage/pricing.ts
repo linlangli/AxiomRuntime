@@ -1,5 +1,5 @@
 import { getModelPricingPath } from "../config/paths.js";
-import { readJsonFile, writeJsonFile } from "../config/json-store.js";
+import { readJsonFile, updateJsonFile } from "../config/json-store.js";
 import type { TokenUsage } from "../types.js";
 
 export type ModelPrice = {
@@ -24,14 +24,11 @@ export async function estimateTokenCostUsdFromConfig(
 }
 
 export async function upsertModelPrice(providerName: string, model: string, price: ModelPrice): Promise<ModelPricingTable> {
-  const pricing = await readModelPricing();
   const key = getProviderModelPricingKey(providerName, model);
-  const next = {
-    ...pricing,
+  return updateJsonFile(getModelPricingPath(), {}, (raw) => ({
+    ...normalizePricingTable(raw),
     [key]: price
-  };
-  await writeJsonFile(getModelPricingPath(), next);
-  return next;
+  }));
 }
 
 export function getProviderModelPricingKey(providerName: string, model: string): string {

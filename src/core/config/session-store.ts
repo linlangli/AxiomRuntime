@@ -1,33 +1,39 @@
 import { getSessionsPath } from "./paths.js";
-import { readJsonFile, writeJsonFile } from "./json-store.js";
+import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
 import type { SessionRecord, SessionsFile } from "../types.js";
 
 export async function readSessions(): Promise<SessionsFile> {
   const file = await readJsonFile<SessionsFile>(getSessionsPath(), { sessions: [] });
-  return { sessions: Array.isArray(file.sessions) ? file.sessions : [] };
+  return normalizeSessionsFile(file);
 }
 
 export async function writeSessions(file: SessionsFile): Promise<void> {
-  await writeJsonFile(getSessionsPath(), { sessions: file.sessions });
+  await writeJsonFile(getSessionsPath(), normalizeSessionsFile(file));
 }
 
 export async function addSession(session: SessionRecord): Promise<void> {
-  const file = await readSessions();
-  file.sessions.push(session);
-  await writeSessions(file);
+  await updateJsonFile<SessionsFile>(getSessionsPath(), { sessions: [] }, (file) => ({
+    sessions: [...normalizeSessionsFile(file).sessions, session]
+  }));
 }
 
 export async function updateSession(sessionId: string, patch: Partial<SessionRecord>): Promise<void> {
-  const file = await readSessions();
-  file.sessions = file.sessions.map((session) =>
-    session.id === sessionId ? { ...session, ...patch } : session
-  );
-  await writeSessions(file);
+  await updateJsonFile<SessionsFile>(getSessionsPath(), { sessions: [] }, (file) => ({
+    sessions: normalizeSessionsFile(file).sessions.map((session) =>
+      session.id === sessionId ? { ...session, ...patch } : session
+    )
+  }));
 }
 
 export async function clearSessions(): Promise<number> {
-  const file = await readSessions();
-  const count = file.sessions.length;
-  await writeSessions({ sessions: [] });
+  let count = 0;
+  await updateJsonFile<SessionsFile>(getSessionsPath(), { sessions: [] }, (file) => {
+    count = normalizeSessionsFile(file).sessions.length;
+    return { sessions: [] };
+  });
   return count;
+}
+
+function normalizeSessionsFile(file: SessionsFile): SessionsFile {
+  return { sessions: Array.isArray(file.sessions) ? file.sessions : [] };
 }

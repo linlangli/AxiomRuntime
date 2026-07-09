@@ -1,5 +1,5 @@
 import { getIntegrationStatePath } from "../config/paths.js";
-import { readJsonFile, writeJsonFile } from "../config/json-store.js";
+import { readJsonFile, updateJsonFile, writeJsonFile } from "../config/json-store.js";
 
 export type ProviderChange =
   { type: "added" | "updated" | "deleted"; provider: string; previousProvider?: string; at: string };
@@ -30,29 +30,31 @@ export async function writeIntegrationState(state: IntegrationState): Promise<vo
 }
 
 export async function recordProviderChange(change: Omit<ProviderChange, "at">): Promise<IntegrationState> {
-  const state = await readIntegrationState();
-  const next: IntegrationState = {
-    providerRevision: state.providerRevision + 1,
-    hermes: {
-      syncedProviderRevision: state.hermes.syncedProviderRevision,
-      pendingProviderChanges: [
-        ...state.hermes.pendingProviderChanges,
-        { ...change, at: new Date().toISOString() }
-      ]
-    }
-  };
-  await writeIntegrationState(next);
-  return next;
+  return updateJsonFile(getIntegrationStatePath(), EMPTY_STATE, (raw) => {
+    const state = normalizeIntegrationState(raw);
+    return {
+      providerRevision: state.providerRevision + 1,
+      hermes: {
+        syncedProviderRevision: state.hermes.syncedProviderRevision,
+        pendingProviderChanges: [
+          ...state.hermes.pendingProviderChanges,
+          { ...change, at: new Date().toISOString() }
+        ]
+      }
+    };
+  });
 }
 
 export async function markHermesProvidersSynced(): Promise<void> {
-  const state = await readIntegrationState();
-  await writeIntegrationState({
-    providerRevision: state.providerRevision,
-    hermes: {
-      syncedProviderRevision: state.providerRevision,
-      pendingProviderChanges: []
-    }
+  await updateJsonFile(getIntegrationStatePath(), EMPTY_STATE, (raw) => {
+    const state = normalizeIntegrationState(raw);
+    return {
+      providerRevision: state.providerRevision,
+      hermes: {
+        syncedProviderRevision: state.providerRevision,
+        pendingProviderChanges: []
+      }
+    };
   });
 }
 

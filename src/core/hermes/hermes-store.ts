@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getHermesRobotsPath, getHermesStatePath, getLegacyHermesRobotsPath } from "../config/paths.js";
-import { readJsonFile, writeJsonFile } from "../config/json-store.js";
+import { readJsonFile, updateJsonFile, writeJsonFile } from "../config/json-store.js";
 import type { HermesRobot, HermesRobotsFile, HermesRobotState, HermesStateFile } from "./hermes-types.js";
 
 const EMPTY_ROBOTS: HermesRobotsFile = { robots: [] };
@@ -52,44 +52,42 @@ async function readHermesConfig(): Promise<unknown> {
 
 export async function readHermesState(): Promise<HermesStateFile> {
   const raw = await readJsonFile<HermesStateFile>(getHermesStatePath(), EMPTY_STATE);
-  return { robots: raw.robots ?? {} };
+  return normalizeHermesState(raw);
 }
 
 export async function writeHermesState(file: HermesStateFile): Promise<void> {
-  await writeJsonFile(getHermesStatePath(), { robots: file.robots ?? {} });
+  await writeJsonFile(getHermesStatePath(), normalizeHermesState(file));
 }
 
 export async function upsertHermesRobotState(robot: string, patch: Partial<HermesRobotState>): Promise<HermesRobotState> {
-  const state = await readHermesState();
-  const current = state.robots[robot] ?? {
-    robot,
-    lastUsedAt: null,
-    lastSessionId: null,
-    lastError: null,
-    clearedAt: null
-  };
-  const next = { ...current, ...patch, robot };
-  state.robots[robot] = next;
-  await writeHermesState(state);
-  return next;
+  let nextRobotState: HermesRobotState | null = null;
+  await updateJsonFile(getHermesStatePath(), EMPTY_STATE, (file) => {
+    const state = normalizeHermesState(file);
+    const current = state.robots[robot] ?? getEmptyHermesRobotState(robot);
+    nextRobotState = { ...current, ...patch, robot };
+    state.robots[robot] = nextRobotState;
+    return state;
+  });
+  if (!nextRobotState) {
+    throw new Error(`Failed to update Hermes state: ${robot}`);
+  }
+  return nextRobotState;
 }
 
 export async function clearHermesRobotState(robot: string): Promise<void> {
-  const state = await readHermesState();
-  state.robots[robot] = {
-    robot,
-    lastUsedAt: null,
-    lastSessionId: null,
-    lastError: null,
-    clearedAt: new Date().toISOString()
-  };
-  await writeHermesState(state);
+  await updateJsonFile(getHermesStatePath(), EMPTY_STATE, (file) => {
+    const state = normalizeHermesState(file);
+    state.robots[robot] = { ...getEmptyHermesRobotState(robot), clearedAt: new Date().toISOString() };
+    return state;
+  });
 }
 
 export async function deleteHermesRobotState(robot: string): Promise<void> {
-  const state = await readHermesState();
-  delete state.robots[robot];
-  await writeHermesState(state);
+  await updateJsonFile(getHermesStatePath(), EMPTY_STATE, (file) => {
+    const state = normalizeHermesState(file);
+    delete state.robots[robot];
+    return state;
+  });
 }
 
 export async function removeHermesRobotOwnedFiles(robot: string): Promise<void> {
@@ -103,6 +101,20 @@ export function getHermesRobotHome(robot: string): string {
 function sanitizePathSegment(value: string): string {
   const sanitized = value.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   return sanitized || "robot";
+}
+
+function normalizeHermesState(file: HermesStateFile): HermesStateFile {
+  return { robots: file.robots ?? {} };
+}
+
+function getEmptyHermesRobotState(robot: string): HermesRobotState {
+  return {
+    robot,
+    lastUsedAt: null,
+    lastSessionId: null,
+    lastError: null,
+    clearedAt: null
+  };
 }
 
 export function normalizeRobots(robots: HermesRobot[]): HermesRobot[] {

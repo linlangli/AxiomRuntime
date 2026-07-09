@@ -2,7 +2,7 @@ import { deleteProviderCache, readCache, renameProviderCache, upsertProviderCach
 import { appendUsageEvent } from "../config/usage-store.js";
 import { recordProviderChange } from "../integrations/integration-state.js";
 import { writeLog } from "../logs/log-service.js";
-import { readProviders, swapProviderLevel, writeProviders } from "../config/providers-store.js";
+import { readProviders, swapProviderLevel, updateProviders } from "../config/providers-store.js";
 import { checkCallableModels, checkProvider } from "../models/model-discovery.js";
 import { buildUsageEvent } from "../usage/usage-service.js";
 import type { Provider, ProviderMode, TokenUsage } from "../types.js";
@@ -36,8 +36,16 @@ export async function addProvider(input: AddProviderInput): Promise<Provider> {
 
   const result = await checkProvider(draft);
   const model = draft.model || result.models[0] || "";
-  const provider = { ...draft, model };
-  await writeProviders([...providers, provider]);
+  const normalizedProviders = await updateProviders((current) => {
+    if (current.some((provider) => provider.name === draft.name)) {
+      throw new Error(`Provider already exists: ${draft.name}`);
+    }
+    return [...current, { ...draft, level: current.length + 1, model }];
+  });
+  const provider = normalizedProviders.find((item) => item.name === draft.name);
+  if (!provider) {
+    throw new Error("Provider add failed.");
+  }
   await upsertProviderCache(provider.name, {
     status: result.status,
     models: result.models,
@@ -49,35 +57,36 @@ export async function addProvider(input: AddProviderInput): Promise<Provider> {
 }
 
 export async function updateProvider(providerName: string, patch: Partial<Provider>): Promise<Provider> {
-  const providers = await readProviders();
-  const current = providers.find((provider) => provider.name === providerName);
-  if (!current) {
-    throw new Error(`Provider not found: ${providerName}`);
-  }
+  const targetName = patch.name?.trim() || providerName;
+  const normalizedProviders = await updateProviders((providers) => {
+    const current = providers.find((provider) => provider.name === providerName);
+    if (!current) {
+      throw new Error(`Provider not found: ${providerName}`);
+    }
+    if (targetName !== providerName && providers.some((provider) => provider.name === targetName)) {
+      throw new Error(`Provider already exists: ${targetName}`);
+    }
 
-  if (patch.name && patch.name !== providerName && providers.some((provider) => provider.name === patch.name)) {
-    throw new Error(`Provider already exists: ${patch.name}`);
-  }
+    let nextProviders = providers.map((provider) =>
+      provider.name === providerName
+        ? {
+            ...provider,
+            ...patch,
+            name: targetName,
+            baseUrl: patch.baseUrl?.trim().replace(/\/+$/, "") || provider.baseUrl,
+            apiKey: patch.apiKey?.trim() || provider.apiKey,
+            model: patch.model?.trim() ?? provider.model
+          }
+        : provider
+    );
 
-  let nextProviders = providers.map((provider) =>
-    provider.name === providerName
-      ? {
-          ...provider,
-          ...patch,
-          name: patch.name?.trim() || provider.name,
-          baseUrl: patch.baseUrl?.trim().replace(/\/+$/, "") || provider.baseUrl,
-          apiKey: patch.apiKey?.trim() || provider.apiKey,
-          model: patch.model?.trim() ?? provider.model
-        }
-      : provider
-  );
+    if (patch.level) {
+      nextProviders = swapProviderLevel(nextProviders, targetName, patch.level);
+    }
 
-  if (patch.level) {
-    nextProviders = swapProviderLevel(nextProviders, patch.name ?? providerName, patch.level);
-  }
-
-  await writeProviders(nextProviders);
-  const updated = (await readProviders()).find((provider) => provider.name === (patch.name ?? providerName));
+    return nextProviders;
+  });
+  const updated = normalizedProviders.find((provider) => provider.name === targetName);
   if (!updated) {
     throw new Error("Provider update failed.");
   }
@@ -99,16 +108,20 @@ export async function updateProvider(providerName: string, patch: Partial<Provid
 }
 
 export async function deleteProvider(providerName: string): Promise<Provider> {
-  const providers = await readProviders();
-  const provider = providers.find((item) => item.name === providerName);
-  if (!provider) {
+  const deleted: { value?: Provider } = {};
+  await updateProviders((providers) => {
+    deleted.value = providers.find((item) => item.name === providerName);
+    if (!deleted.value) {
+      throw new Error(`Provider not found: ${providerName}`);
+    }
+    return providers.filter((item) => item.name !== providerName);
+  });
+  if (!deleted.value) {
     throw new Error(`Provider not found: ${providerName}`);
   }
-
-  await writeProviders(providers.filter((item) => item.name !== providerName));
   await deleteProviderCache(providerName);
-  await recordProviderChange({ type: "deleted", provider: provider.name });
-  return provider;
+  await recordProviderChange({ type: "deleted", provider: deleted.value.name });
+  return deleted.value;
 }
 
 type RefreshProviderOptions = {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import { getTelegramConfigPath, getTelegramDbPath } from "../core/config/paths.js";
-import { readJsonFile, writeJsonFile } from "../core/config/json-store.js";
+import { readJsonFile, updateJsonFile, writeJsonFile } from "../core/config/json-store.js";
 
 export type TelegramEngineName = "claude" | "codex";
 export type TelegramPermissionMode = "default" | "acceptEdits" | "bypassPermissions";
@@ -37,8 +37,11 @@ export async function saveTelegramConfig(config: TelegramConfig): Promise<Telegr
 }
 
 export async function updateTelegramConfig(patch: Partial<TelegramConfig>): Promise<TelegramConfig> {
-  const current = await loadTelegramConfig();
-  return saveTelegramConfig({ ...current, ...patch });
+  const next = await updateJsonFile(getTelegramConfigPath(), getDefaultTelegramConfig(), (current) =>
+    normalizeTelegramConfig({ ...normalizeTelegramConfig(current), ...patch })
+  );
+  await chmodConfigFile();
+  return normalizeTelegramConfig(next);
 }
 
 export async function setTelegramConfigValue(key: string, value: string): Promise<TelegramConfig> {

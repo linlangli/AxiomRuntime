@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { readJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
+import { readJsonFile, updateJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
 import { normalizeProviders, swapProviderLevel } from "../dist/core/config/providers-store.js";
 import { extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
@@ -356,6 +356,29 @@ test("json store recovers trailing duplicate content and rewrites clean json", a
 
     await writeJsonFile(filePath, { ok: true, items: [3] });
     assert.deepEqual(JSON.parse(await fs.readFile(filePath, "utf8")), { ok: true, items: [3] });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("json store serializes concurrent read modify write updates", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-json-lock-"));
+  try {
+    const filePath = path.join(tempDir, "counter.json");
+    await Promise.all(Array.from({ length: 25 }, async (_, index) => {
+      await updateJsonFile(filePath, { items: [] }, async (current) => {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        return { items: [...current.items, index] };
+      });
+    }));
+
+    const stored = await readJsonFile(filePath, { items: [] });
+    assert.deepEqual([...stored.items].sort((a, b) => a - b), Array.from({ length: 25 }, (_, index) => index));
+
+    const leftovers = (await fs.readdir(tempDir)).filter((item) =>
+      item.endsWith(".tmp") || item.endsWith(".lock")
+    );
+    assert.deepEqual(leftovers, []);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
