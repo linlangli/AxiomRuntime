@@ -1,7 +1,6 @@
 import { Bot } from "grammy";
 import { loadTelegramConfig, type TelegramConfig } from "./config.js";
-import { ClaudeEngine } from "./engine/claude-engine.js";
-import { CodexEngine } from "./engine/codex-engine.js";
+import { createTelegramEngines, type TelegramEngineMap } from "./engine/registry.js";
 import { registerCallbackHandler } from "./handlers/callback.js";
 import { registerCommands } from "./handlers/command.js";
 import { registerDocumentHandler } from "./handlers/document.js";
@@ -18,10 +17,7 @@ export type TelegramRuntime = {
   config: TelegramConfig;
   store: SessionStore;
   sessionManager: SessionManager;
-  engines: {
-    claude: ClaudeEngine;
-    codex: CodexEngine;
-  };
+  engines: TelegramEngineMap;
 };
 
 export async function createBot(): Promise<TelegramRuntime> {
@@ -45,8 +41,7 @@ export async function createBot(): Promise<TelegramRuntime> {
   });
   const store = new SessionStore(config.dbPath);
   const sessionManager = new SessionManager(store, config);
-  const claudeEngine = new ClaudeEngine();
-  const codexEngine = new CodexEngine();
+  const engines = createTelegramEngines();
   const approvalManager = new ApprovalManager(bot);
 
   sessionManager.cleanupExpired();
@@ -91,14 +86,11 @@ export async function createBot(): Promise<TelegramRuntime> {
   const deps = {
     bot,
     sessionManager,
-    claudeEngine,
-    codexEngine,
+    claudeEngine: engines.claude,
+    codexEngine: engines.codex,
     approvalManager,
     config,
-    engines: {
-      claude: claudeEngine,
-      codex: codexEngine
-    }
+    engines
   };
   registerCommands(bot, deps);
   registerCallbackHandler(bot, deps);
@@ -113,10 +105,7 @@ export async function createBot(): Promise<TelegramRuntime> {
     config,
     store,
     sessionManager,
-    engines: {
-      claude: claudeEngine,
-      codex: codexEngine
-    }
+    engines
   };
 }
 

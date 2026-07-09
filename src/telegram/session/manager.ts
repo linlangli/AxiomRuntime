@@ -20,10 +20,33 @@ const MAX_CONVERSATION_USER_CHARS = 1000;
 const MAX_CONVERSATION_ASSISTANT_CHARS = 1600;
 
 export class SessionManager {
+  private chatQueues = new Map<number, Promise<void>>();
+
   constructor(
     private store: SessionStore,
     private config: TelegramConfig
   ) {}
+
+  async runExclusive<T>(chatId: number, task: () => Promise<T>): Promise<T> {
+    const previous = this.chatQueues.get(chatId) ?? Promise.resolve();
+    const waitForPrevious = previous.catch(() => undefined);
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const next = waitForPrevious.then(() => current);
+    this.chatQueues.set(chatId, next);
+
+    await waitForPrevious;
+    try {
+      return await task();
+    } finally {
+      release();
+      if (this.chatQueues.get(chatId) === next) {
+        this.chatQueues.delete(chatId);
+      }
+    }
+  }
 
   getOrCreate(chatId: number, defaults: Partial<TelegramSession> = {}): TelegramSession {
     const existing = this.store.getActiveByChatId(chatId);

@@ -21,6 +21,7 @@ import {
   resolveMappedCommand
 } from "../dist/telegram/interaction/command-menu.js";
 import { escapeHtml, Formatter, markdownToTelegramHtml, splitPlainText, truncateText } from "../dist/telegram/interaction/formatter.js";
+import { applyPromptMiddlewares, listPromptMiddlewares } from "../dist/telegram/interaction/prompt-middleware.js";
 import {
   buildAgentProfileBackKeyboard,
   buildAgentProfileKeyboard,
@@ -35,6 +36,7 @@ import {
 } from "../dist/telegram/interaction/keyboards.js";
 import { buildCodexArgs, findLatestCodexSessionId, formatCodexFailure, parseCodexOutput } from "../dist/telegram/engine/codex-engine.js";
 import { buildClaudeArgs, parseClaudeOutput } from "../dist/telegram/engine/claude-engine.js";
+import { createTelegramEngines, listTelegramEngineNames } from "../dist/telegram/engine/registry.js";
 import { spawnCapture } from "../dist/telegram/engine/process-utils.js";
 import { resolveWorkingCommand } from "../dist/telegram/engine/engine-utils.js";
 import { deleteRecentChatMessages, registerCommands, shouldHandleStartCommand } from "../dist/telegram/handlers/command.js";
@@ -176,6 +178,70 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     assert.deepEqual(manager.getWorkdirs(123), [path.join(tempDir, "project-a")]);
     store.close();
   });
+});
+
+test("prompt middleware applies recent conversation and attachments", async () => {
+  await withTempHome(async (tempDir) => {
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [1],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.getOrCreate(123);
+    const withConversation = manager.appendConversationTurn(session.id, {
+      user: "上一轮问题 <fund>",
+      assistant: "上一轮回答 & conclusion"
+    });
+    const withAttachment = manager.addAttachment(withConversation.chatId, {
+      name: "note.md",
+      path: path.join(tempDir, "note.md"),
+      text: "attached text",
+      createdAt: new Date().toISOString()
+    });
+
+    assert.deepEqual(listPromptMiddlewares().map((item) => item.name), ["recent-conversation", "attachments"]);
+
+    const prompt = await applyPromptMiddlewares({
+      chatId: 123,
+      prompt: "继续",
+      session: withAttachment,
+      engine: "codex",
+      resume: null,
+      includeAgentContext: true
+    });
+    assert.match(prompt, /<recent_conversation/);
+    assert.match(prompt, /上一轮问题 &lt;fund&gt;/);
+    assert.match(prompt, /上一轮回答 &amp; conclusion/);
+    assert.match(prompt, /<attachment name="note\.md"/);
+
+    const resumed = await applyPromptMiddlewares({
+      chatId: 123,
+      prompt: "继续",
+      session: withAttachment,
+      engine: "codex",
+      resume: "native-session",
+      includeAgentContext: true
+    });
+    assert.doesNotMatch(resumed, /<recent_conversation/);
+    assert.match(resumed, /<attachment name="note\.md"/);
+    store.close();
+  });
+});
+
+test("telegram engine registry creates built-in engines", () => {
+  assert.deepEqual(listTelegramEngineNames().sort(), ["claude", "codex"]);
+  const engines = createTelegramEngines();
+  assert.equal(engines.claude.name, "claude");
+  assert.equal(engines.codex.name, "codex");
 });
 
 test("formatter escapes and splits telegram text safely", () => {
@@ -888,6 +954,75 @@ test("telegram provider fallback clears cross-provider resume and keeps recent c
     assert.equal(current.providerUsage[0].provider, "good");
     assert.equal(config.provider, "bad");
     assert.equal(replies.length, 1);
+    store.close();
+  });
+});
+
+test("telegram executePrompt serializes tasks for the same chat", async () => {
+  await withTempHome(async (tempDir) => {
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "51talk-codex",
+      model: "gpt-5.5",
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.getOrCreate(123);
+    manager.update(session.id, { setupStep: "ready", engine: "codex" });
+
+    let active = 0;
+    let maxActive = 0;
+    const prompts = [];
+    const codexEngine = {
+      name: "codex",
+      execute: async (params) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        prompts.push(params.prompt);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        active -= 1;
+        return {
+          response: `ok:${prompts.length}`,
+          provider: "51talk-codex",
+          model: "gpt-5.5"
+        };
+      },
+      abort: () => undefined
+    };
+    const ctx = {
+      chat: { id: 123 },
+      reply: async () => undefined,
+      api: { sendChatAction: async () => true }
+    };
+    const deps = {
+      sessionManager: manager,
+      claudeEngine: { ...codexEngine, name: "claude" },
+      codexEngine,
+      approvalManager: { request: async () => true },
+      config
+    };
+
+    const results = await Promise.all([
+      executePrompt(ctx, deps, "first"),
+      executePrompt(ctx, deps, "second")
+    ]);
+
+    assert.deepEqual(results, [true, true]);
+    assert.equal(maxActive, 1);
+    assert.equal(prompts.length, 2);
+    assert.equal(prompts[0], "first");
+    assert.match(prompts[1], /second/);
+    assert.match(prompts[1], /first/);
+    assert.equal(manager.getOrCreate(123).conversation.length, 2);
     store.close();
   });
 });

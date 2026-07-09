@@ -93,6 +93,9 @@ export type ConnectivityResult = {
   error: string | null;
   checkedAt: string;
   usage?: TokenUsage;
+  attempts?: number;
+  durationMs?: number;
+  retryErrors?: string[];
 };
 
 export type TokenUsage = {

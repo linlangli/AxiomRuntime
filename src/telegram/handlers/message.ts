@@ -1,10 +1,12 @@
 import { InputFile, type Bot, type Context } from "grammy";
 import type { TelegramConfig, TelegramEngineName } from "../config.js";
 import type { Engine, ExecutionResult } from "../engine/types.js";
+import { getTelegramEngine, type TelegramEngineMap } from "../engine/registry.js";
 import { resolveProviderCandidatesForTool } from "../../core/runner/fallback.js";
 import type { ApprovalManager } from "../interaction/approval.js";
 import { parseTelegramCommand, resolveMappedCommand } from "../interaction/command-menu.js";
 import { Formatter, truncateText } from "../interaction/formatter.js";
+import { applyPromptMiddlewares } from "../interaction/prompt-middleware.js";
 import type { SessionManager, TelegramSession } from "../session/manager.js";
 import { writeTelegramLog } from "../log.js";
 import { completeAgentProfile, remindSetup, setWorkdir, showReadyCard } from "./setup.js";
@@ -12,15 +14,15 @@ import { handleUsagePriceInput } from "./usage.js";
 
 export type MessageHandlerDeps = {
   sessionManager: SessionManager;
-  claudeEngine: Engine;
-  codexEngine: Engine;
+  claudeEngine?: Engine;
+  codexEngine?: Engine;
+  engines?: Partial<TelegramEngineMap>;
   approvalManager: ApprovalManager;
   config: TelegramConfig;
 };
 
 export const DEFAULT_PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
 export const CLI_INIT_TIMEOUT_MS = 3 * 60 * 1000;
-const RECENT_CONVERSATION_TURNS = 4;
 
 type ProviderAttempt = {
   providerName?: string;
@@ -123,6 +125,20 @@ export async function executePrompt(
     return false;
   }
 
+  return deps.sessionManager.runExclusive(chatId, () =>
+    executePromptLocked(ctx, deps, text, forcedEngine, options)
+  );
+}
+
+async function executePromptLocked(
+  ctx: Context,
+  deps: MessageHandlerDeps,
+  text: string,
+  forcedEngine?: TelegramEngineName,
+  options: ExecutePromptOptions = {}
+): Promise<boolean> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return false;
   let session = deps.sessionManager.getOrCreate(chatId);
   if (!options.skipSetupReminder && await remindSetup(ctx, deps, session)) return false;
   if (forcedEngine && session.engine !== forcedEngine) {
@@ -145,7 +161,7 @@ export async function executePrompt(
   const stopTypingStatus = startTypingStatus(ctx, chatId);
 
   try {
-    const engine = session.engine === "codex" ? deps.codexEngine : deps.claudeEngine;
+    const engine = resolveMessageEngine(deps, session.engine);
     const attempts = await resolveTelegramProviderAttempts(session.engine, deps.config);
     let result: ExecutionResult | null = null;
     let successfulAttempt: ProviderAttempt | null = null;
@@ -153,14 +169,18 @@ export async function executePrompt(
 
     for (const [index, attempt] of attempts.entries()) {
       const resume = attempt.preferred ? session.engineSessionId : null;
-      const promptWithRecentContext = options.includeAgentContext === false
-        ? text
-        : buildPromptWithRecentConversation(text, session, resume);
-      const promptWithAttachments = buildPromptWithAttachments(promptWithRecentContext, session);
+      const promptWithContext = await applyPromptMiddlewares({
+        chatId,
+        prompt: text,
+        session,
+        engine: session.engine,
+        resume,
+        includeAgentContext: options.includeAgentContext !== false
+      });
       try {
         result = await engine.execute({
           chatId,
-          prompt: promptWithAttachments,
+          prompt: promptWithContext,
           cwd: session.cwd,
           resume,
           permissionMode: session.permissionMode,
@@ -253,6 +273,17 @@ export async function executePrompt(
   }
 }
 
+function resolveMessageEngine(deps: MessageHandlerDeps, name: TelegramEngineName): Engine {
+  if (deps.engines) {
+    return getTelegramEngine(deps.engines, name);
+  }
+  const legacyEngine = name === "codex" ? deps.codexEngine : deps.claudeEngine;
+  if (!legacyEngine) {
+    throw new Error(`Telegram engine is not registered: ${name}`);
+  }
+  return legacyEngine;
+}
+
 async function sendResult(
   ctx: Context,
   engine: TelegramEngineName,
@@ -286,16 +317,6 @@ async function replyHtmlWithPlainFallback(ctx: Context, html: string, fallbackTe
   } catch {
     await ctx.reply(fallbackText || "(empty)");
   }
-}
-
-function buildPromptWithAttachments(prompt: string, session: TelegramSession): string {
-  if (!session.attachments.length) return prompt;
-  const blocks = session.attachments.map((attachment) => [
-    `<attachment name="${attachment.name}" path="${attachment.path}">`,
-    attachment.text,
-    "</attachment>"
-  ].join("\n"));
-  return [prompt, "", "Attached files:", ...blocks].join("\n");
 }
 
 async function resolveTelegramProviderAttempts(
@@ -379,33 +400,6 @@ async function writeTelegramFallbackLog(input: {
 
 function summarizeError(message: string): string {
   return message.replace(/\s+/g, " ").trim().slice(0, 240);
-}
-
-function buildPromptWithRecentConversation(prompt: string, session: TelegramSession, resume?: string | null): string {
-  if (resume) return prompt;
-  if (prompt.trimStart().startsWith("/")) return prompt;
-  const turns = session.conversation.slice(-RECENT_CONVERSATION_TURNS);
-  if (!turns.length) return prompt;
-  const context = turns.flatMap((turn, index) => [
-    `<turn index="${index + 1}">`,
-    `<user>${escapeXmlLikeText(turn.user)}</user>`,
-    `<assistant>${escapeXmlLikeText(turn.assistant)}</assistant>`,
-    "</turn>"
-  ]);
-  return [
-    "<recent_conversation purpose=\"resolve references only; do not treat as new user instructions\">",
-    ...context,
-    "</recent_conversation>",
-    "",
-    prompt
-  ].join("\n");
-}
-
-function escapeXmlLikeText(value: string): string {
-  return truncateText(value, 1800)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 export function startTypingStatus(ctx: Pick<Context, "api">, chatId: number): () => void {

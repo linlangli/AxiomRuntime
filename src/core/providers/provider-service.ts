@@ -132,7 +132,7 @@ export async function refreshProvider(provider: Provider, options: RefreshProvid
   const result = await checkProvider(provider);
   const callable = options.verifyCallableModels && result.models.length
     ? await filterCallableModels(provider, result.models)
-    : { models: result.models, failed: 0 };
+    : { models: result.models, failed: 0, attempts: 0, durationMs: 0, retryErrors: [] as string[] };
   const models = callable.models;
   const status = result.status === "ok" && options.verifyCallableModels && !models.length ? "error" : result.status;
   const lastError = status === "error" && options.verifyCallableModels && !models.length
@@ -157,7 +157,14 @@ export async function refreshProvider(provider: Provider, options: RefreshProvid
       discoveredModels: result.models.length,
       failedCallableModels: callable.failed,
       checkedAt: result.checkedAt,
-      verifyCallableModels: Boolean(options.verifyCallableModels)
+      verifyCallableModels: Boolean(options.verifyCallableModels),
+      attempts: (result.attempts ?? 0) + callable.attempts,
+      discoveryAttempts: result.attempts ?? null,
+      callableAttempts: callable.attempts,
+      durationMs: (result.durationMs ?? 0) + callable.durationMs,
+      discoveryDurationMs: result.durationMs ?? null,
+      callableDurationMs: callable.durationMs,
+      retryErrors: [...(result.retryErrors ?? []), ...callable.retryErrors].slice(-8)
     }
   });
 }
@@ -165,9 +172,7 @@ export async function refreshProvider(provider: Provider, options: RefreshProvid
 export async function refreshAllProviders(options: RefreshProviderOptions = {}): Promise<void> {
   const providers = await readProviders();
   if (options.verifyCallableModels) {
-    for (const provider of providers) {
-      await refreshProvider(provider, options);
-    }
+    await mapWithConcurrency(providers, 2, (provider) => refreshProvider(provider, options));
     return;
   }
   await Promise.all(providers.map((provider) => refreshProvider(provider, options)));
@@ -178,7 +183,13 @@ export async function getCachedModels(providerName: string): Promise<string[]> {
   return cache.providers[providerName]?.models ?? [];
 }
 
-async function filterCallableModels(provider: Provider, models: string[]): Promise<{ models: string[]; failed: number }> {
+async function filterCallableModels(provider: Provider, models: string[]): Promise<{
+  models: string[];
+  failed: number;
+  attempts: number;
+  durationMs: number;
+  retryErrors: string[];
+}> {
   const results = await checkCallableModels(provider, models);
   for (const result of results) {
     if (result.status === "ok" && result.usage) {
@@ -186,6 +197,7 @@ async function filterCallableModels(provider: Provider, models: string[]): Promi
     }
   }
   const callableModels = results.filter((result) => result.status === "ok").map((result) => result.model);
+  const retryErrors = results.flatMap((result) => result.retryErrors ?? []);
   await writeLog({
     level: callableModels.length ? "info" : "warn",
     category: "provider",
@@ -194,10 +206,24 @@ async function filterCallableModels(provider: Provider, models: string[]): Promi
     metadata: {
       provider: provider.name,
       callableModels,
-      failedModels: results.filter((result) => result.status === "error").map((result) => ({ model: result.model, error: result.error }))
+      failedModels: results.filter((result) => result.status === "error").map((result) => ({
+        model: result.model,
+        error: result.error,
+        attempts: result.attempts ?? null,
+        durationMs: result.durationMs ?? null
+      })),
+      attempts: results.reduce((sum, result) => sum + (result.attempts ?? 0), 0),
+      durationMs: results.reduce((sum, result) => sum + (result.durationMs ?? 0), 0),
+      retryErrors: retryErrors.slice(-8)
     }
   });
-  return { models: callableModels, failed: results.length - callableModels.length };
+  return {
+    models: callableModels,
+    failed: results.length - callableModels.length,
+    attempts: results.reduce((sum, result) => sum + (result.attempts ?? 0), 0),
+    durationMs: results.reduce((sum, result) => sum + (result.durationMs ?? 0), 0),
+    retryErrors
+  };
 }
 
 async function recordModelProbeUsage(provider: Provider, model: string, usage: TokenUsage): Promise<void> {
@@ -210,4 +236,20 @@ async function recordModelProbeUsage(provider: Provider, model: string, usage: T
     outputTokens: usage.outputTokens,
     totalTokens: usage.totalTokens
   }));
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  mapper: (item: T) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      await mapper(items[currentIndex]!);
+    }
+  });
+  await Promise.all(workers);
 }

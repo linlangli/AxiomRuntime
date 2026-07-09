@@ -6,13 +6,15 @@ import path from "node:path";
 import test from "node:test";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
 import { normalizeProviders, swapProviderLevel } from "../dist/core/config/providers-store.js";
-import { extractTokenUsage } from "../dist/core/models/model-discovery.js";
+import { checkProvider, extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
 import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
+import { getRunnerEngine, listRunnerEngines } from "../dist/core/runner/engine-registry.js";
 import { startOpenAiUsageProxy } from "../dist/core/runner/openai-usage-proxy.js";
 import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl } from "../dist/core/runner/tool-runner.js";
 import { estimateTokenCostUsd } from "../dist/core/usage/pricing.js";
 import { runResolvedProviderCandidates } from "../dist/cli/commands/use.js";
+import { getCliCommand, listInteractiveCliCommands, registerCliCommand } from "../dist/cli/registry.js";
 
 test("normalizes provider levels by priority", () => {
   const providers = normalizeProviders([
@@ -44,6 +46,36 @@ test("filters compatible models", () => {
   assert.equal(isModelCompatible("codex", "gpt-5.5"), true);
   assert.equal(isModelCompatible("codex", "claude-opus-4-6"), false);
   assert.equal(pickCompatibleModel("codex", "claude-opus", ["claude-opus", "gpt-5"]), "gpt-5");
+});
+
+test("runner engine registry exposes built-in engines", () => {
+  assert.deepEqual(listRunnerEngines().map((engine) => engine.name).sort(), ["claude", "codex"]);
+  const claude = getRunnerEngine("claude");
+  const codex = getRunnerEngine("codex");
+  assert.equal(claude.normalizeBaseUrl("https://api.test/v1"), "https://api.test");
+  assert.equal(codex.normalizeBaseUrl("https://api.test"), "https://api.test/v1");
+  assert.deepEqual(codex.buildArgs({
+    provider: { name: "api", baseUrl: "https://api.test", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" },
+    model: "gpt-5.5"
+  }), ["--model", "gpt-5.5"]);
+});
+
+test("CLI command registry resolves commands and aliases", async () => {
+  let called = false;
+  registerCliCommand({
+    name: "unit-test-command",
+    aliases: ["utc"],
+    description: "unit test command",
+    interactive: false,
+    run: async () => {
+      called = true;
+    }
+  });
+
+  assert.equal(getCliCommand("utc")?.name, "unit-test-command");
+  assert.equal(listInteractiveCliCommands().some((command) => command.name === "unit-test-command"), false);
+  await getCliCommand("unit-test-command")?.run([]);
+  assert.equal(called, true);
 });
 
 test("extracts OpenAI-compatible token usage", () => {
@@ -112,6 +144,45 @@ test("extracts Anthropic-style token usage", () => {
       totalTokens: 10
     }
   );
+});
+
+test("checkProvider retries transient model discovery failures", async () => {
+  let requests = 0;
+  const server = await startTestServer((req, res) => {
+    if (req.url === "/v1/models") {
+      requests += 1;
+      if (requests === 1) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "busy" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "gpt-5.5" }] }));
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+
+  try {
+    const result = await checkProvider({
+      name: "retry-provider",
+      baseUrl: `${server.url}/v1`,
+      apiKey: "key",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.5"
+    });
+
+    assert.equal(result.status, "ok");
+    assert.deepEqual(result.models, ["gpt-5.5"]);
+    assert.equal(result.attempts, 2);
+    assert.equal(requests, 2);
+    assert.match(result.retryErrors?.[0] ?? "", /503/);
+    assert.ok((result.durationMs ?? 0) >= 0);
+  } finally {
+    await server.close();
+  }
 });
 
 test("estimates token cost from model pricing table", () => {

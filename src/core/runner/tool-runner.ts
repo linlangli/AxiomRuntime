@@ -7,6 +7,7 @@ import { writeLog } from "../logs/log-service.js";
 import type { CliToolType, Provider } from "../types.js";
 import { isRecord } from "../utils/is-record.js";
 import { resolveToolCommand } from "./command-resolver.js";
+import { getRunnerEngine } from "./engine-registry.js";
 import { finishSession, startSession } from "../sessions/session-service.js";
 
 export async function runTool(tool: CliToolType, provider: Provider, model: string, options: { fallbackFrom?: string | null } = {}): Promise<number> {
@@ -15,9 +16,10 @@ export async function runTool(tool: CliToolType, provider: Provider, model: stri
   if (!command) {
     throw new Error(`Failed to find ${tool} CLI. Run \`ai doctor\` to check local CLI installation.`);
   }
+  const engine = getRunnerEngine(tool);
   const env = buildRunnerEnv(tool, provider, model);
   const temporaryFiles: string[] = [];
-  const claudeSettingsPath = tool === "claude" ? writeTemporaryClaudeSettings(provider) : null;
+  const claudeSettingsPath = engine.requiresSettingsFile ? writeTemporaryClaudeSettings(provider) : null;
   if (claudeSettingsPath) temporaryFiles.push(claudeSettingsPath);
   const args = buildRunnerArgs(tool, provider, model, claudeSettingsPath);
   const effectiveBaseUrl = getToolBaseUrl(tool, provider);
@@ -35,7 +37,7 @@ export async function runTool(tool: CliToolType, provider: Provider, model: stri
       apiKeyFingerprint: getSecretFingerprint(provider.apiKey),
       command,
       args,
-      authInjection: getAuthInjection(tool)
+      authInjection: engine.authInjection
     }
   });
   const session = await startSession({
@@ -73,20 +75,7 @@ export function getSecretFingerprint(value: string): string {
 }
 
 export function buildRunnerArgs(tool: CliToolType, provider: Provider, model: string, claudeSettingsPath: string | null): string[] {
-  const args = ["--model", model];
-  if (tool === "claude" && claudeSettingsPath) {
-    args.push("--settings", claudeSettingsPath);
-  }
-  if (tool === "claude" && provider.mode === "auto") {
-    args.push("--dangerously-skip-permissions");
-  }
-  return args;
-}
-
-function getAuthInjection(tool: CliToolType): string {
-  return tool === "claude"
-    ? "temporary Claude settings env + process env"
-    : "process env";
+  return getRunnerEngine(tool).buildArgs({ provider, model, settingsPath: claudeSettingsPath });
 }
 
 export function writeTemporaryClaudeSettings(provider: Provider): string {
@@ -123,37 +112,9 @@ export function cleanupTemporaryFiles(filePaths: string[]): void {
 }
 
 export function buildRunnerEnv(tool: CliToolType, provider: Provider, model: string): NodeJS.ProcessEnv {
-  const baseUrl = getToolBaseUrl(tool, provider);
-  const common = {
-    ...process.env,
-    AI_GATEWAY_PROVIDER: provider.name,
-    AI_GATEWAY_MODEL: model,
-    AI_GATEWAY_MODE: provider.mode,
-    AI_GATEWAY_BASE_URL: baseUrl
-  };
-
-  if (tool === "claude") {
-    return {
-      ...common,
-      ANTHROPIC_API_KEY: provider.apiKey,
-      ANTHROPIC_BASE_URL: baseUrl,
-      ANTHROPIC_MODEL: model
-    };
-  }
-
-  return {
-    ...common,
-    OPENAI_API_KEY: provider.apiKey,
-    OPENAI_BASE_URL: baseUrl,
-    OPENAI_MODEL: model,
-    CODEX_MODEL: model
-  };
+  return getRunnerEngine(tool).buildEnv(provider, model, process.env);
 }
 
 export function getToolBaseUrl(tool: CliToolType, provider: Provider): string {
-  const normalized = provider.baseUrl.replace(/\/+$/, "");
-  if (tool === "claude") {
-    return normalized.replace(/\/v1$/i, "");
-  }
-  return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
+  return getRunnerEngine(tool).normalizeBaseUrl(provider.baseUrl);
 }

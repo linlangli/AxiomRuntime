@@ -5,22 +5,38 @@ export type CallableModelCheck = {
   status: "ok" | "error";
   error: string | null;
   usage?: TokenUsage;
+  attempts?: number;
+  durationMs?: number;
+  retryErrors?: string[];
 };
+
+const RETRY_DELAYS_MS = [0, 200, 600];
+const RETRYABLE_STATUS_CODES = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 
 export async function checkProvider(provider: Provider): Promise<ConnectivityResult> {
   const checkedAt = new Date().toISOString();
+  const startedAt = Date.now();
   const errors: string[] = [];
+  const retryErrors: string[] = [];
+  let attempts = 0;
   try {
     for (const url of buildModelUrlCandidates(provider.baseUrl)) {
-      const response = await fetch(url, {
+      const result = await fetchTextWithRetry(url, {
         method: "GET",
         headers: {
           Authorization: `Bearer ${provider.apiKey}`,
           Accept: "application/json"
         }
       });
+      attempts += result.attempts;
+      retryErrors.push(...result.retryErrors);
+      if (result.error || !result.response) {
+        errors.push(`GET ${url} failed: ${result.error ?? "empty response"}`);
+        continue;
+      }
 
-      const text = await response.text();
+      const { response, text } = result;
+
       if (!response.ok) {
         errors.push(`GET ${url} failed with ${response.status} ${response.statusText}`);
         continue;
@@ -37,7 +53,10 @@ export async function checkProvider(provider: Provider): Promise<ConnectivityRes
         status: "ok",
         models,
         checkedAt,
-        error: models.length ? null : "Provider responded but no models were found."
+        error: models.length ? null : "Provider responded but no models were found.",
+        attempts,
+        durationMs: Date.now() - startedAt,
+        retryErrors
       };
     }
 
@@ -45,23 +64,30 @@ export async function checkProvider(provider: Provider): Promise<ConnectivityRes
       status: "error",
       models: [],
       checkedAt,
-      error: errors.join("; ") || "No model discovery endpoint worked."
+      error: errors.join("; ") || "No model discovery endpoint worked.",
+      attempts,
+      durationMs: Date.now() - startedAt,
+      retryErrors
     };
   } catch (error) {
     return {
       status: "error",
       models: [],
       checkedAt,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
+      attempts,
+      durationMs: Date.now() - startedAt,
+      retryErrors
     };
   }
 }
 
 export async function runDeepCheck(provider: Provider, model: string): Promise<ConnectivityResult> {
   const checkedAt = new Date().toISOString();
+  const startedAt = Date.now();
   try {
     const url = buildChatCompletionsUrl(provider.baseUrl);
-    const response = await fetch(url, {
+    const result = await fetchTextWithRetry(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${provider.apiKey}`,
@@ -75,14 +101,28 @@ export async function runDeepCheck(provider: Provider, model: string): Promise<C
         temperature: 0
       })
     });
+    if (result.error || !result.response) {
+      return {
+        status: "error",
+        models: [],
+        checkedAt,
+        error: result.error ?? "empty response",
+        attempts: result.attempts,
+        durationMs: Date.now() - startedAt,
+        retryErrors: result.retryErrors
+      };
+    }
 
-    const text = await response.text();
+    const { response, text } = result;
     if (!response.ok) {
       return {
         status: "error",
         models: [],
         checkedAt,
-        error: `POST ${url} failed with ${response.status} ${response.statusText}`
+        error: `POST ${url} failed with ${response.status} ${response.statusText}`,
+        attempts: result.attempts,
+        durationMs: Date.now() - startedAt,
+        retryErrors: result.retryErrors
       };
     }
 
@@ -92,14 +132,20 @@ export async function runDeepCheck(provider: Provider, model: string): Promise<C
       models: [model],
       checkedAt,
       error: null,
-      usage: extractTokenUsage(json)
+      usage: extractTokenUsage(json),
+      attempts: result.attempts,
+      durationMs: Date.now() - startedAt,
+      retryErrors: result.retryErrors
     };
   } catch (error) {
     return {
       status: "error",
       models: [],
       checkedAt,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
+      attempts: 1,
+      durationMs: Date.now() - startedAt,
+      retryErrors: []
     };
   }
 }
@@ -162,31 +208,50 @@ async function postModelProbe(
   model: string
 ): Promise<CallableModelCheck> {
   try {
-    const response = await fetchWithTimeout(url, {
+    const result = await fetchTextWithRetry(url, {
       method: "POST",
       headers,
       body: JSON.stringify(payload)
     });
-    const text = await response.text();
+    if (result.error || !result.response) {
+      return {
+        model,
+        status: "error",
+        error: result.error ?? "empty response",
+        attempts: result.attempts,
+        durationMs: result.durationMs,
+        retryErrors: result.retryErrors
+      };
+    }
+    const { response, text } = result;
     const json = looksLikeJson(response.headers.get("content-type") ?? "", text) ? JSON.parse(text) : {};
     if (!response.ok) {
       return {
         model,
         status: "error",
-        error: `POST ${url} failed with ${response.status} ${response.statusText}${extractErrorMessage(json)}`
+        error: `POST ${url} failed with ${response.status} ${response.statusText}${extractErrorMessage(json)}`,
+        attempts: result.attempts,
+        durationMs: result.durationMs,
+        retryErrors: result.retryErrors
       };
     }
     return {
       model,
       status: "ok",
       error: null,
-      usage: extractTokenUsage(json)
+      usage: extractTokenUsage(json),
+      attempts: result.attempts,
+      durationMs: result.durationMs,
+      retryErrors: result.retryErrors
     };
   } catch (error) {
     return {
       model,
       status: "error",
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
+      attempts: 1,
+      durationMs: 0,
+      retryErrors: []
     };
   }
 }
@@ -292,6 +357,70 @@ function buildChatCompletionsUrlCandidates(baseUrl: string): string[] {
     candidates.push(`${normalized}/v1/chat/completions`);
   }
   return candidates;
+}
+
+type FetchTextResult = {
+  response?: Response;
+  text: string;
+  error?: string;
+  attempts: number;
+  durationMs: number;
+  retryErrors: string[];
+};
+
+async function fetchTextWithRetry(url: string, init: RequestInit): Promise<FetchTextResult> {
+  const startedAt = Date.now();
+  const retryErrors: string[] = [];
+
+  for (const [index, delayMs] of RETRY_DELAYS_MS.entries()) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+
+    const attempt = index + 1;
+    try {
+      const response = await fetchWithTimeout(url, init);
+      const text = await response.text();
+      if (!shouldRetryResponse(response) || attempt >= RETRY_DELAYS_MS.length) {
+        return {
+          response,
+          text,
+          attempts: attempt,
+          durationMs: Date.now() - startedAt,
+          retryErrors
+        };
+      }
+      retryErrors.push(`attempt ${attempt}: ${response.status} ${response.statusText}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt >= RETRY_DELAYS_MS.length) {
+        return {
+          text: "",
+          error: message,
+          attempts: attempt,
+          durationMs: Date.now() - startedAt,
+          retryErrors
+        };
+      }
+      retryErrors.push(`attempt ${attempt}: ${message}`);
+    }
+  }
+
+  return {
+    text: "",
+    error: "Request failed after retries.",
+    attempts: RETRY_DELAYS_MS.length,
+    durationMs: Date.now() - startedAt,
+    retryErrors
+  };
+}
+
+function shouldRetryResponse(response: Response): boolean {
+  return RETRYABLE_STATUS_CODES.has(response.status);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 12000): Promise<Response> {
