@@ -23,6 +23,8 @@ import {
   buildAgentProfileBackKeyboard,
   buildAgentProfileKeyboard,
   buildCliKeyboard,
+  buildModelPickerKeyboard,
+  buildProviderPickerKeyboard,
   buildReadyKeyboard,
   buildReadyModeKeyboard,
   buildUsagePricingKeyboard,
@@ -35,7 +37,8 @@ import { spawnCapture } from "../dist/telegram/engine/process-utils.js";
 import { resolveWorkingCommand } from "../dist/telegram/engine/engine-utils.js";
 import { deleteRecentChatMessages, registerCommands, shouldHandleStartCommand } from "../dist/telegram/handlers/command.js";
 import { registerDocumentHandler } from "../dist/telegram/handlers/document.js";
-import { executePrompt, registerMessageHandler, startTypingStatus } from "../dist/telegram/handlers/message.js";
+import { executePrompt, registerMessageHandler, runCliInit, startTypingStatus } from "../dist/telegram/handlers/message.js";
+import { completeAgentProfile, inferEngineFromModel, setWorkdir } from "../dist/telegram/handlers/setup.js";
 import { parseModelPriceInput } from "../dist/telegram/handlers/usage.js";
 import { SessionManager } from "../dist/telegram/session/manager.js";
 import { SessionStore } from "../dist/telegram/session/store.js";
@@ -162,7 +165,7 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     assert.equal(resumed.id, session.id);
 
     const setup = manager.startSetup(123);
-    assert.equal(setup.setupStep, "workdir");
+    assert.equal(setup.setupStep, "model");
     const custom = manager.update(setup.id, { setupStep: "custom_workdir" });
     assert.equal(custom.setupStep, "custom_workdir");
     const profile = manager.update(setup.id, { setupStep: "agent_profile" });
@@ -177,6 +180,8 @@ test("formatter escapes and splits telegram text safely", () => {
   assert.equal(escapeHtml("<tag>&"), "&lt;tag&gt;&amp;");
   assert.equal(truncateText("abcdef", 5), "ab...");
   assert.deepEqual(splitPlainText("a\nb\nc", 4), ["a\nb\n", "c"]);
+  assert.equal(Formatter.modelPrompt(), "🤖 确定你要使用的大模型吧");
+  assert.equal(Formatter.modelPrompt(true), "🤖 重新选择你要使用的大模型吧");
   assert.equal(Formatter.workdirPrompt(), "🤖 你好呀，先确定工作路径吧");
   assert.equal(Formatter.workdirRequired(), "🤖 请选确定工作路径哦");
   assert.equal(Formatter.workdirList(["/Users/linlangli/Script"]), "🤖 选择一个已存在的工作路径吧");
@@ -317,7 +322,8 @@ test("formatter escapes and splits telegram text safely", () => {
   assert.match(missingTokenUsagePanel, /额度：<code>额度未知<\/code>/);
   assert.match(missingTokenUsagePanel, /可以输入价格后计算额度/);
   assert.doesNotMatch(sessionCard, /blockquote|工作路径|Provider|Model|权限模式|🍺|✨|🆔|📁|🧰|🔌|🧠|🛡️/);
-  assert.match(Formatter.help(), /\/claude prompt - 使用 Claude Code/);
+  assert.match(Formatter.help(), /\/claude - 切换 Claude Code 并重新选择模型/);
+  assert.match(Formatter.help(), /\/codex - 切换 Codex 并重新选择模型/);
   assert.match(Formatter.help(), /\/reset - 重置会话信息/);
   assert.match(Formatter.help(), /\/fresh - 清空聊天窗口/);
   assert.match(Formatter.help(), /\/config - 查看或编辑 Bot 配置/);
@@ -379,6 +385,19 @@ test("workdir setup keyboards use compact labels and absolute path buttons", () 
   assert.deepEqual(buildAgentProfileBackKeyboard().inline_keyboard, [[
     { text: "back", callback_data: "ready:back" }
   ]]);
+  assert.deepEqual(buildProviderPickerKeyboard(["51talk-codex"], "setup").inline_keyboard, [
+    [{ text: "51talk-codex", callback_data: "setup:provider:pick:0" }]
+  ]);
+  assert.deepEqual(buildProviderPickerKeyboard(["51talk-cs"], "ready", "claude").inline_keyboard, [
+    [{ text: "51talk-cs", callback_data: "ready:provider:pick:0:claude" }],
+    [{ text: "back", callback_data: "ready:back" }]
+  ]);
+  assert.deepEqual(buildModelPickerKeyboard(["gpt-5.5"], 0, "setup").inline_keyboard, [
+    [{ text: "gpt-5.5", callback_data: "setup:model:pick:0:0" }],
+    [{ text: "back", callback_data: "setup:provider:show" }]
+  ]);
+  assert.equal(inferEngineFromModel("gpt-5.5"), "codex");
+  assert.equal(inferEngineFromModel("claude-opus-4-6"), "claude");
   assert.deepEqual(buildReadyKeyboard({
     cli: "Codex",
     providerModel: "51talk-codex · gpt-5.5",
@@ -388,8 +407,7 @@ test("workdir setup keyboards use compact labels and absolute path buttons", () 
     [{ text: "Codex", callback_data: "ready:cli" }],
     [{ text: "51talk-codex · gpt-5.5", callback_data: "ready:provider" }],
     [{ text: "默认权限", callback_data: "ready:mode" }],
-    [{ text: "/Users/linlangli/Script", callback_data: "ready:workdir" }],
-    [{ text: "BOT", callback_data: "ready:agent" }]
+    [{ text: "/Users/linlangli/Script", callback_data: "ready:workdir" }]
   ]);
   assert.deepEqual(buildReadyModeKeyboard().inline_keyboard[0], [
     { text: "默认权限", callback_data: "ready:mode:pick:default" }
@@ -457,7 +475,7 @@ test("typing status sends Telegram chat action immediately", () => {
   assert.deepEqual(calls, [[123, "typing"]]);
 });
 
-test("agent profile text writes BOT.md and runs init", async () => {
+test("workdir setup runs native init before asking for profile", async () => {
   await withTempHome(async (tempDir) => {
     const projectDir = path.join(tempDir, "project");
     await fs.mkdir(projectDir, { recursive: true });
@@ -478,40 +496,35 @@ test("agent profile text writes BOT.md and runs init", async () => {
     const store = new SessionStore(dbPath);
     const manager = new SessionManager(store, config);
     const setup = manager.startSetup(123);
-    manager.update(setup.id, { cwd: projectDir, engine: "codex", setupStep: "agent_profile" });
+    manager.update(setup.id, { engine: "codex", setupStep: "workdir" });
 
     const engineCalls = [];
     const fakeEngine = {
       name: "codex",
       execute: async (params) => {
         engineCalls.push(params);
-        if (String(params.prompt).includes("PROMPT.md") && String(params.prompt).includes("BOT.md")) {
-          await fs.writeFile(path.join(params.cwd, "BOT.md"), "# BOT\n\n## 用户偏好\n喜欢直接给结论。\n", "utf8");
-        }
         return { response: "initialized", sessionId: "engine-session", provider: "51talk-codex", model: "gpt-5.5" };
       },
       abort: () => undefined
     };
-    let handler;
-    registerMessageHandler({
-      on: (_event, callback) => {
-        handler = callback;
-      }
-    }, {
+    const deps = {
       sessionManager: manager,
       claudeEngine: { ...fakeEngine, name: "claude" },
       codexEngine: fakeEngine,
       approvalManager: { request: async () => true },
       config
-    });
+    };
 
     const replies = [];
+    const edits = [];
     const typing = [];
-    await handler({
-      message: { text: "我是 Lin，喜欢直接给结论。" },
+    const ctx = {
       chat: { id: 123 },
       reply: async (text) => {
         replies.push(text);
+      },
+      editMessageText: async (text) => {
+        edits.push(text);
       },
       api: {
         sendChatAction: async (chatId, action) => {
@@ -519,30 +532,36 @@ test("agent profile text writes BOT.md and runs init", async () => {
           return true;
         }
       }
+    };
+
+    await setWorkdir(ctx, deps, projectDir, {
+      edit: true,
+      afterSet: (next) => runCliInit(ctx, deps, next.engine)
     });
 
-    const raw = await fs.readFile(path.join(projectDir, "PROMPT.md"), "utf8");
-    const content = await fs.readFile(path.join(projectDir, "BOT.md"), "utf8");
-    assert.equal(raw, "我是 Lin，喜欢直接给结论。\n");
-    assert.match(content, /喜欢直接给结论/);
-    assert.equal(engineCalls.length, 2);
-    assert.match(engineCalls[0].prompt, /PROMPT\.md/);
-    assert.match(engineCalls[0].prompt, /BOT\.md/);
-    assert.doesNotMatch(engineCalls[0].prompt, /bot_context/);
-    assert.equal(engineCalls[0].timeoutMs, 120000);
-    assert.equal(engineCalls[1].prompt, "/init");
-    assert.equal(engineCalls[1].cwd, projectDir);
-    assert.equal(engineCalls[1].permissionMode, "bypassPermissions");
-    assert.equal(engineCalls[1].timeoutMs, 180000);
-    assert.equal(manager.getOrCreate(123).setupStep, "ready");
-    assert.equal(replies.some((text) => String(text).includes("已就绪")), true);
+    assert.equal(engineCalls.length, 1);
+    assert.equal(engineCalls[0].prompt, "/init");
+    assert.equal(engineCalls[0].cwd, projectDir);
+    assert.equal(engineCalls[0].permissionMode, "bypassPermissions");
+    assert.equal(engineCalls[0].timeoutMs, 180000);
+    assert.equal(manager.getOrCreate(123).setupStep, "agent_profile");
+    assert.equal(edits.some((text) => String(text).includes("介绍一下我和你")), true);
+    assert.equal(replies.some((text) => String(text).includes("介绍一下我和你")), false);
     assert.equal(replies.some((text) => String(text).includes("initialized")), false);
     assert.deepEqual(typing[0], [123, "typing"]);
+
+    const next = await completeAgentProfile(ctx, deps, "我是 Lin，喜欢直接给结论。", { edit: true });
+    assert.equal(next?.setupStep, "ready");
+    assert.equal(manager.getOrCreate(123).setupStep, "ready");
+    assert.equal(edits.some((text) => String(text).includes("已就绪")), true);
+    assert.equal(replies.some((text) => String(text).includes("已就绪")), false);
+    await assert.rejects(fs.readFile(path.join(projectDir, "PROMPT.md"), "utf8"), /ENOENT/);
+    await assert.rejects(fs.readFile(path.join(projectDir, "BOT.md"), "utf8"), /ENOENT/);
     store.close();
   });
 });
 
-test("agent profile document writes BOT.md and runs init instead of attaching", async () => {
+test("agent profile document completes setup without writing BOT.md", async () => {
   await withTempHome(async (tempDir) => {
     const projectDir = path.join(tempDir, "project");
     await fs.mkdir(projectDir, { recursive: true });
@@ -570,9 +589,6 @@ test("agent profile document writes BOT.md and runs init instead of attaching", 
       name: "claude",
       execute: async (params) => {
         engineCalls.push(params);
-        if (String(params.prompt).includes("PROMPT.md") && String(params.prompt).includes("BOT.md")) {
-          await fs.writeFile(path.join(params.cwd, "BOT.md"), "# BOT\n\n## 用户偏好\n偏好中文直接回复。\n", "utf8");
-        }
         return { response: "initialized", sessionId: "engine-session", provider: "51talk-cs", model: "claude-opus-4-6" };
       },
       abort: () => undefined
@@ -615,19 +631,11 @@ test("agent profile document writes BOT.md and runs init instead of attaching", 
     }
 
     const session = manager.getOrCreate(123);
-    const raw = await fs.readFile(path.join(projectDir, "PROMPT.md"), "utf8");
-    const content = await fs.readFile(path.join(projectDir, "BOT.md"), "utf8");
-    assert.equal(raw, "我是 Lin，偏好中文直接回复。\n");
-    assert.match(content, /偏好中文直接回复/);
     assert.equal(session.setupStep, "ready");
     assert.equal(session.attachments.length, 0);
-    assert.equal(engineCalls.length, 2);
-    assert.match(engineCalls[0].prompt, /PROMPT\.md/);
-    assert.match(engineCalls[0].prompt, /BOT\.md/);
-    assert.equal(engineCalls[0].timeoutMs, 120000);
-    assert.equal(engineCalls[1].prompt, "/init");
-    assert.equal(engineCalls[1].cwd, projectDir);
-    assert.equal(engineCalls[1].timeoutMs, 180000);
+    assert.equal(engineCalls.length, 0);
+    await assert.rejects(fs.readFile(path.join(projectDir, "PROMPT.md"), "utf8"), /ENOENT/);
+    await assert.rejects(fs.readFile(path.join(projectDir, "BOT.md"), "utf8"), /ENOENT/);
     assert.equal(replies.some((text) => String(text).includes("Attached")), false);
     assert.equal(replies.some((text) => String(text).includes("已就绪")), true);
     assert.equal(replies.some((text) => String(text).includes("initialized")), false);
@@ -635,7 +643,7 @@ test("agent profile document writes BOT.md and runs init instead of attaching", 
   });
 });
 
-test("regular telegram prompts include BOT.md context once per session", async () => {
+test("regular telegram prompts do not inject legacy BOT.md context", async () => {
   await withTempHome(async (tempDir) => {
     const projectDir = path.join(tempDir, "project");
     await fs.mkdir(projectDir, { recursive: true });
@@ -691,8 +699,8 @@ test("regular telegram prompts include BOT.md context once per session", async (
     });
 
     assert.equal(engineCalls.length, 1);
-    assert.match(engineCalls[0].prompt, /<bot_context source="BOT\.md">/);
-    assert.match(engineCalls[0].prompt, /回答要简洁直接/);
+    assert.doesNotMatch(engineCalls[0].prompt, /<bot_context source="BOT\.md">/);
+    assert.doesNotMatch(engineCalls[0].prompt, /回答要简洁直接/);
     assert.match(engineCalls[0].prompt, /今天怎么规划？/);
 
     await handler({
@@ -707,7 +715,7 @@ test("regular telegram prompts include BOT.md context once per session", async (
     assert.equal(engineCalls.length, 2);
     assert.doesNotMatch(engineCalls[1].prompt, /<bot_context source="BOT\.md">/);
     assert.match(engineCalls[1].prompt, /继续/);
-    assert.equal(manager.getOrCreate(123).botContextFingerprint?.includes("codex:"), true);
+    assert.equal(manager.getOrCreate(123).botContextFingerprint, null);
 
     const cleared = manager.clearConversation(123);
     assert.equal(cleared.botContextFingerprint, null);
