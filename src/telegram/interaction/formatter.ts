@@ -174,7 +174,7 @@ export const Formatter = {
       if (update.message && /fallback|切换|provider/i.test(update.message)) {
         return `↻ ${escapeHtml(truncateText(update.message, 80))}`;
       }
-      return "🧠 思考中…";
+      return "⏱️ 思考中…";
     }
     if (update.phase === "writing") {
       return "✍️ 正在整理回复…";
@@ -197,7 +197,7 @@ export const Formatter = {
       }
       return `🔧 运行 <code>${escapeHtml(tool.name)}</code>${count}`;
     }
-    return "🧠 思考中…";
+    return "⏱️ 思考中…";
   },
 
   taskAborted(): string {

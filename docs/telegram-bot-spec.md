@@ -560,7 +560,7 @@ export const Msg = {
 
   taskProgress(update: ProgressUpdate): string {
     const icons: Record<string, string> = {
-      thinking: '🧠 思考中',
+      thinking: '⏱️ 思考中',
       tool_calling: '🔧 调用工具',
       writing: '✍️ 编写中',
       done: '✅ 完成',
