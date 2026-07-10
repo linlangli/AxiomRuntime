@@ -8,6 +8,7 @@ import { registerMessageHandler } from "./handlers/message.js";
 import { installTelegramHandlers, registerTelegramHandler } from "./handler-registry.js";
 import { ApprovalManager } from "./interaction/approval.js";
 import { safeResetChatCommandMenu, safeSetChatCommandMenu, safeSetDefaultCommandMenu } from "./interaction/command-menu.js";
+import { getBotIdFromToken, MemoryService } from "./memory/memory-service.js";
 import { SessionManager } from "./session/manager.js";
 import { SessionStore } from "./session/store.js";
 import { writeTelegramLog } from "./log.js";
@@ -18,6 +19,7 @@ export type TelegramRuntime = {
   config: TelegramConfig;
   store: SessionStore;
   sessionManager: SessionManager;
+  memoryService: MemoryService;
   engines: TelegramEngineMap;
 };
 
@@ -42,10 +44,13 @@ export async function createBot(): Promise<TelegramRuntime> {
   });
   const store = new SessionStore(config.dbPath);
   const sessionManager = new SessionManager(store, config);
+  const memoryService = new MemoryService({ botId: getBotIdFromToken(config.token) });
   const engines = createTelegramEngines();
   const approvalManager = new ApprovalManager(bot);
 
   sessionManager.cleanupExpired();
+  memoryService.cleanupExpired();
+  void memoryService.backup();
 
   bot.catch((error) => {
     void writeTelegramLog({
@@ -91,7 +96,8 @@ export async function createBot(): Promise<TelegramRuntime> {
     codexEngine: engines.codex,
     approvalManager,
     config,
-    engines
+    engines,
+    memoryService
   };
   registerBuiltInTelegramHandlers();
   installTelegramHandlers(bot, deps);
@@ -104,6 +110,7 @@ export async function createBot(): Promise<TelegramRuntime> {
     config,
     store,
     sessionManager,
+    memoryService,
     engines
   };
 }

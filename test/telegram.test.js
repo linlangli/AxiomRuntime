@@ -25,6 +25,9 @@ import { applyPromptMiddlewares, listPromptMiddlewares } from "../dist/telegram/
 import { ProgressReporter } from "../dist/telegram/interaction/progress-reporter.js";
 import { countPromptTokens, truncateToTokenBudget } from "../dist/telegram/interaction/token-budget.js";
 import { parseToolName } from "../dist/telegram/interaction/tool-name.js";
+import { formatMemoryBlock } from "../dist/telegram/memory/memory-inject.js";
+import { getBotIdFromToken, MemoryService } from "../dist/telegram/memory/memory-service.js";
+import { MemoryStore } from "../dist/telegram/memory/memory-store.js";
 import {
   buildAgentProfileBackKeyboard,
   buildAgentProfileKeyboard,
@@ -213,7 +216,7 @@ test("prompt middleware applies recent conversation and attachments", async () =
       createdAt: new Date().toISOString()
     });
 
-    assert.deepEqual(listPromptMiddlewares().map((item) => item.name), ["recent-conversation", "attachments"]);
+    assert.deepEqual(listPromptMiddlewares().map((item) => item.name), ["bot-memory", "recent-conversation", "attachments"]);
 
     const prompt = await applyPromptMiddlewares({
       chatId: 123,
@@ -278,6 +281,153 @@ test("prompt middleware trims recent conversation by token budget", async () => 
     assert.match(prompt, /newest/);
     assert.doesNotMatch(prompt, /oldest/);
     assert.equal(countPromptTokens(prompt) < 1700, true);
+    store.close();
+  });
+});
+
+test("memory service stores global profile and isolates bot scoped memories", async () => {
+  await withTempHome(async (tempDir) => {
+    const store = new MemoryStore(path.join(tempDir, "memory.sqlite"));
+    const botA = new MemoryService({ botId: "111", store });
+    const botB = new MemoryService({ botId: "222", store });
+
+    const profile = botA.saveProfile(123, "用户偏好中文直接回答。");
+    const personaA = botA.savePersona(123, "投资 bot：回答必须提示风险。");
+    botB.savePersona(123, "代码 bot：优先给补丁。");
+    botB.remember(123, { scope: "bot", content: "部署 staging 需要先跑 npm test", title: "部署流程" });
+
+    const visibleA = botA.listVisible(123);
+    assert.equal(profile.scope, "global");
+    assert.equal(personaA.scope, "bot");
+    assert.equal(visibleA.some((entry) => entry.content.includes("投资 bot")), true);
+    assert.equal(visibleA.some((entry) => entry.content.includes("代码 bot")), false);
+    assert.equal(visibleA.some((entry) => entry.content.includes("部署 staging")), false);
+
+    const injected = formatMemoryBlock(botA.retrieveForPrompt(123, "我现在问投资风险"));
+    assert.match(injected, /用户偏好中文直接回答/);
+    assert.match(injected, /投资 bot/);
+    assert.doesNotMatch(injected, /代码 bot/);
+    store.close();
+  });
+});
+
+test("memory middleware injects visible memory before recent conversation", async () => {
+  await withTempHome(async (tempDir) => {
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "111:abc",
+      allowAllUsers: false,
+      allowedUserIds: [1],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.getOrCreate(123);
+    const withConversation = manager.appendConversationTurn(session.id, {
+      user: "上一轮",
+      assistant: "上一轮回答"
+    });
+    const memoryStore = new MemoryStore(path.join(tempDir, "memory.sqlite"));
+    const memory = new MemoryService({ botId: getBotIdFromToken(config.token), store: memoryStore });
+    memory.saveProfile(123, "用户是后端开发。");
+    memory.savePersona(123, "本 bot 负责代码任务。");
+
+    const prompt = await applyPromptMiddlewares({
+      chatId: 123,
+      prompt: "继续这个代码任务",
+      session: withConversation,
+      engine: "codex",
+      resume: null,
+      includeAgentContext: true,
+      memoryService: memory
+    });
+    assert.match(prompt, /^<user_memory/);
+    assert.match(prompt, /用户是后端开发/);
+    assert.match(prompt, /本 bot 负责代码任务/);
+    assert.match(prompt, /<recent_conversation/);
+
+    const slashPrompt = await applyPromptMiddlewares({
+      chatId: 123,
+      prompt: "/init",
+      session: withConversation,
+      engine: "codex",
+      resume: null,
+      includeAgentContext: true,
+      memoryService: memory
+    });
+    assert.equal(slashPrompt, "/init");
+    memoryStore.close();
+    store.close();
+  });
+});
+
+test("completeAgentProfile saves generated profile and persona into central memory", async () => {
+  await withTempHome(async (tempDir) => {
+    const projectDir = path.join(tempDir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "111:abc",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: projectDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "51talk-codex",
+      model: "gpt-5.5",
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.startSetup(123);
+    manager.update(session.id, { cwd: projectDir, engine: "codex", setupStep: "agent_profile" });
+    const memoryStore = new MemoryStore(path.join(tempDir, "memory.sqlite"));
+    const memory = new MemoryService({ botId: getBotIdFromToken(config.token), store: memoryStore });
+    const engineCalls = [];
+    const fakeEngine = {
+      name: "codex",
+      execute: async (params) => {
+        engineCalls.push(params);
+        return {
+          response: "## 用户背景\nLin，后端开发。\n=====PERSONA=====\n## 角色与职责\n代码助手。",
+          provider: "51talk-codex",
+          model: "gpt-5.5"
+        };
+      },
+      abort: () => undefined
+    };
+    const edits = [];
+    const ctx = {
+      chat: { id: 123 },
+      editMessageText: async (text) => {
+        edits.push(text);
+      },
+      reply: async () => undefined
+    };
+
+    const next = await completeAgentProfile(ctx, {
+      sessionManager: manager,
+      codexEngine: fakeEngine,
+      claudeEngine: { ...fakeEngine, name: "claude" },
+      config,
+      memoryService: memory
+    }, "我是 Lin，希望你当代码助手。", { edit: true });
+
+    assert.equal(next?.setupStep, "ready");
+    assert.equal(engineCalls.length, 1);
+    assert.match(engineCalls[0].prompt, /=====PERSONA=====/);
+    assert.match(memory.getProfile(123)?.content ?? "", /后端开发/);
+    assert.match(memory.getPersona(123)?.content ?? "", /代码助手/);
+    assert.equal(memory.listVisible(123).some((entry) => entry.title === "用户原始自我描述"), true);
+    assert.equal(edits.some((text) => String(text).includes("已就绪")), true);
+    memoryStore.close();
     store.close();
   });
 });
@@ -350,7 +500,7 @@ test("formatter escapes and splits telegram text safely", () => {
   assert.equal(Formatter.cliPrompt("/Users/linlangli/Script"), "🤖 确定你要使用的CLI吧");
   assert.equal(Formatter.cliRequired(), "🤖 先确定你想使用的CLI哦。");
   assert.equal(Formatter.agentProfilePrompt(), "🤖 介绍一下我和你吧，可以帮你构建画像哦");
-  assert.match(Formatter.agentProfile("# BOT\n\n<profile>"), /<b>BOT\.md<\/b>/);
+  assert.match(Formatter.agentProfile("# BOT\n\n<profile>"), /<b>Bot Memory<\/b>/);
   assert.match(Formatter.agentProfile("# BOT\n\n<profile>"), /&lt;profile&gt;/);
   const sessionCard = Formatter.sessionCard({
     id: "1350dd03abcdef",
@@ -730,11 +880,25 @@ test("usage price input parser accepts compact price formats", () => {
 });
 
 test("telegram command menu maps selected CLI slash commands", () => {
-  assert.deepEqual(getBaseBotCommands().map((item) => item.command), ["claude", "codex", "reset", "fresh", "cwd", "config", "usage", "help"]);
+  assert.deepEqual(getBaseBotCommands().map((item) => item.command), [
+    "claude",
+    "codex",
+    "reset",
+    "fresh",
+    "cwd",
+    "config",
+    "usage",
+    "remember",
+    "forget",
+    "memories",
+    "memory",
+    "help"
+  ]);
   assert.equal(getBaseBotCommands().find((item) => item.command === "reset")?.description, "重置会话信息");
   assert.equal(getBaseBotCommands().find((item) => item.command === "fresh")?.description, "清空聊天窗口");
   assert.equal(getBaseBotCommands().find((item) => item.command === "config")?.description, "查看或编辑 Bot 配置");
   assert.equal(getBaseBotCommands().find((item) => item.command === "usage")?.description, "查看当前会话额度");
+  assert.equal(getBaseBotCommands().find((item) => item.command === "memories")?.description, "查看 Bot 记忆");
   const claudeCommands = getChatBotCommands("claude").map((item) => item.command);
   assert.equal(claudeCommands.includes("fresh"), true);
   assert.equal(claudeCommands.includes("config"), true);

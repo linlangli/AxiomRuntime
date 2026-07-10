@@ -7,6 +7,8 @@ import { listProviders } from "../../core/providers/provider-service.js";
 import { resolveProviderForTool } from "../../core/runner/fallback.js";
 import type { Provider } from "../../core/types.js";
 import { updateTelegramConfig, type TelegramConfig, type TelegramEngineName, type TelegramPermissionMode } from "../config.js";
+import type { TelegramEngineMap } from "../engine/registry.js";
+import type { Engine } from "../engine/types.js";
 import { safeSetChatCommandMenu } from "../interaction/command-menu.js";
 import { Formatter } from "../interaction/formatter.js";
 import {
@@ -19,15 +21,25 @@ import {
   buildWorkdirListKeyboard,
   buildWorkdirStartKeyboard
 } from "../interaction/keyboards.js";
+import {
+  buildFullProfilePrompt,
+  buildPersonaPrompt,
+  type MemoryService,
+  splitProfileAndPersona
+} from "../memory/memory-service.js";
 import type { SessionManager } from "../session/manager.js";
 import type { TelegramSession } from "../session/types.js";
 
-export const BOT_PROFILE_FILENAME = "BOT.md";
+export const AGENT_PROFILE_GENERATION_TIMEOUT_MS = 3 * 60 * 1000;
 
 export type SetupDeps = {
   sessionManager: SessionManager;
   bot?: Bot;
   config?: TelegramConfig;
+  claudeEngine?: Engine;
+  codexEngine?: Engine;
+  engines?: Partial<TelegramEngineMap>;
+  memoryService?: MemoryService;
 };
 
 export async function startSetup(ctx: Context, deps: SetupDeps): Promise<void> {
@@ -255,7 +267,10 @@ export async function completeAgentProfile(
   const chatId = ctx.chat?.id;
   if (!chatId) return null;
   const session = deps.sessionManager.getOrCreate(chatId);
-  void description;
+  const rawDescription = description?.trim();
+  if (rawDescription && deps.memoryService) {
+    await saveGeneratedProfileMemory(ctx, deps, session, rawDescription);
+  }
   const next = deps.sessionManager.update(session.id, { setupStep: "ready" });
   if (deps.bot) {
     await safeSetChatCommandMenu(deps.bot, chatId, next.engine);
@@ -320,8 +335,9 @@ export async function showConfigPanel(ctx: Context, deps: SetupDeps, session: Te
 export async function showAgentProfile(ctx: Context, deps: SetupDeps): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
-  const session = deps.sessionManager.getOrCreate(chatId);
-  const content = readAgentProfileFile(session) ?? "暂未生成 BOT.md。";
+  const content = deps.memoryService
+    ? formatProfileMemory(deps.memoryService, chatId)
+    : "暂未启用 Bot Memory。";
   await editOrReply(ctx, Formatter.agentProfile(content), {
     parse_mode: "HTML",
     reply_markup: buildAgentProfileBackKeyboard()
@@ -523,6 +539,77 @@ async function editOrReply(ctx: Context, text: string, extra: InlineHtmlOptions)
   await ctx.reply(text, extra);
 }
 
+async function saveGeneratedProfileMemory(
+  ctx: Context,
+  deps: SetupDeps,
+  session: TelegramSession,
+  rawDescription: string
+): Promise<void> {
+  const memoryService = deps.memoryService;
+  if (!memoryService) return;
+  memoryService.saveRawDescription(session.chatId, rawDescription);
+  const existingProfile = memoryService.getProfile(session.chatId);
+  if (existingProfile) {
+    const prompt = buildPersonaPrompt(rawDescription, existingProfile.content);
+    const generated = await generateProfileText(ctx, deps, session, prompt);
+    memoryService.savePersona(session.chatId, generated || rawDescription);
+    return;
+  }
+
+  const prompt = buildFullProfilePrompt(rawDescription);
+  const generated = await generateProfileText(ctx, deps, session, prompt);
+  if (!generated) {
+    memoryService.saveProfile(session.chatId, rawDescription);
+    return;
+  }
+  const { profile, persona } = splitProfileAndPersona(generated);
+  memoryService.saveProfile(session.chatId, profile || rawDescription);
+  if (persona) {
+    memoryService.savePersona(session.chatId, persona);
+  }
+}
+
+async function generateProfileText(
+  ctx: Context,
+  deps: SetupDeps,
+  session: TelegramSession,
+  prompt: string
+): Promise<string | null> {
+  const engine = resolveSetupEngine(deps, session.engine);
+  if (!engine) return null;
+  try {
+    const result = await engine.execute({
+      chatId: ctx.chat?.id ?? session.chatId,
+      prompt,
+      cwd: session.cwd,
+      resume: null,
+      permissionMode: session.permissionMode,
+      providerName: deps.config?.provider,
+      modelName: deps.config?.model,
+      timeoutMs: AGENT_PROFILE_GENERATION_TIMEOUT_MS,
+      onPermission: async () => true
+    });
+    return result.response.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveSetupEngine(deps: SetupDeps, engine: TelegramEngineName): Engine | undefined {
+  if (deps.engines?.[engine]) return deps.engines[engine];
+  return engine === "codex" ? deps.codexEngine : deps.claudeEngine;
+}
+
+function formatProfileMemory(memoryService: MemoryService, chatId: number): string {
+  const profile = memoryService.getProfile(chatId);
+  const persona = memoryService.getPersona(chatId);
+  if (!profile && !persona) return "暂未生成记忆画像。";
+  return [
+    profile ? ["# 用户画像", "", profile.content].join("\n") : "",
+    persona ? ["# Bot 人设", "", persona.content].join("\n") : ""
+  ].filter(Boolean).join("\n\n");
+}
+
 function resolveHomeChild(value: string): string {
   const name = value.trim().replace(/^~\//, "").replace(/^\/+/, "");
   return path.join(os.homedir(), name);
@@ -532,16 +619,4 @@ function expandHome(value: string): string {
   if (value === "~") return os.homedir();
   if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
   return value;
-}
-
-export function getAgentProfilePath(session: TelegramSession): string {
-  return path.join(session.cwd, BOT_PROFILE_FILENAME);
-}
-
-function readAgentProfileFile(session: TelegramSession): string | null {
-  const filePath = getAgentProfilePath(session);
-  if (fs.existsSync(filePath)) {
-    return fs.readFileSync(filePath, "utf8");
-  }
-  return null;
 }

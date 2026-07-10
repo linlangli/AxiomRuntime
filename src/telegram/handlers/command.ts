@@ -7,6 +7,7 @@ import { Formatter, escapeHtml } from "../interaction/formatter.js";
 import type { ApprovalManager } from "../interaction/approval.js";
 import type { SessionManager } from "../session/manager.js";
 import { runCliInit, type MessageHandlerDeps } from "./message.js";
+import { handleForgetCommand, handleMemoriesCommand, handleMemoryCommand, handleRememberCommand } from "./memory.js";
 import { showConfigPanel, showReadyProviderPicker, showSetupProviderPicker, startSetup } from "./setup.js";
 import { showUsagePanel } from "./usage.js";
 
@@ -57,6 +58,22 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
 
   bot.command("usage", async (ctx) => {
     await showUsagePanel(ctx, deps);
+  });
+
+  bot.command("remember", async (ctx) => {
+    await handleRememberCommand(ctx, deps);
+  });
+
+  bot.command("forget", async (ctx) => {
+    await handleForgetCommand(ctx, deps);
+  });
+
+  bot.command("memories", async (ctx) => {
+    await handleMemoriesCommand(ctx, deps);
+  });
+
+  bot.command("memory", async (ctx) => {
+    await handleMemoryCommand(ctx, deps);
   });
 
   bot.command("usge", async (ctx) => {

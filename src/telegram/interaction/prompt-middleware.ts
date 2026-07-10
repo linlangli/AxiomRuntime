@@ -1,4 +1,6 @@
 import type { TelegramEngineName } from "../config.js";
+import { buildPromptWithMemory } from "../memory/memory-inject.js";
+import type { MemoryService } from "../memory/memory-service.js";
 import type { TelegramSession } from "../session/types.js";
 import { countPromptTokens, truncateToTokenBudget } from "./token-budget.js";
 
@@ -9,6 +11,7 @@ export type PromptMiddlewareContext = {
   engine: TelegramEngineName;
   resume?: string | null;
   includeAgentContext: boolean;
+  memoryService?: MemoryService;
 };
 
 export type PromptMiddleware = {
@@ -38,7 +41,7 @@ export function listPromptMiddlewares(): PromptMiddleware[] {
 
 export async function applyPromptMiddlewares(ctx: PromptMiddlewareContext): Promise<string> {
   let prompt = ctx.prompt;
-  for (const middleware of promptMiddlewares) {
+  for (const middleware of [...promptMiddlewares].reverse()) {
     prompt = await middleware.transform({ ...ctx, prompt });
   }
   return prompt;
@@ -100,6 +103,17 @@ function escapeXmlLikeText(value: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
+
+registerPromptMiddleware({
+  name: "bot-memory",
+  priority: 10,
+  transform: (ctx) => {
+    if (!ctx.memoryService) return ctx.prompt;
+    if (!ctx.includeAgentContext) return ctx.prompt;
+    if (ctx.prompt.trimStart().startsWith("/")) return ctx.prompt;
+    return buildPromptWithMemory(ctx.memoryService, ctx.chatId, ctx.prompt).prompt;
+  }
+});
 
 registerPromptMiddleware({
   name: "recent-conversation",

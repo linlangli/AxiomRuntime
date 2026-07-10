@@ -11,6 +11,7 @@ import { applyPromptMiddlewares } from "../interaction/prompt-middleware.js";
 import { ProgressReporter } from "../interaction/progress-reporter.js";
 import { emitTelegramTaskCompleted, emitTelegramTaskFailed } from "../lifecycle-registry.js";
 import type { SessionManager, TelegramSession } from "../session/manager.js";
+import type { MemoryService } from "../memory/memory-service.js";
 import { writeTelegramLog } from "../log.js";
 import { completeAgentProfile, remindSetup, setWorkdir, showReadyCard } from "./setup.js";
 import { handleUsagePriceInput } from "./usage.js";
@@ -22,6 +23,7 @@ export type MessageHandlerDeps = {
   engines?: Partial<TelegramEngineMap>;
   approvalManager: ApprovalManager;
   config: TelegramConfig;
+  memoryService?: MemoryService;
 };
 
 export const DEFAULT_PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
@@ -183,6 +185,7 @@ async function executePromptLocked(
         session,
         engine: session.engine,
         resume,
+        memoryService: deps.memoryService,
         includeAgentContext: options.includeAgentContext !== false
       });
       try {

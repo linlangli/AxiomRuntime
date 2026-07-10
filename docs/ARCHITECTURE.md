@@ -19,8 +19,8 @@ AI Gateway (`ai-gateway`) 是一个本地 AI Provider 网关，统一管理多�
 | 已完成 | 配置 schema validation | 新增 `src/core/config/schema.ts`；Provider 配置会校验对象形态、非空 name/baseUrl/apiKey；Telegram config 和 Hermes 导入 bundle 复用 schema helper |
 | 已完成 | 共享工具与测试 | 重复的 `isRecord()` 已抽到 `src/core/utils/is-record.ts`；已补 JSON store 并发、CLI fallback、Telegram fallback、Hermes provider 解析、Prompt middleware、注册表、熔断、proxy metrics、token budget 等回归测试 |
 | 已完成 | 代理可观测性 | OpenAI usage proxy 已暴露 `getMetrics()`，统计 request/success/failure/noUsage/usageRecord、总耗时、平均耗时、上游状态码分布；fallback/usage 事件保留结构化日志 |
+| 已完成 | Bot Memory Phase 1 | Telegram 已接入中央记忆库 `~/.ai-gateway/memory.sqlite`，支持 global/bot scope、画像/人设生成、Prompt 前缀注入、CRUD 命令、短期记忆过期清理和每日备份 |
 | 部分完成 | 插件化解耦 | CLI 命令注册表、runner 引擎注册表、Telegram engine/handler registry、integration registry、Prompt middleware、生命周期钩子已落地；类型联合和子命令参数解析仍偏静态 |
-| 未完成 | Bot Memory | 本轮没有实现 Bot Memory，相关设计仍以 `docs/memory-system-spec.md` 为准 |
 
 ```mermaid
 graph TD
@@ -107,8 +107,9 @@ src/
     │   └── types.ts            # Engine/ExecutionResult/PermissionRequest 类型
     ├── handlers/           # 消息/命令/回调处理
     │   ├── callback.ts     # Inline button 回调路由
-    │   ├── command.ts      # Bot 命令 (/start /reset /fresh /config /cwd /claude /codex /usage /help)
+    │   ├── command.ts      # Bot 命令 (/start /reset /fresh /config /cwd /claude /codex /usage /remember /forget /memories /memory /help)
     │   ├── document.ts     # 文件上传处理（附件缓存）
+    │   ├── memory.ts       # Bot Memory 命令处理
     │   ├── message.ts      # 文本消息路由 + executePrompt 核心调用链
     │   ├── setup.ts        # 引导设置流程 (model → workdir → agent_profile → ready)
     │   └── usage.ts        # 用量面板 + 模型定价输入
@@ -117,7 +118,7 @@ src/
     │   ├── command-menu.ts # Telegram 命令菜单管理 + 引擎命令映射
     │   ├── formatter.ts    # HTML 消息格式化
     │   ├── keyboards.ts    # InlineKeyboard 构建器
-    │   ├── prompt-middleware.ts # Prompt 注入中间件链（recent conversation / attachments）
+    │   ├── prompt-middleware.ts # Prompt 注入中间件链（bot-memory / recent conversation / attachments）
     │   ├── progress-reporter.ts # Telegram 进度流式状态消息
     │   ├── token-budget.ts      # gpt-tokenizer token 计数与裁剪
     │   └── tool-name.ts         # 工具名解析（builtin / MCP / command）
@@ -125,6 +126,11 @@ src/
     │   ├── manager.ts      # SessionManager（CRUD、对话轮次、用量记录）
     │   ├── store.ts        # SQLite 建表与迁移
     │   └── types.ts        # TelegramSession/Attachment/ProviderUsage 类型
+    ├── memory/             # 中央 Bot Memory（global/bot scope）
+    │   ├── memory-store.ts     # SQLite 中央记忆库、scope 可见性收口
+    │   ├── memory-service.ts   # CRUD、画像/人设、检索、备份、过期清理
+    │   ├── memory-inject.ts    # Prompt 前缀注入
+    │   └── types.ts            # MemoryEntry/MemoryCategory/MemoryScope 类型
     ├── templates/          # 消息模板
     ├── bot.ts              # Bot 初始化入口 (createBot)
     ├── config.ts           # Telegram 配置 (JSON 持久化，支持 12 个可配置项)
@@ -156,7 +162,7 @@ flowchart TD
   Update["Telegram Update"] --> Middleware["Grammy middleware<br/>鉴权"]
   Middleware --> Router["Handler 路由"]
   Router --> Session["SessionManager.getOrCreate()"]
-  Session --> Prompt["applyPromptMiddlewares()<br/>recent conversation / attachments"]
+  Session --> Prompt["applyPromptMiddlewares()<br/>bot-memory / recent conversation / attachments"]
   Prompt --> Candidates["resolveProviderCandidatesForTool()<br/>当前 engine 候选 provider"]
   Candidates --> Engine["Engine.execute()<br/>ClaudeEngine / CodexEngine"]
   Engine --> Runtime["prepareEngineRuntime()<br/>复用 core runner 逻辑"]
@@ -173,7 +179,7 @@ flowchart LR
   Start["/start"] --> Model["Step 1: Provider/Model<br/>setupStep=model"]
   Model --> Workdir["Step 2: 工作目录<br/>setupStep=workdir"]
   Workdir --> Init["afterSet 回调<br/>runCliInit('/init')"]
-  Init --> Profile["Step 3: 画像描述<br/>setupStep=agent_profile"]
+  Init --> Profile["Step 3: 画像描述<br/>生成 global 用户画像 + bot 人设"]
   Profile --> Ready["setupStep=ready<br/>显示 Ready Card"]
 ```
 
@@ -187,6 +193,7 @@ flowchart LR
 | 用量追踪 | 本地 HTTP 代理 (`openai-usage-proxy`) | 透明拦截 Codex 请求，无需修改工具本身 |
 | Hermes 集成 | YAML 配置同步 + launchd 重启 | 适配 Hermes 原生配置格式 |
 | 模型路由 | 优先级 + 健康检查 + 兼容性过滤 + 运行时 fallback | 选择阶段和执行失败后都能尝试下一个可用 provider |
+| Bot Memory | 中央 SQLite (`~/.ai-gateway/memory.sqlite`) + scope 逻辑隔离 | 用户画像跨 bot 共享，Bot 人设和领域知识仅当前 bot 可见 |
 | Telegram 代理 | `undici.ProxyAgent` + `https-proxy-agent` | 支持 `HTTPS_PROXY` 环境变量和自定义 `proxyUrl` 配置 |
 | 引擎初始化 | Bot 通过引擎执行 `/init` | Bot 不直接写 CLAUDE.md/AGENTS.md，由引擎自身生成 |
 | 权限模式 | `default` / `acceptEdits` / `bypassPermissions` | 按用户信任级别控制引擎操作权限 |
@@ -213,6 +220,11 @@ TelegramConfig    // JSON 配置 (12 个字段)
   - defaultEngine, defaultCwd, defaultPermissionMode
   - sessionTimeoutHours, maxOutputLength
   - provider?, model?, proxyUrl?, dbPath
+
+MemoryEntry       // 中央 Bot Memory 条目
+  - chatId, scope(global|bot), botId?
+  - category(profile|persona|credential|fact|preference|note|skill)
+  - title, content, tags[], priority, duration, encrypted, expiresAt
 
 ExecutionResult   // 引擎执行结果
   - sessionId?, response, toolCalls[], filesChanged[]
@@ -259,11 +271,13 @@ HermesRobot       // Hermes 机器人配置 (provider, model, tasks[], telegram)
 ```
 - 支持从 Ready 状态重新配置（切换 Provider/Model/权限模式/工作目录）
 - `/cwd <path>` 切换工作目录后自动触发 `runCliInit()` 重新初始化
+- 画像描述不再写 `BOT.md`；原始描述、global 用户画像和 bot 人设写入中央 Bot Memory
 
 **会话管理**
 - SQLite 持久化，支持多 chat 并发
 - 同一 chat 的任务通过 `SessionManager.runExclusive()` 串行执行，避免重复 engine 进程并发写同一 session
 - 对话轮次记录（通过 Prompt middleware 注入最近 4 轮，并使用 token 预算控制长度）
+- Bot Memory 注入（global 用户画像 + 当前 bot 人设必注入，相关记忆按关键词检索，整体 3000 字符预算）
 - 文件附件缓存（document handler 接收上传文件并暂存）
 - Provider 用量独立统计（每个 session per-provider 记录 token/cost）
 - 运行时 provider fallback：当前 provider 执行失败后尝试同 engine 的下一个候选；fallback 成功不改默认 provider/model
@@ -273,15 +287,18 @@ HermesRobot       // Hermes 机器人配置 (provider, model, tasks[], telegram)
 - 权限审批机制 (dangerous command confirmation)
 - `/fresh` 命令清空当前会话历史消息
 - `/usage` 用量面板 + 模型定价输入（支持自定义 input/output/cache 单价）
+- `/remember` `/forget` `/memories` `/memory` 管理 Bot Memory
 - 引擎命令映射：`/compact` `/init` `/model` 等映射为引擎原生命令
 - Proxy 支持：`proxyUrl` 配置或 `HTTPS_PROXY` 环境变量
 
-**Bot Memory 系统（规划中）**
+**Bot Memory 系统（Phase 1 已完成）**
 - 详见 `docs/memory-system-spec.md`
-- 用户层记忆：per-botId + per-chatId，跨引擎、跨会话、跨项目持久化
-- 分类：profile（画像）/ fact / preference / credential / note / skill（规划）
-- 注入方式：prompt 前缀拼接，3000 字符预算
-- 演进方向：Skill Learning → 记忆蒸馏 → 分层存储 → 向量检索
+- 存储：中央 `~/.ai-gateway/memory.sqlite`，WAL + `busy_timeout`，每日备份到 `memory.backup/`
+- Scope：`global` 跨 bot 共享；`bot` 仅当前 bot 可见，store 层通过统一 visibility clause 收口
+- 分类：profile / persona / credential / fact / preference / note / skill；credential 明文保存被拒绝，等待 Phase 2 加密解锁
+- 引导：首次画像描述会保留原始描述，并通过当前 engine 生成 global 用户画像和当前 bot 人设
+- 注入：`bot-memory` Prompt middleware 排在 recent conversation 和 attachments 之前，slash command 和禁用上下文时不注入
+- 后续未完成：PIN/AES-256-GCM 加密、memory export/import、FTS5/向量检索、记忆蒸馏、Skill Learning
 
 ### 3.3 Hermes 集成
 
@@ -562,11 +579,11 @@ try {
    - 不同 chat 仍可并行执行
    - `status` 字段继续用于 UI 状态和恢复逻辑，但不再单独承担并发互斥
 
-8. **未完成：Bot Memory 系统待实现**
-   - `completeAgentProfile()` 中 `void description;`（画像描述被忽略）
-   - `buildPromptWithMemory()` 未实现
-   - 旧 BOT.md 文件读写逻辑待移除
-   - 详见 `docs/memory-system-spec.md` Phase 1 计划
+8. **已完成：Bot Memory Phase 1**
+   - `completeAgentProfile()` 已使用用户描述生成 global 用户画像和 bot 人设，并保留原始描述
+   - `buildPromptWithMemory()` 已通过 `bot-memory` Prompt middleware 接入执行链，输出 `<user_memory>` 前缀
+   - 旧 `BOT.md` 注入/写入逻辑已移除，引擎原生 `/init` 仍由 Claude Code/Codex 自己生成 CLAUDE.md/AGENTS.md
+   - 未完成：凭证加密解锁、memory 导入导出、FTS5/向量检索、记忆蒸馏和 Skill Learning
 
 ### 5.2 代码质量
 
@@ -620,7 +637,7 @@ try {
 
 ### 5.5 插件化架构 — 高解耦 · 热插拔
 
-**当前状态：部分完成 / 继续小步推进。** 当前已完成 CLI 命令注册表、runner 引擎注册表、Telegram engine registry、Telegram handler registry、integration registry、Prompt 中间件链和 Telegram lifecycle hooks；Bot Memory 业务和类型联合动态化仍未落地。
+**当前状态：部分完成 / 继续小步推进。** 当前已完成 CLI 命令注册表、runner 引擎注册表、Telegram engine registry、Telegram handler registry、integration registry、Prompt 中间件链、Telegram lifecycle hooks 和 Bot Memory Phase 1；类型联合动态化、结果后处理器和插件热插拔仍未落地。
 
 当前代码的核心耦合问题是**所有模块通过硬编码 import + switch/if 分支连接**，新增或删除一个功能需要修改多处入口文件。以下是系统性解耦方案：
 
@@ -816,11 +833,11 @@ export function registerToolType(name: string): void { validTools.add(name); }
 export function isValidTool(name: string): boolean { return validTools.has(name); }
 ```
 
-#### 问题 6：记忆系统预留接口（暂不实现）
+#### 问题 6：Bot Memory 已接入 Prompt 中间件
 
-Bot Memory 系统（`docs/memory-system-spec.md`）未来需要接入 prompt 构建链、Handler 路由、Session 生命周期等多个环节。在插件化重构时预留接口，后续实现时零侵入接入。
+Bot Memory 系统（`docs/memory-system-spec.md`）已完成 Phase 1 接入：中央 SQLite store 负责 scope 隔离，Telegram setup 写入画像/人设，Prompt middleware 在每次普通对话前注入可见记忆。
 
-**预留接口设计**：
+**当前接口设计**：
 
 ```typescript
 // telegram/middleware-registry.ts — prompt 中间件链
@@ -846,7 +863,8 @@ export function registerPromptMiddleware(mw: PromptMiddleware): void {
 
 export async function applyPromptMiddlewares(ctx: PromptContext): Promise<string> {
   let prompt = ctx.prompt;
-  for (const mw of middlewares) {
+  // 低 priority 表示最终 prompt 的更外层前缀；因此运行时反向应用。
+  for (const mw of [...middlewares].reverse()) {
     prompt = await mw.transform({ ...ctx, prompt });
   }
   return prompt;
@@ -854,7 +872,6 @@ export async function applyPromptMiddlewares(ctx: PromptContext): Promise<string
 ```
 
 ```typescript
-// 未来 memory 模块自注册（暂不实现）
 // telegram/memory/memory-inject.ts
 registerPromptMiddleware({
   name: "bot-memory",
@@ -867,7 +884,7 @@ registerPromptMiddleware({
 ```
 
 ```typescript
-// 已落地：当前 recent conversation 和 attachments 已改为中间件
+// recent conversation 和 attachments 也已改为中间件
 registerPromptMiddleware({
   name: "recent-conversation",
   priority: 20,
@@ -897,15 +914,15 @@ const finalPrompt = await applyPromptMiddlewares({
 });
 ```
 
-**同时预留的扩展点**：
+**同时保留的扩展点**：
 
-| 扩展点 | 接口 | 未来用途 |
+| 扩展点 | 接口 | 当前状态 / 未来用途 |
 |--------|------|----------|
-| Prompt 中间件 | `PromptMiddleware` | Bot Memory 注入、Skill 加载 |
-| Session 生命周期钩子 | `TelegramTaskLifecycleHook`（已有） | 记忆蒸馏触发（每 N 次对话）、usage 统计 |
-| 命令注册表 | `CliCommand`（已有） | `/remember` `/forget` `/memories` 命令 |
-| Handler 注册表 | `HandlerRegistrar`（已有） | memory callback handler |
-| 引擎结果后处理 | `ResultPostProcessor` | Skill Learning 提炼（分析 toolCalls 数量） |
+| Prompt 中间件 | `PromptMiddleware` | 已用于 Bot Memory、recent conversation、attachments；未来可加载 Skill |
+| Session 生命周期钩子 | `TelegramTaskLifecycleHook`（已有） | 未来用于记忆蒸馏触发（每 N 次对话）、usage 统计 |
+| Telegram 命令菜单 | `command-menu.ts` | 已加入 `/remember` `/forget` `/memories` `/memory` |
+| Handler 注册表 | `HandlerRegistrar`（已有） | 已注册 memory command handler；未来可接入 memory callback |
+| 引擎结果后处理 | `ResultPostProcessor` | 未实现；未来用于 Skill Learning 提炼（分析 toolCalls 数量） |
 
 ```typescript
 // telegram/lifecycle-registry.ts — 已落地的 task 生命周期钩子
@@ -914,7 +931,7 @@ export type TelegramTaskLifecycleHook = {
   onTaskFailed?(event: TelegramTaskFailedEvent): void | Promise<void>;
 };
 
-// 未来 skill learning 自注册
+// 未来 skill learning 自注册（未实现）
 registerTelegramTaskLifecycleHook({
   async onTaskCompleted({ session, result }) {
     if ((result.toolCalls?.length ?? 0) >= 5) {
@@ -924,10 +941,10 @@ registerTelegramTaskLifecycleHook({
 });
 ```
 
-**实施原则**：
-- 重构阶段只建注册表骨架 + 将现有 `buildPromptWithXxx` 改为中间件注册
-- 不实现任何 memory 业务逻辑
-- 注册表为空时行为等价于当前代码（零开销）
+**当前完成边界**：
+- 已实现中央记忆库、scope 过滤、画像/人设生成、命令 CRUD、Prompt 注入、短期记忆过期清理和每日备份
+- 暂未实现凭证加密解锁、memory 导入导出、FTS5/向量检索、自动蒸馏和 Skill Learning
+- 注册表为空时仍应保持零额外注入；无可见记忆时 `bot-memory` middleware 直接返回原 prompt
 
 #### 总结：注册表模式的统一骨架
 
@@ -994,7 +1011,8 @@ graph TD
 | P1 | 集成注册表 | 已完成 | `integration-state.ts` + hermes/ | 小 |
 | P1 | Prompt 中间件链 | 已完成 | `message.ts` executePrompt + `telegram/interaction/prompt-middleware.ts` | 小（将现有 buildPromptWithXxx 改为中间件） |
 | P1 | 生命周期钩子 | 已完成 | `message.ts` + `telegram/lifecycle-registry.ts` | 小 |
+| P1 | Bot Memory Phase 1 | 已完成 | `telegram/memory/` + `handlers/memory.ts` + setup/prompt middleware | 中 |
 | P2 | 类型联合改造 | 未完成 | `types.ts` + 全局引用 | 小（但需全量回归测试） |
 | P2 | 共享 util 抽取 | 已完成 | `isRecord` 等重复函数 | 小 |
 
-> ⬡ 标记的模块为 Bot Memory 未来接入点，重构阶段只建骨架不实现业务逻辑。
+> Bot Memory 仍未完成的部分集中在 Phase 2+：凭证加密、导入导出、语义检索、记忆蒸馏和 Skill Learning。

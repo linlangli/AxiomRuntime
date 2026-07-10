@@ -87,6 +87,14 @@ export function getTelegramDbPath(): string {
   return path.join(getConfigRoot(), "telegram.sqlite");
 }
 
+export function getMemoryDbPath(): string {
+  return path.join(getConfigRoot(), "memory.sqlite");
+}
+
+export function getMemoryBackupDir(): string {
+  return path.join(getConfigRoot(), "memory.backup");
+}
+
 export function getContextDir(): string {
   return path.join(getProjectRoot(), ".ai-gateway");
 }

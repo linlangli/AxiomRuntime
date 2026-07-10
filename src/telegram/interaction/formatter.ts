@@ -112,7 +112,7 @@ export const Formatter = {
 
   agentProfile(content: string): string {
     return [
-      "<b>BOT.md</b>",
+      "<b>Bot Memory</b>",
       "",
       formatCodeBlock(content, "markdown")
     ].join("\n");
@@ -218,6 +218,10 @@ export const Formatter = {
       "/cwd path - 查看或切换工作路径",
       "/config - 查看或编辑 Bot 配置",
       "/usage - 查看当前会话额度",
+      "/remember - 保存一条 Bot 记忆",
+      "/forget - 删除 Bot 记忆",
+      "/memories - 查看 Bot 记忆",
+      "/memory - 管理 Bot 记忆",
       "/help - 查看帮助"
     ].join("\n");
   },
