@@ -446,6 +446,7 @@
         <a class="nav-link" href="#commands"><span>命令索引</span><span class="nav-count">常用入口</span></a>
         <a class="nav-link" href="#use"><span>使用模型</span><span class="nav-count">use / last</span></a>
         <a class="nav-link" href="#providers"><span>Provider</span><span class="nav-count">add / edit / delete</span></a>
+        <a class="nav-link" href="#memory"><span>Memory</span><span class="nav-count">embedding</span></a>
         <a class="nav-link" href="#hermes"><span>Hermes</span><span class="nav-count">机器人</span></a>
         <a class="nav-link" href="#telegram"><span>Telegram</span><span class="nav-count">Bot</span></a>
         <a class="nav-link" href="#status"><span>状态诊断</span><span class="nav-count">status / doctor</span></a>
@@ -535,6 +536,12 @@
                 <td>删除 provider 和模型缓存。</td>
                 <td>Hermes 会切到剩余最高优先级 provider。</td>
               </tr>
+              <tr data-search="memory embedding vector jina retrieval config">
+                <td><span class="group-label">Memory</span></td>
+                <td><code class="cmd">ai memory embedding</code><br /><code class="cmd">ai memory embedding set</code><br /><code class="cmd">ai memory embedding test</code><br /><code class="cmd">ai memory embedding clear</code></td>
+                <td>交互配置记忆检索专用 embedding 模型。</td>
+                <td>独立于聊天 provider，保存到 <code>memory.json</code>。</td>
+              </tr>
               <tr data-search="hermes add robot telegram">
                 <td><span class="group-label">Hermes</span></td>
                 <td><code class="cmd">ai hermes add</code></td>
@@ -623,6 +630,27 @@ ai use codex 51talk gpt-5.5</pre>
                 </ul>
               </div>
             </div>
+          </section>
+
+          <section id="memory" class="panel">
+            <h2>Memory 配置</h2>
+            <details open>
+              <summary>向量检索模型</summary>
+              <div class="detail-body">
+                <pre>ai memory embedding
+ai memory embedding set
+ai memory embedding set jina https://api.jina.ai/v1 jina_xxx jina-embeddings-v3 --type jina
+ai memory embedding test "ping"
+ai memory embedding clear</pre>
+                <ul>
+                  <li><code>ai memory embedding</code> 会进入交互菜单，可查看、设置、测试或清空 embedding 配置。</li>
+                  <li>这组配置只服务记忆检索，不参与 Claude Code / Codex 聊天 provider 选择。</li>
+                  <li>Jina 会默认写入 <code>retrieval.query</code> 和 <code>retrieval.passage</code>，后续向量查询和记忆入库可分别使用。</li>
+                  <li><code>set</code> 后会调用 embeddings 接口做一次轻量验证；需要跳过时可加 <code>--skip-test</code>。</li>
+                  <li>API Key 只保存在本机 <code>~/.ai-gateway/memory.json</code>，日志会脱敏。</li>
+                </ul>
+              </div>
+            </details>
           </section>
 
           <section id="providers" class="panel">
@@ -801,9 +829,10 @@ ai session clear</pre>
               <summary>用户可编辑</summary>
               <div class="detail-body">
                 <pre>~/.ai-gateway/providers.json
+~/.ai-gateway/memory.json
 ~/.ai-gateway/model-pricing.json
 ~/.ai-gateway/hermes.json</pre>
-                <p><code>providers.json</code> 保存 provider；<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格；<code>hermes.json</code> 保存 Hermes 机器人，不保存 API Key 到机器人配置。</p>
+                <p><code>providers.json</code> 保存聊天 provider；<code>memory.json</code> 保存记忆检索 embedding 模型；<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格；<code>hermes.json</code> 保存 Hermes 机器人，不保存 API Key 到机器人配置。</p>
               </div>
             </details>
             <details>

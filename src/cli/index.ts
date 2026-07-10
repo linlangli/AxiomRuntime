@@ -7,6 +7,7 @@ import { runHelpCommand } from "./commands/help.js";
 import { runHermesCommand } from "./commands/hermes.js";
 import { runListCommand } from "./commands/list.js";
 import { runLogCommand } from "./commands/log.js";
+import { runMemoryCommand } from "./commands/memory.js";
 import { runReportCommand } from "./commands/report.js";
 import { runLastCommand, runUseCommand } from "./commands/use.js";
 import { runSessionCommand } from "./commands/session.js";
@@ -58,6 +59,9 @@ function sanitizeArgs(command: string | undefined, args: string[]): string[] {
   if (command === "provider" && args[0] === "add" && args.length >= 4) {
     return [args[0]!, args[1]!, args[2]!, maskSecretArg(args[3]!)];
   }
+  if (command === "memory" && (args[0] === "embedding" || args[0] === "vector") && (args[1] === "set" || args[1] === "edit")) {
+    return maskMemoryEmbeddingSetArgs(args);
+  }
   return args.map((arg, index) => {
     const previous = args[index - 1]?.toLowerCase();
     if (previous === "--api-key" || previous === "--apikey" || previous === "--key") {
@@ -67,13 +71,34 @@ function sanitizeArgs(command: string | undefined, args: string[]): string[] {
   });
 }
 
+function maskMemoryEmbeddingSetArgs(args: string[]): string[] {
+  const valueOptions = new Set(["--type", "--provider-type", "--query-task", "--passage-task", "--dimensions", "--api-key", "--apikey", "--key"]);
+  const masked = [...args];
+  let positional = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg.startsWith("--")) continue;
+    const previous = args[index - 1]?.toLowerCase();
+    if (previous === "--api-key" || previous === "--apikey" || previous === "--key") {
+      masked[index] = maskSecretArg(arg);
+      continue;
+    }
+    if (previous && valueOptions.has(previous)) continue;
+    if (index >= 2) {
+      positional += 1;
+      if (positional === 3) masked[index] = maskSecretArg(arg);
+    }
+  }
+  return masked;
+}
+
 function maskSecretArg(value: string): string {
   if (value.length <= 8) return "****";
   return `${value.slice(0, 4)}****${value.slice(-4)}`;
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["use", "add", "hermes", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["use", "add", "memory", "hermes", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -166,6 +191,11 @@ function registerBuiltInCommands(): void {
     name: "telegram",
     description: "telegram",
     run: (args) => runTelegramCommand(args)
+  });
+  registerCliCommand({
+    name: "memory",
+    description: "memory",
+    run: (args) => runMemoryCommand(args)
   });
   registerCliCommand({
     name: "doctor",

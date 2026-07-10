@@ -52,6 +52,27 @@ export type UsageFile = {
   events: UsageEvent[];
 };
 
+export type MemoryEmbeddingProviderType = "openai-compatible" | "jina";
+
+export type MemoryEmbeddingConfig = {
+  enabled: boolean;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  providerType: MemoryEmbeddingProviderType;
+  queryTask?: string;
+  passageTask?: string;
+  dimensions: number | null;
+  updatedAt: string;
+  lastCheckedAt: string | null;
+  lastError: string | null;
+};
+
+export type MemoryConfigFile = {
+  embedding: MemoryEmbeddingConfig | null;
+};
+
 export type SessionStatus = "running" | "completed" | "failed";
 
 export type SessionRecord = {

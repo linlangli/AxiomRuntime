@@ -91,6 +91,10 @@ export function getMemoryDbPath(): string {
   return path.join(getConfigRoot(), "memory.sqlite");
 }
 
+export function getMemoryConfigPath(): string {
+  return path.join(getConfigRoot(), "memory.json");
+}
+
 export function getMemoryBackupDir(): string {
   return path.join(getConfigRoot(), "memory.backup");
 }

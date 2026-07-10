@@ -9,6 +9,12 @@ import { readProviders, writeProviders } from "../dist/core/config/providers-sto
 import { getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveProviderForTool } from "../dist/core/runner/fallback.js";
+import { checkAndRecordMemoryEmbeddingConfig } from "../dist/core/memory/embedding-check.js";
+import {
+  clearMemoryEmbeddingConfig,
+  getMemoryEmbeddingConfig,
+  setMemoryEmbeddingConfig
+} from "../dist/core/memory/memory-config.js";
 import { clearAllSessions, finishSession, getSession, listRecentSessions, startSession } from "../dist/core/sessions/session-service.js";
 import { generateSessionReport } from "../dist/core/reports/report-service.js";
 import {
@@ -106,6 +112,57 @@ test("deleteProvider removes provider config and cache", async () => {
     assert.equal(providers[0].level, 1);
     assert.equal(cache.providers.a, undefined);
     assert.equal(cache.providers.b.status, "ok");
+  });
+});
+
+test("memory embedding config stores dedicated vector model settings", async () => {
+  await withTempHome(async () => {
+    const config = await setMemoryEmbeddingConfig({
+      name: "jina",
+      baseUrl: "https://api.jina.ai/v1/",
+      apiKey: "jina-key",
+      model: "jina-embeddings-v3"
+    });
+
+    assert.equal(config.name, "jina");
+    assert.equal(config.baseUrl, "https://api.jina.ai/v1");
+    assert.equal(config.providerType, "jina");
+    assert.equal(config.queryTask, "retrieval.query");
+    assert.equal(config.passageTask, "retrieval.passage");
+
+    const saved = await getMemoryEmbeddingConfig();
+    assert.equal(saved.model, "jina-embeddings-v3");
+    assert.equal(saved.apiKey, "jina-key");
+
+    assert.equal(await clearMemoryEmbeddingConfig(), true);
+    assert.equal(await getMemoryEmbeddingConfig(), null);
+  });
+});
+
+test("memory embedding check records vector dimensions", async () => {
+  await withTempHome(async () => {
+    mockFetch((url, init) => {
+      assert.equal(String(url), "https://api.jina.ai/v1/embeddings");
+      const body = JSON.parse(String(init.body));
+      assert.equal(body.model, "jina-embeddings-v3");
+      assert.equal(body.task, "retrieval.query");
+      return jsonResponse({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
+    });
+    const config = await setMemoryEmbeddingConfig({
+      name: "jina",
+      baseUrl: "https://api.jina.ai/v1",
+      apiKey: "jina-key",
+      model: "jina-embeddings-v3"
+    });
+
+    const result = await checkAndRecordMemoryEmbeddingConfig(config);
+    const saved = await getMemoryEmbeddingConfig();
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.dimensions, 3);
+    assert.equal(saved.dimensions, 3);
+    assert.equal(saved.lastError, null);
+    assert.equal(typeof saved.lastCheckedAt, "string");
   });
 });
 
