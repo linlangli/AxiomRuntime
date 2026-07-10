@@ -1,888 +1,815 @@
-# Telegram Bot 记忆系统设计方案（中央记忆库 + Scope 分级）
+# AI Gateway 自动记忆系统设计方案
 
-## 概述
+## 目标
 
-为 Telegram Bot 新增**用户层独立记忆系统**，使用户能够跨引擎（Claude Code / Codex）、跨会话、跨项目目录持久保存个人信息、偏好、常用资源等。该系统定位为引擎之上的顶层记忆，与 Claude Code 和 Codex 各自的原生记忆/上下文机制完全隔离、互不干扰。
+重新设计一套 AI Gateway 顶层记忆系统，使记忆能力不再依赖手动记忆命令，而是通过统一 hook 自动参与每一次对话、执行、总结和上下文注入。
 
-## 当前实现状态（2026-07-10）
+该系统必须同时服务：
 
-当前代码已完成 **Phase 1 MVP**，但还不是“自动记忆系统”。
+- Telegram Bot 中的 Claude Code / Codex 对话
+- 终端 `ai use claude ...` / `ai use codex ...`
+- Browser 自动化、计划任务等 AI Gateway Core 执行入口
 
-| 状态 | 能力 | 说明 |
-|------|------|------|
-| 已完成 | 中央记忆库 | `~/.ai-gateway/memory.sqlite`，包含 `memories` / `memory_keys` 表；WAL + `busy_timeout` |
-| 已完成 | scope 隔离 | `global` 记忆按 `chatId` 跨 bot 可见；`bot` 记忆按 `chatId + botId` 仅当前 bot 可见 |
-| 已完成 | Telegram 内跨 CLI 注入 | Telegram Bot 调 Claude Code 或 Codex 前都会注入同一套 Bot Memory；切 `/claude` / `/codex` 不会丢记忆 |
-| 已完成 | 手动记忆命令 | `/remember` `/forget` `/memories` `/memory promote` `/memory clear bot/global confirm` |
-| 已完成 | 引导画像写入 | `/reset` setup 的“介绍一下我和你”会生成并保存 global 用户画像与当前 bot 人设 |
-| 已完成 | Prompt 注入 | `bot-memory` middleware 将 `<user_memory>` 放在 prompt 最前，位于 recent conversation 和 attachments 之前 |
-| 已完成 | 短期记忆过期 | `/remember temp ...` 写入 short_term，启动时清理过期项 |
-| 部分完成 | 备份 | Bot 启动时按日期备份 `memory.sqlite`，保留最近 7 份；尚未做常驻定时任务 |
-| 未完成 | 自动记忆 | 日常聊天不会自动写入记忆；只会读取并注入已有记忆 |
-| 未完成 | 凭证加密 | `credential`/`pin` 相关命令目前拒绝明文保存，PIN/AES-256-GCM 待 Phase 2 |
-| 未完成 | 导入导出 | `/memory export` / `/memory import` 目前只提示后续阶段启用 |
-| 未完成 | 智能检索/蒸馏 | 目前是关键词匹配 + 字符预算；FTS5、向量、自动蒸馏、Skill Learning 均未实现 |
-| 未覆盖 | 终端 `ai use` | 当前 Memory 只接入 Telegram Bot 执行链；直接在终端执行 `ai use claude/codex` 不会自动注入 |
+核心原则：
 
-### 记忆写入边界
+> 大模型负责理解、操作和生成；AI CLI 服务层负责记忆筛选、登录态、敏感信息隔离和安全边界。
 
-现在只有两类写入入口：
-
-1. 用户明确执行 `/remember ...`、`/forget ...`、`/memory ...`
-2. 用户在 `/reset` 引导流程的画像步骤输入描述
-
-普通聊天只会读取并注入记忆，不会自动保存新事实、偏好、账号、网页内容或执行经验。自动记忆、自动建议记忆、任务结束后提炼 skill 都属于 Phase 4/5。
-
-**核心架构决策**（区别于早期 per-bot 隔离方案）：
-
-> **运行态 per-bot 物理隔离，知识态中央存储 + scope 逻辑隔离。**
-
-用户会长期运行多个专业 bot（如投资理财 bot、写代码 bot、CI/CD 运维 bot），因此：
-
-- **sessions / workdirs**（运行态）：继续存放在 `bots/{botId}/bot.sqlite`，每个 bot 物理隔离
-- **memories**（知识态）：统一存放在 `~/.ai-gateway/memory.sqlite` 中央记忆库，通过 `scope` 字段做逻辑隔离：
-  - `scope='global'` — 跨所有 bot 共享（用户画像、语言偏好、通用凭证）
-  - `scope='bot'` — 仅本 bot 可见（bot 人设、领域知识、领域 skill）
-- **画像双层拆分**：全局「用户画像」（一份，所有 bot 注入）+ 每 bot「Bot 人设」（职责域、专业风格、风险边界）
-
-这样新建一个专业 bot 时，用户身份、偏好、凭证零成本继承，只需定义该 bot 的人设。
+账号、密码、cookie、token、session storage 等敏感信息不进入大模型上下文。需要登录的网站由本地服务层维护登录状态，大模型只获得“已登录能力”，不能读取凭证本身。
 
 ---
 
-## 架构定位：三层上下文模型
+## 当前状态
+
+现有实现是 Telegram Bot Memory Phase 1：
+
+| 能力 | 当前状态 | 说明 |
+|------|----------|------|
+| 中央 SQLite 记忆库 | 已实现 | `~/.ai-gateway/memory.sqlite` |
+| global / bot scope | 已实现 | `global` 跨 bot，`bot` 仅当前 bot |
+| Telegram prompt 注入 | 已实现 | Telegram 调 Claude Code / Codex 前注入 `<user_memory>` |
+| setup 画像写入 | 已实现 | Telegram 初始化时生成 profile/persona |
+| 短期记忆 TTL | 已实现 | `short_term` 到期清理 |
+| 记忆检索向量模型配置 | 已实现 | `ai memory embedding` 交互配置，保存到 `~/.ai-gateway/memory.json` |
+| 自动记忆 | 未实现 | 普通聊天不会自动写入 |
+| 终端 `ai use` 接入 | 未实现 | 当前只接 Telegram |
+| 向量检索 | 未实现 | 当前是轻量关键词匹配；embedding provider 配置和探测已先行完成 |
+| 凭证/登录态隔离 | 未实现 | 目前 credential 类明文保存被拒绝 |
+
+新的设计方向：
+
+- 旧的手动记忆入口将移除，记忆建立默认由 hook 自动完成。
+- 记忆核心迁移到 `src/core/memory`，Telegram 和 CLI 只是调用方。
+- 所有执行入口统一经过 memory hook。
+- 敏感登录态由独立 `auth session` 服务管理，不属于普通 prompt memory。
+
+---
+
+## 非目标
+
+以下能力不在记忆模块里实现：
+
+- 不保存用户账号密码明文。
+- 不把 cookie、token、localStorage、sessionStorage 注入 prompt。
+- 不让大模型直接填写密码输入框。
+- 不把网页登录态当作普通 memory 文本保存。
+- 不改写 Claude Code / Codex 的原生记忆文件作为主存储。
+
+Claude Code 的 `CLAUDE.md`、Codex 的 `AGENTS.md` 仍然由各自 `/init` 管理；AI Gateway Memory 是更上层的动态注入与自动治理系统。
+
+---
+
+## 总体架构
 
 ```mermaid
-block-beta
-  columns 1
-  block:L3:1
-    columns 1
-    L3Title["Layer 3: Bot Memory（本方案）"]
-    L3A["用户画像(global) · Bot 人设(bot) · 凭证 · 偏好 · 临时笔记"]
-    L3B["跨引擎、跨会话、跨项目持久化"]
-    L3C["中央记忆库 ~/.ai-gateway/memory.sqlite，scope 逻辑隔离"]
-    L3D["用户画像 + 本 bot 人设每次必注入；其他按相关性检索"]
+flowchart TD
+  User["User"] --> Entry["Execution Entry"]
+
+  subgraph Entries["调用入口"]
+    Telegram["Telegram Bot"]
+    CliUse["ai use claude/codex"]
+    Future["Scheduler / Browser"]
   end
-  space
-  block:L2:1
-    columns 1
-    L2Title["Layer 2: Engine Native Context（不触碰，由 /init 生成）"]
-    L2A["Claude Code: ~/.claude/memory/ · CLAUDE.md · Session resume"]
-    L2B["Codex: AGENTS.md · 独立执行上下文"]
-  end
-  space
-  block:L1:1
-    columns 1
-    L1Title["Layer 1: LLM Context Window"]
-    L1A["System prompt + tools + conversation"]
-  end
-  L3 -- "prompt prefix injection" --> L2
-  L2 --> L1
+
+  Entry --> Telegram
+  Entry --> CliUse
+  Entry --> Future
+
+  Telegram --> RuntimeHook["Runtime Hook Pipeline"]
+  CliUse --> RuntimeHook
+  Future --> RuntimeHook
+
+  RuntimeHook --> PreRead["Memory Pre-Read Hook"]
+  PreRead --> Retriever["Memory Retriever"]
+  Retriever --> MemoryStore["Core Memory Store<br/>SQLite + FTS + Vector"]
+  Retriever --> Injection["Prompt Injection Builder"]
+
+  Injection --> Engine["Claude Code / Codex"]
+  Engine --> Result["Execution Result"]
+
+  Result --> PostWrite["Memory Post-Run Hook"]
+  PostWrite --> Extractor["Memory Extractor"]
+  Extractor --> Policy["Policy + Safety Filter"]
+  Policy --> MemoryStore
+
+  RuntimeHook --> AuthBroker["Auth Session Broker"]
+  AuthBroker --> BrowserState["Encrypted Browser State<br/>Keychain / local state"]
+  AuthBroker --> BrowserTool["Browser Automation"]
 ```
 
-### 多 bot 视角下的数据流
+### 模块边界
+
+| 模块 | 职责 |
+|------|------|
+| `core/memory` | 记忆存储、分类、检索、注入、自动提取、蒸馏 |
+| `core/auth-session` | 登录态维护、cookie/storage state、凭证隔离、人工登录流程 |
+| `telegram/*` | Telegram UI、session、消息收发、调用 core memory |
+| `cli/*` | `ai use` 执行入口、调用 core memory |
+| `runner/*` | Claude Code / Codex 子进程执行，不直接理解记忆策略 |
+
+---
+
+## Hook 模型
+
+所有对话和任务执行都走同一套 hook。
+
+### 1. Pre-Read Hook
+
+执行前触发。
+
+输入：
+
+- userId
+- botId / profileId
+- engine：`claude` 或 `codex`
+- cwd
+- prompt
+- recent conversation
+- attachments metadata
+- tool capability metadata
+
+输出：
+
+- 要注入的长期记忆
+- 要注入的短期记忆
+- 当前 bot/persona 指令
+- 不注入但可供服务层使用的 auth capability 声明
+
+行为：
+
+1. 识别当前用户、当前 bot、当前项目。
+2. 检索用户画像、bot 画像、近期短期记忆、相关事实和技能。
+3. 按预算构造 prompt memory block。
+4. 过滤敏感内容，禁止把 credential secret 注入模型。
+5. 将 auth session capability 以抽象能力形式提供，例如“budget 站点已登录”，不提供 cookie/token。
+
+### 2. Post-Run Hook
+
+执行完成后触发。
+
+输入：
+
+- 原始用户 prompt
+- 注入前后的上下文摘要
+- 模型回复
+- tool calls / file changes / browser actions
+- 执行状态、错误、用户确认记录
+
+输出：
+
+- 新增记忆候选
+- 更新已有记忆
+- 删除或降权过期记忆
+- skill 经验总结
+- auth session 状态刷新
+
+行为：
+
+1. 判断本轮是否产生值得保留的信息。
+2. 抽取候选记忆。
+3. 分类为长期/短期、用户画像/bot 画像/fact/preference/skill 等。
+4. 做敏感信息拦截。
+5. 做去重、合并、冲突检测。
+6. 高置信度自动保存，低置信度进入待确认队列。
+
+### 3. Periodic Distill Hook
+
+周期性触发。
+
+触发条件：
+
+- 每 N 次对话
+- 每日/每周定时
+- 记忆数量超过阈值
+- 用户手动触发维护
+
+行为：
+
+- 合并重复事实
+- 更新用户画像
+- 更新 bot 画像
+- 将多次执行经验压缩成 skill
+- 清理过期短期记忆
+- 归档低价值记忆
+
+---
+
+## 记忆生命周期
 
 ```mermaid
-graph TD
-  subgraph Central["~/.ai-gateway/memory.sqlite（中央记忆库）"]
-    G["scope=global<br/>用户画像 · 通用偏好 · 通用凭证"]
-    B1["scope=bot, botId=111<br/>理财人设 · 投资知识"]
-    B2["scope=bot, botId=222<br/>开发人设 · 部署 skill"]
-    B3["scope=bot, botId=333<br/>运维人设 · CI/CD skill"]
-  end
-
-  subgraph BotA["理财 Bot (111)"]
-    A_RT["bots/111/bot.sqlite<br/>sessions · workdirs"]
-  end
-  subgraph BotB["代码 Bot (222)"]
-    B_RT["bots/222/bot.sqlite<br/>sessions · workdirs"]
-  end
-  subgraph BotC["运维 Bot (333)"]
-    C_RT["bots/333/bot.sqlite<br/>sessions · workdirs"]
-  end
-
-  G --> BotA
-  G --> BotB
-  G --> BotC
-  B1 --> BotA
-  B2 --> BotB
-  B3 --> BotC
+stateDiagram-v2
+  [*] --> Candidate
+  Candidate --> Rejected: 敏感/无价值/重复
+  Candidate --> Pending: 低置信度
+  Candidate --> Active: 高置信度自动保存
+  Pending --> Active: 用户确认或后续证据增强
+  Active --> Updated: 合并/修订
+  Updated --> Active
+  Active --> Archived: 过期/低频/冲突淘汰
+  Archived --> Active: 再次相关
+  Archived --> Deleted: 用户删除/清理策略
 ```
 
-注入到理财 Bot 的记忆 = `global` 记忆 + `botId=111` 的 bot 记忆；其他 bot 的领域记忆对它完全不可见。
+### 自动保存策略
 
-### chatId 跨 bot 稳定性（关键前提）
-
-Telegram **私聊**场景下 `chat.id === 用户的 Telegram user id`，同一用户与任意 bot 私聊的 chatId 相同。因此 `chatId` 可以直接作为中央记忆库的用户主键（owner key），global scope 天然跨 bot 生效。
-
-> 群聊场景 chatId ≠ userId，MVP 阶段记忆功能仅在私聊启用；群聊支持属于未来扩展（届时 owner key 改用 `message.from.id`）。
-
----
-
-## 方案对比（为何选中央记忆库）
-
-| 维度 | A. 中央库 + scope（本方案） | B. per-bot 库 + 全局库合并 | C. 完全 per-bot 隔离 |
-|------|:---|:---|:---|
-| 新建 bot 成本 | 零成本继承画像/偏好/凭证 | 部分继承，需双库逻辑 | 每次从零录入 |
-| 检索 | 一次 SQL 覆盖两层 scope | 每次查 2 库再合并 | 单库但知识不通 |
-| FTS5 / 向量索引 | 只建一份 | N+1 份，跨库归并 | N 份，永不互通 |
-| 记忆蒸馏 | 单库单事务 | 跨库蒸馏复杂 | 同一事实无法合并 |
-| Skill 复用 | bot skill 可升级 global | 手动搬库 | 每个 bot 重新踩坑 |
-| 隔离性 | 逻辑隔离（store 层收口） | 物理隔离 | 物理隔离 |
-| 实现复杂度 | 一套 store + scope 字段 | 双库连接/路由/合并 | 最简单 |
-
-B 是"用物理隔离解决逻辑问题"，代价在 FTS、蒸馏、skill 复用等每个后续 Phase 持续付出；C 与多专业 bot 的规划直接矛盾。A 的两个弱点（逻辑隔离靠代码约束、单文件故障半径）分别用 **store 层强制 scope 收口** 和 **WAL + 定期备份** 化解。
+| 置信度 | 行为 | 示例 |
+|--------|------|------|
+| 高 | 自动保存 | “我以后都希望你用中文回答” |
+| 中 | 暂存为 pending，必要时提示确认 | “这个项目以后可能都用 pnpm” |
+| 低 | 不保存 | 一次性闲聊、临时情绪、无上下文事实 |
+| 敏感 | 拒绝进入 memory，交给 auth session 或安全流程 | 账号、密码、token、验证码 |
 
 ---
 
-## 解决的问题
+## 记忆类型
 
-| 问题 | 根因 | 本方案如何解决 |
-|------|------|------|
-| 换会话/重启后 AI 忘记用户信息 | 引擎上下文随 session 消亡 | Memory 绑定 chatId，每次调用重新注入 |
-| Claude ↔ Codex 切换丢失偏好 | 两引擎记忆系统完全独立 | Memory 对两者统一注入 |
-| 换 cwd 后 AI 不认识用户了 | CLAUDE.md/auto memory 是 per-project | Memory 与 cwd 无关 |
-| **新建专业 bot 要重新自我介绍** | per-bot 记忆完全隔离 | global scope 记忆自动被所有 bot 注入 |
-| **改一次偏好要在 N 个 bot 里各改一遍** | 用户信息在多 bot 画像中重复 | 用户画像只存一份（global），人设 per-bot |
-| **理财知识污染代码 bot 的上下文** | 无领域边界 | bot scope 记忆仅本 bot 注入 |
-| 密码/凭证无安全存储 | 引擎 memory 明文无加密 | AES-256-GCM 加密 + PIN |
-| 临时信息无法自动清理 | 引擎无 TTL 机制 | 短期记忆 + 过期清理 |
-| 用户不知道 AI 记了什么 | 引擎 auto memory 是黑盒 | 完整 CRUD 命令，用户全权控制 |
+### 时间维度
+
+| 类型 | 存储周期 | 注入策略 | 示例 |
+|------|----------|----------|------|
+| 长期记忆 `long_term` | 持久保存 | 相关时注入；profile/persona 必注入 | 用户偏好、稳定身份、长期项目约定 |
+| 短期记忆 `short_term` | TTL 自动过期 | 最近相关时注入 | 今天要修的 bug、本周任务、临时计划 |
+| 会话记忆 `session` | 当前 session 内 | recent conversation 负责 | 刚刚讨论过的上下文 |
+| 归档记忆 `archived` | 不默认注入 | 搜索/蒸馏时使用 | 旧项目经验、低频事实 |
+
+### 内容类别
+
+| Category | Scope 默认值 | 是否可自动写入 | 是否必注入 | 说明 |
+|----------|--------------|----------------|------------|------|
+| `user_profile` | global | 是 | 是 | 用户身份、背景、长期偏好 |
+| `bot_profile` | bot | 是 | 是 | 当前 bot 的职责、人设、边界 |
+| `preference` | global 或 bot | 是 | 高相关注入 | 表达方式、工具偏好、工作习惯 |
+| `fact` | global 或 bot | 是 | 相关注入 | 稳定事实、项目事实 |
+| `skill` | bot，可提升 global | 是 | 相关注入 | 操作流程、踩坑经验、修复方案 |
+| `task_note` | bot | 是 | 短期相关注入 | 临时任务、待办、阶段性目标 |
+| `relationship` | global | 谨慎 | 相关注入 | 用户提到的协作对象、角色关系 |
+| `auth_ref` | bot 或 global | 仅服务层写入 | 不注入 secret | 指向 auth session 的引用，不保存密码 |
+| `credential_secret` | 不进 memory | 否 | 否 | 账号密码/token/cookie，交给 auth session |
+
+### Scope
+
+| Scope | 可见范围 | 示例 |
+|-------|----------|------|
+| `global` | 同一用户所有 bot / CLI 共享 | 用户偏好中文、用户是后端开发 |
+| `bot` | 当前 bot/profile 可见 | 投资 bot 的风险边界、代码 bot 的部署流程 |
+| `project` | 当前 cwd/project 可见 | 该项目使用 pnpm、测试命令 |
+| `session` | 当前会话可见 | 本轮临时上下文 |
+
+现有 `global/bot` 需要扩展为 `global/bot/project/session`，但迁移时保持兼容：旧 `bot` 记忆仍按 bot scope 读取。
 
 ---
 
-## 存在的问题与对策
+## 数据存储
 
-| 问题 | 影响 | 对策 |
-|------|------|------|
-| **Token 开销** — 每次多注入 ~1000 tokens | 增加成本、压缩有效上下文 | 严格控制上限 3000 字符；高相关才注入 |
-| **检索召回率** — 关键词匹配无法处理同义词 | "管钱的网站" 匹配不到 tag "理财" | Phase 3 引入别名表 + 两阶段召回 |
-| **scope 泄漏风险** — bug 导致 A bot 读到 B bot 记忆 | 领域记忆串台 | store 层唯一的 scope 过滤函数收口，所有读路径强制经过；单测覆盖 |
-| **中央库单点故障** — 文件损坏影响所有 bot | 记忆全丢 | `PRAGMA journal_mode=WAL` + 按日期备份 `memory.sqlite` 到 `memory.backup/`；当前实现为 bot 启动时执行一次 |
-| **多进程并发写** — 多个 bot 进程写同一 SQLite | SQLITE_BUSY | WAL 模式 + `PRAGMA busy_timeout=5000`；单机单用户写频率极低，足够 |
-| **引擎可能忽略注入** | Compaction 时记忆可能被截断 | Memory 是 prompt 最前部，compaction 通常保留开头 |
-| **与引擎原生配置冲突** | Memory 偏好与 CLAUDE.md/AGENTS.md 矛盾 | 注入时明确标注优先级：引擎原生配置 > Memory |
-| **加密 PIN 体验** | 重启要重新 unlock | Phase 2 考虑长 session TTL |
-| **无冲突检测** | 记两条互相矛盾的内容 | 写入时检查同 scope + title/tag 是否已有条目，提示覆盖 |
+继续使用 SQLite 作为主存储，Markdown 只用于导出、审计和人工编辑。
 
----
-
-## 数据存放位置与 Schema
-
-### 数据拓扑
-
-```
+```text
 ~/.ai-gateway/
-├── telegram.json              ← 全局配置（默认 bot token、全局设置）
-├── memory.sqlite              ← ★ 中央记忆库（所有 bot 共享，本方案新增）
-│   ├── memories 表            ← 全部记忆条目（scope 逻辑隔离）
-│   └── memory_keys 表         ← per-chatId 加密 PIN（跨 bot 一份）
-├── memory.backup/             ← 中央库按日期备份（当前启动时执行一次，保留最近 7 份）
+├── memory.sqlite
+├── memory.json
+├── memory.backup/
+├── auth-sessions.sqlite
+├── auth-sessions/
+│   ├── budget.storage-state.enc
+│   └── github.storage-state.enc
 └── bots/
-    ├── {botId-1}/             ← Bot 实例 1（运行态，物理隔离）
-    │   ├── config.json        ← 该 bot 的专属配置覆盖
-    │   ├── bot.sqlite         ← sessions 表 · workdirs 表（不含记忆）
-    │   ├── bot.log
-    │   └── bot.pid
-    ├── {botId-2}/
-    └── ...
-
-${cwd}/
-├── CLAUDE.md                  ← Claude Code 原生（/init 自动生成）
-└── AGENTS.md                  ← Codex 原生（/init 自动生成）
 ```
 
 ### memories 表
 
 ```sql
-CREATE TABLE IF NOT EXISTS memories (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  chatId      TEXT    NOT NULL,                 -- owner key（私聊下 = Telegram user id，跨 bot 稳定）
-  scope       TEXT    NOT NULL DEFAULT 'bot'
-              CHECK (scope IN ('global', 'bot')),
-  botId       TEXT,                             -- scope='bot' 时必填；scope='global' 时为 NULL
-  category    TEXT    NOT NULL
-              CHECK (category IN ('profile', 'persona', 'credential', 'fact', 'preference', 'note', 'skill')),
-  title       TEXT    NOT NULL,
-  content     TEXT    NOT NULL,                 -- credential 加密后为密文（base64）
-  tags        TEXT    NOT NULL DEFAULT '[]',    -- JSON array
-  priority    INTEGER NOT NULL DEFAULT 0,       -- 1 = 每次必注入
-  duration    TEXT    NOT NULL DEFAULT 'permanent'
-              CHECK (duration IN ('permanent', 'short_term')),
-  encrypted   INTEGER NOT NULL DEFAULT 0,
-  expiresAt   INTEGER,                          -- short_term 到期时间（epoch ms）
-  createdAt   INTEGER NOT NULL,
-  updatedAt   INTEGER NOT NULL,
-  CHECK (scope = 'global' OR botId IS NOT NULL)
+CREATE TABLE memories (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id         TEXT NOT NULL,
+  bot_id          TEXT,
+  project_id      TEXT,
+  scope           TEXT NOT NULL CHECK (scope IN ('global', 'bot', 'project', 'session')),
+  lifetime        TEXT NOT NULL CHECK (lifetime IN ('long_term', 'short_term', 'session', 'archived')),
+  category        TEXT NOT NULL,
+  title           TEXT NOT NULL,
+  content         TEXT NOT NULL,
+  summary         TEXT,
+  tags_json       TEXT NOT NULL DEFAULT '[]',
+  confidence      REAL NOT NULL DEFAULT 0.5,
+  priority        INTEGER NOT NULL DEFAULT 0,
+  source          TEXT NOT NULL,
+  source_ref      TEXT,
+  status          TEXT NOT NULL DEFAULT 'active'
+                  CHECK (status IN ('active', 'pending', 'archived', 'deleted')),
+  expires_at      INTEGER,
+  last_used_at    INTEGER,
+  use_count       INTEGER NOT NULL DEFAULT 0,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories (chatId, scope, botId);
-CREATE INDEX IF NOT EXISTS idx_memories_expiry ON memories (expiresAt) WHERE expiresAt IS NOT NULL;
+CREATE INDEX idx_memories_visible
+ON memories (user_id, scope, bot_id, project_id, status);
 
-CREATE TABLE IF NOT EXISTS memory_keys (
-  chatId     TEXT PRIMARY KEY,                  -- PIN 跨 bot 一份（用户级）
-  salt       TEXT NOT NULL,
-  verifier   TEXT NOT NULL,                     -- 用于校验 PIN 正确性
-  failCount  INTEGER NOT NULL DEFAULT 0,
-  lockedUntil INTEGER,
-  createdAt  INTEGER NOT NULL,
-  updatedAt  INTEGER NOT NULL
-);
+CREATE INDEX idx_memories_expiry
+ON memories (expires_at)
+WHERE expires_at IS NOT NULL;
 ```
 
-### 数据库初始化约定
+### memory_events 表
 
-```typescript
-// core/config/paths.ts 新增
-export function getMemoryDbPath(): string {
-  return path.join(getConfigRoot(), "memory.sqlite");
-}
-
-// memory-store.ts 打开数据库时必须执行
-db.pragma("journal_mode = WAL");
-db.pragma("busy_timeout = 5000");
-```
-
-### scope 收口（安全关键）
-
-**store 层所有读查询必须经过唯一的 scope 过滤构造函数**，禁止任何调用方手写 scope 条件：
-
-```typescript
-// memory-store.ts — 唯一的可见性过滤器，所有 SELECT 强制拼接
-function visibilityClause(): string {
-  return `chatId = :chatId AND (scope = 'global' OR (scope = 'bot' AND botId = :botId))`;
-}
-```
-
-单测必须覆盖：botId=A 的查询不返回 botId=B 的 bot scope 条目。
-
-### 运行态数据的向后兼容（沿用现有策略）
-
-现有 `~/.ai-gateway/telegram.sqlite`（sessions/workdirs）作为默认 bot 的数据库迁移到 `bots/{botId}/bot.sqlite`：
-
-```typescript
-function resolveBotDbPath(config: TelegramConfig): string {
-  const botDir = getBotDataDir(config.token);
-  const newPath = path.join(botDir, "bot.sqlite");
-  if (fs.existsSync(newPath)) return newPath;
-  const legacyPath = path.join(getConfigRoot(), "telegram.sqlite");
-  if (fs.existsSync(legacyPath)) {
-    fs.mkdirSync(botDir, { recursive: true });
-    fs.renameSync(legacyPath, newPath);
-    return newPath;
-  }
-  fs.mkdirSync(botDir, { recursive: true });
-  return newPath;
-}
-
-function getBotId(token: string): string {
-  // Telegram bot token 格式: "123456789:ABCdefGHIjklMNO"，前半段是 bot 的 Telegram user ID
-  return token.split(":")[0];
-}
-```
-
-记忆库不从旧 `BOT.md` / `PROMPT.md` 自动迁移：首次启用时直接按新 schema 建库。已有 bot 的旧文件如需进入中央库，需要通过 `/remember` 或专门迁移脚本写入。
-
-### 共享与隔离边界总表
-
-| 数据 | 位置 | 隔离级别 | 说明 |
-|------|------|----------|------|
-| sessions / workdirs | `bots/{id}/bot.sqlite` | per-bot 物理隔离 | 运行态，不共享 |
-| memories (global) | `memory.sqlite` | per-chatId | 所有 bot 注入 |
-| memories (bot) | `memory.sqlite` | per-chatId + per-botId | 仅本 bot 注入 |
-| memory_keys (PIN) | `memory.sqlite` | per-chatId | 一个 PIN 管所有 bot 的加密记忆 |
-| CLAUDE.md / AGENTS.md | `${cwd}` | per-cwd（共享） | 引擎原生，由 `/init` 生成 |
-| telegram.json | `~/.ai-gateway/` | 全局 | 默认 token 和全局设置 |
-| bots/{id}/config.json | per-bot | per-bot | 覆盖全局设置 |
-
----
-
-## 记忆分类与 Scope 默认值
-
-### 永久记忆 (permanent)
-
-| 分类 | 用途 | 默认 scope | 加密 | 必注入 | 示例 |
-|------|------|-----------|------|------|------|
-| `profile` | **用户画像**（我是谁） | `global`（强制） | 否 | ✅ priority=1 | 引导时生成的结构化用户画像 |
-| `persona` | **Bot 人设**（这个 bot 是谁） | `bot`（强制） | 否 | ✅ priority=1 | "投资理财顾问，风险提示必带" |
-| `preference` | AI 行为偏好 | `global` | 否 | 否 | "回复用中文，代码不加注释" |
-| `fact` | 个人背景 | `global` | 可选 | 否 | "我是后端开发，主用 Go" |
-| `credential` | 账号密码、Key | `bot`（最小权限） | 强制 | 否 | "理财网站 money.app，密码 Abc123" |
-| `skill` | 任务经验（Phase 4） | `bot` | 否 | 否 | "部署 staging 的完整步骤" |
-
-### 短期记忆 (short_term)
-
-| 分类 | 默认 scope | 默认 TTL | 示例 |
-|------|-----------|----------|------|
-| `note` | `bot` | 72h | "明天下午3点开需求评审" |
-
-### scope 规则
-
-- `profile` 强制 global、`persona` 强制 bot，service 层写入时校验，不允许覆盖
-- 其他分类有默认值，用户可通过命令显式指定（`/remember global <内容>` / `/remember bot <内容>`）
-- 自动分类时宁可判 `bot` 不判 `global`（误判 bot 只是少共享，误判 global 会污染所有 bot）
-- `/memory promote <id>` 可将 bot 记忆升级为 global（如某个 skill 值得全局复用）
-
----
-
-## 双层画像：用户画像 + Bot 人设
-
-### 设计原则
-
-```mermaid
-graph LR
-  Profile["用户画像 · scope=global<br/>我是谁、技术背景、通用偏好<br/>只维护一份，所有 bot 注入"]
-  Persona["Bot 人设 · scope=bot<br/>职责域、专业风格、风险边界<br/>每个 bot 一份"]
-  Init["Engine /init<br/>生成 CLAUDE.md / AGENTS.md<br/>引擎自己完成（Layer 2）"]
-
-  style Profile fill:#e1f5fe,stroke:#0288d1
-  style Persona fill:#fff9c4,stroke:#f9a825
-  style Init fill:#fff3e0,stroke:#f57c00
-```
-
-| | 用户画像 (profile) | Bot 人设 (persona) |
-|---|---|---|
-| 回答的问题 | 我是谁、我的背景、我通用的工作偏好 | 这个 bot 负责什么、以什么专业角色和风格工作 |
-| scope | global（跨 bot 唯一） | bot（每 bot 一份） |
-| 示例 | "后端开发，Go+TS，回复用中文，简洁直接" | "投资理财顾问，关注 A 股/美股/基金，任何建议必附风险提示，不替用户做最终决策" |
-| 更新频率 | 低（身份很少变） | 每个新 bot 创建时定义一次 |
-
-### 引导交互流程（setup）
-
-与当前代码 setup 流程一致（`setup.ts` + `message.ts`），Step 3 按是否已有全局用户画像分流：
-
-```mermaid
-flowchart TD
-  Start["/start"] --> S1
-
-  subgraph S1["Step 1: Provider / Model 选择"]
-    S1A["setupStep = model → selectSetupModel() → 推断 engine"]
-  end
-
-  S1 --> S2
-
-  subgraph S2["Step 2: 工作目录选择"]
-    S2A["setupStep = workdir → setWorkdir()"]
-    S2B["afterSet 回调: runCliInit() → 引擎 /init 生成 CLAUDE.md / AGENTS.md"]
-    S2A --> S2B
-  end
-
-  S2 --> Check{"中央库已有<br/>global 用户画像？"}
-
-  Check -- "否（首个 bot）" --> S3Full
-  Check -- "是（新建专业 bot）" --> S3Fast
-
-  subgraph S3Full["Step 3a: 完整引导"]
-    F1["Bot: 介绍一下你自己，以及希望这个 bot 扮演什么角色"]
-    F2["用户输入原始描述"]
-    F3["引擎提炼 → 用户画像(global) + Bot 人设(bot) 两段"]
-    F4["分别写入 memories 表"]
-    F1 --> F2 --> F3 --> F4
-  end
-
-  subgraph S3Fast["Step 3b: 快速通道 ★ 多 bot 核心体验"]
-    Q1["Bot: 已认识你（展示画像摘要）。这个 bot 专门负责什么？"]
-    Q2["用户只描述本 bot 职责（如：投资理财）"]
-    Q3["引擎提炼 → 仅生成 Bot 人设(bot)"]
-    Q4["写入 memories 表 · category=persona"]
-    Q1 --> Q2 --> Q3 --> Q4
-  end
-
-  S3Full --> Ready["setupStep = ready<br/>显示 Ready Card"]
-  S3Fast --> Ready
-```
-
-**关键时序**：
-- `/init` 在 workdir 选择后立即触发（`afterSet` 回调），不等画像完成
-- 画像步骤是 setup 最后一步；当前 `completeAgentProfile()` 已保存原始描述，并调用当前 engine 生成用户画像/人设
-
-### 画像/人设生成 prompt
-
-```typescript
-// 首个 bot：从一段描述中同时提炼用户画像与 bot 人设
-function buildFullProfilePrompt(rawDescription: string): string {
-  return [
-    "根据以下用户的自我描述，生成两份内容，用分隔符 '=====PERSONA=====' 分开。",
-    "",
-    "<user_description>",
-    rawDescription,
-    "</user_description>",
-    "",
-    "第一部分【用户画像】（跨所有助手共享，只描述用户本人）：",
-    "- 用户身份、技术背景、通用偏好、通用工作方式",
-    "- 不要包含任何特定助手的角色定位",
-    "- 500 字符以内",
-    "",
-    "建议结构：",
-    "## 用户背景",
-    "## 通用偏好",
-    "",
-    "第二部分【Bot 人设】（仅本助手使用）：",
-    "- 本助手的职责域、专业风格、风险边界",
-    "- 400 字符以内",
-    "",
-    "建议结构：",
-    "## 角色与职责",
-    "## 工作风格",
-    "## 风险边界",
-    "",
-    "通用要求：输出纯文本；中文输入就使用中文；只输出内容本身，不要多余说明。"
-  ].join("\n");
-}
-
-// 新建专业 bot 快速通道：只生成人设
-function buildPersonaPrompt(rawDescription: string, existingProfile: string): string {
-  return [
-    "已知用户画像如下（勿修改、勿重复其中内容）：",
-    "<existing_profile>",
-    existingProfile,
-    "</existing_profile>",
-    "",
-    "用户希望本助手承担的职责描述：",
-    "<bot_description>",
-    rawDescription,
-    "</bot_description>",
-    "",
-    "生成本助手的 Bot 人设，要求：",
-    "- 只描述本助手的职责域、专业风格、风险边界",
-    "- 400 字符以内；中文输入就使用中文",
-    "",
-    "建议结构：",
-    "## 角色与职责",
-    "## 工作风格",
-    "## 风险边界",
-    "",
-    "只输出人设内容，不要多余说明。"
-  ].join("\n");
-}
-```
-
-### completeAgentProfile 当前实现逻辑
-
-```typescript
-async function completeAgentProfile(ctx, deps, description, options): Promise<TelegramSession | null> {
-  const session = deps.sessionManager.getOrCreate(chatId);
-
-  if (description?.trim() && deps.memoryService) {
-    // 0. 保存原始描述（素材，不注入）
-    memoryService.saveRawDescription(chatId, description);
-
-    const existingProfile = memoryService.getProfile(chatId); // scope=global, category=profile
-
-    if (existingProfile) {
-      // 快速通道：只生成人设
-      const prompt = buildPersonaPrompt(description, existingProfile.content);
-      const generated = await generateProfileText(ctx, deps, session, prompt);
-      memoryService.savePersona(chatId, generated || description);
-    } else {
-      // 完整引导：画像 + 人设
-      const prompt = buildFullProfilePrompt(description);
-      const generated = await generateProfileText(ctx, deps, session, prompt);
-      if (generated) {
-        const { profile, persona } = splitProfileAndPersona(generated);
-        memoryService.saveProfile(chatId, profile || description);
-        if (persona) memoryService.savePersona(chatId, persona);
-      } else {
-        // 引擎提炼失败：原始描述直接作为画像，人设留空
-        memoryService.saveProfile(chatId, description);
-      }
-    }
-  }
-
-  const next = deps.sessionManager.update(session.id, { setupStep: "ready" });
-  return next;
-}
-```
-
-### 画像/人设更新
-
-| 触发方式 | 行为 |
-|------|------|
-| Setup 中再次发送描述 | 走上面的分流逻辑，覆盖对应条目 |
-| `/remember profile <内容>` | 覆盖 global 用户画像 |
-| `/remember persona <内容>` | 覆盖本 bot 人设 |
-| `/forget profile` / `/forget persona` | 清除对应条目 |
-| `/memories` | 查看当前画像与人设内容 |
-
-### 与旧流程（BOT.md 文件）的对比
-
-| 维度 | 旧流程（BOT.md 文件） | 新流程（中央 Bot Memory） |
-|------|------|------|
-| 存储位置 | `${cwd}/BOT.md` 文件 | `memory.sqlite` memories 表 |
-| 生命周期 | 跟 cwd 走，换目录丢失 | 跟 chatId 走，永久保留 |
-| 跨项目 | ❌ 每个项目独立 | ✅ 所有项目共享 |
-| 跨引擎 | ❌ 仅当前引擎读取 | ✅ Claude Code / Codex 均注入 |
-| 跨 bot | ❌ | ✅ 用户画像跨 bot；人设 per-bot |
-| 更新方式 | 重新生成文件 | `/remember` 或重新描述 |
-| 项目级配置 | 混在 BOT.md 中 | 完全分离：由引擎 `/init` 生成 |
-
----
-
-## 工作目录选择与引擎初始化
-
-### 设计思路
-
-用户选择工作目录后，自动通过引擎执行 `/init` 命令，让引擎为该目录生成原生配置文件（CLAUDE.md / AGENTS.md）。这遵循隔离原则 —— Bot 不直接写入引擎文件，而是让引擎自己完成初始化。
-
-### 当前实现（`setWorkdir` + `afterSet` 回调）
-
-```typescript
-// message.ts — workdir 选择后的 afterSet 回调
-await setWorkdir(ctx, deps, text, {
-  fromCustomInput: true,
-  afterSet: (next) => runCliInit(ctx, deps, next.engine)
-});
-
-// message.ts — runCliInit 执行引擎 /init
-async function runCliInit(ctx, deps, engine): Promise<void> {
-  await executePrompt(ctx, deps, "/init", engine, {
-    silentSuccess: true,
-    suppressFailureReply: true,
-    includeAgentContext: false,
-    skipSetupReminder: true,
-    timeoutMs: CLI_INIT_TIMEOUT_MS
-  });
-}
-```
-
-### 触发时机
-
-| 场景 | 是否触发 /init | 代码路径 |
-|------|------|------|
-| Setup 流程中选择工作目录 | ✅ | `setWorkdir({ afterSet: runCliInit })` |
-| Setup 流程中输入自定义路径 | ✅ | `setWorkdir({ fromCustomInput: true, afterSet: runCliInit })` |
-| Ready 状态下切换工作目录 | ✅ | `setWorkdir({ returnToReady: true, afterSet: runCliInit })` |
-| `/cwd`（不带参数，查看当前目录） | ❌ | 仅显示当前 cwd |
-
-### 与隔离原则的关系
-
-Bot 始终通过引擎 SDK/CLI 间接执行 `/init`，不直接 `fs.writeFileSync` 写入引擎配置文件。这确保：
-- 生成的文件格式由引擎决定
-- 引擎的 hooks、插件在 `/init` 时正常触发
-- Bot 层不需要了解引擎配置文件的内部结构
-
----
-
-## 注入顺序与优先级
-
-每次 `executePrompt` 调用时的 prompt 构建链：
-
-```mermaid
-flowchart TD
-  Msg["原始用户消息"] --> Step1
-  Step1["1. buildPromptWithMemory(chatId, botId)<br/>用户画像(global) + 本 bot 人设(bot) 必注入<br/>+ 相关性检索的其他记忆"] --> Step2
-  Step2["2. buildPromptWithRecentConversation()<br/>最近对话轮次"] --> Step3
-  Step3["3. buildPromptWithAttachments()<br/>上传的附件"] --> Exec
-  Exec["engine.execute(finalPrompt)"]
-```
-
-**冲突优先级规则**（注入 prompt 中明确告知引擎）：
-
-```mermaid
-flowchart LR
-  A["Engine Native<br/>CLAUDE.md / AGENTS.md"] --> B["persona<br/>Bot 人设"] --> C["profile<br/>用户画像"] --> D["preference / fact<br/>偏好与背景"]
-  style A fill:#ffcdd2,stroke:#c62828
-  style B fill:#fff9c4,stroke:#f9a825
-  style C fill:#e1f5fe,stroke:#0288d1
-  style D fill:#e8f5e9,stroke:#388e3c
-```
-
-> 人设优先于用户画像：领域专用规则（如"理财建议必附风险提示"）应覆盖通用偏好中的冲突项。
-
----
-
-## 核心隔离原则
-
-| 规则 | 说明 |
-|------|------|
-| **不直接写引擎文件** | 绝不通过 `fs.writeFile` 写入 `~/.claude/memory/`、`CLAUDE.md`、`AGENTS.md` |
-| **不改引擎参数** | `--resume`、`--permission-mode` 等参数不受 Memory 影响 |
-| **只通过 prompt 注入** | 对引擎来说，Memory 就是用户消息的一部分 |
-| **指示不要重复存储** | 注入中标注 "Do NOT store this in your own memory systems" |
-| **引擎原生优先** | 若 Memory 与 CLAUDE.md/引擎记忆冲突，以引擎为准 |
-| **scope 强制收口** | 所有记忆读取必须经过 store 层唯一的 `visibilityClause()`，禁止手写 scope 条件 |
-
----
-
-## 注入格式
-
-```xml
-<user_memory scope="global persistent knowledge, cross-engine cross-session" readonly="true">
-Treat as ground truth. If anything here conflicts with engine native config (CLAUDE.md/AGENTS.md), engine config wins.
-Within this block, bot persona overrides user profile on conflicts.
-Do NOT store this information in your own memory systems (~/.claude/memory/, CLAUDE.md, AGENTS.md).
-
-<entry category="persona" title="Bot 人设" scope="bot" priority="1">
-## 角色与职责
-投资理财顾问，关注 A 股、美股、基金定投。
-
-## 工作风格
-先给结论，再列关键依据；数据来源注明日期。
-
-## 风险边界
-任何投资建议必须附带风险提示，不替用户做最终决策。
-</entry>
-<entry category="profile" title="用户画像" scope="global" priority="1">
-## 用户背景
-后端开发，主力语言 Go + TypeScript。
-
-## 通用偏好
-回复保持简洁、直接、可执行，优先使用中文。
-</entry>
-<entry category="fact" title="技术背景" scope="global">
-常用 Gin/Next.js，部署在 AWS
-</entry>
-<entry category="credential" title="理财网站" scope="bot" status="unlocked">
-网站: https://money.app
-账号: test@mail.com
-密码: MyP@ss123
-</entry>
-<entry category="note" title="本周计划" scope="bot" expires="2026-07-12">
-周四部署 v2.1 到 staging，周五推生产
-</entry>
-</user_memory>
-```
-
-加密未解锁时：
-```xml
-<entry category="credential" title="理财网站密码" scope="bot" status="locked">
-(encrypted — user needs to /memory unlock to access)
-</entry>
-```
-
----
-
-## 用户命令
-
-| 命令 | 当前状态 | 说明 |
-|------|------|------|
-| `/remember <内容>` | 已实现 | 快速记忆，本地规则分类 + 默认 scope |
-| `/remember global <内容>` | 已实现 | 强制存为跨 bot 共享记忆 |
-| `/remember bot <内容>` | 已实现 | 强制存为仅本 bot 记忆 |
-| `/remember profile <内容>` | 已实现 | 覆盖 global 用户画像 |
-| `/remember persona <内容>` | 已实现 | 覆盖当前 bot 人设 |
-| `/remember temp <内容>` | 已实现 | 短期记忆，默认 TTL 72h |
-| `/remember temp 2h <内容>` / `/remember temp 3d <内容>` | 已实现 | 指定小时/天级 TTL |
-| `/forget <编号或关键词>` | 已实现 | 删除当前可见记忆；编号精确删除，关键词模糊删除 |
-| `/forget profile` / `/forget persona` | 已实现 | 删除对应画像/人设 |
-| `/memories` | 已实现 | 列出当前 chat 可见记忆 |
-| `/memories search <词>` | 已实现 | 按关键词过滤可见记忆 |
-| `/memory promote <编号>` | 已实现 | 将当前 bot 记忆升级为 global；persona 不允许升级 |
-| `/memory clear bot confirm` | 已实现 | 清空当前 bot scope 记忆 |
-| `/memory clear global confirm` | 已实现 | 清空当前用户 global scope 记忆 |
-| `/remember pin <内容>` | 占位 | 当前返回“加密记忆尚未启用”，不会明文保存 |
-| `/memory pin set <pin>` | 未实现 | Phase 2：设置加密 PIN |
-| `/memory unlock <pin>` | 未实现 | Phase 2：解锁加密记忆 |
-| `/memory lock` | 未实现 | Phase 2：锁定加密记忆 |
-| `/memory export` | 未实现 | Phase 3：导出 JSON |
-| `/memory import` | 未实现 | Phase 3：导入 JSON |
-
----
-
-## 加密方案
-
-```
-PIN → PBKDF2(pin, salt, 100k, 32B, sha256) → DEK
-DEK + AES-256-GCM → encrypt/decrypt
-DEK 仅在 unlock 后驻留进程内存，重启清除
-```
-
-安全措施：
-- credential 类强制加密
-- PIN 是用户级（memory_keys 按 chatId 一份），一个 PIN 管理所有 bot 的加密记忆；unlock 状态是**进程级**的（每个 bot 进程各自 unlock）
-- 连续 PIN 错误 3 次锁定 5 分钟（failCount / lockedUntil 落库，跨进程生效）
-- PIN 通过 Telegram 发送后立即提示用户删除该消息
-- 注入 prompt 时标注 "do not echo credentials in plain text"
-
----
-
-## 检索策略
-
-```
-1. 必注入集：本 chatId 下 priority=1 且可见的条目
-   （global profile + 本 bot persona，一次查询）
-2. 对 prompt 做分词提取关键词
-3. 在可见集（visibilityClause 过滤）内做 tags + title 关键词匹配评分
-4. Top-8 候选 + 必注入集去重
-5. 按字符预算（默认 3000 字符）筛选，优先保留 profile/persona 与高相关记忆，
-   persona 与 profile 永不截断
-6. 格式化为 XML 注入（persona 在最前）
-```
-
-可见性过滤（所有步骤共用）：
+记录每次自动写入、合并、删除，便于审计和回滚。
 
 ```sql
-WHERE chatId = :chatId
-  AND (scope = 'global' OR (scope = 'bot' AND botId = :botId))
-  AND (expiresAt IS NULL OR expiresAt > :now)
+CREATE TABLE memory_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  memory_id   INTEGER,
+  user_id     TEXT NOT NULL,
+  event_type  TEXT NOT NULL,
+  actor       TEXT NOT NULL, -- system / user / model / distiller
+  before_json TEXT,
+  after_json  TEXT,
+  reason      TEXT,
+  created_at  INTEGER NOT NULL
+);
 ```
 
+### memory_embeddings 表
+
+向量检索阶段启用。
+
+```sql
+CREATE TABLE memory_embeddings (
+  memory_id     INTEGER PRIMARY KEY,
+  model         TEXT NOT NULL,
+  dimension     INTEGER NOT NULL,
+  vector_blob   BLOB NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+```
+
+SQLite 可以先使用 FTS5 + 关键词检索；当记忆数量和语义需求上来后，再接入 sqlite-vec/sqlite-vss 或外部向量库。
+
+### memory.json
+
+`memory.json` 保存记忆检索专用 embedding provider 配置，独立于聊天模型 `providers.json`。它只服务记忆检索，不参与 Claude Code / Codex 的 provider 选择。
+
+当前已实现 CLI：
+
+```bash
+ai memory embedding
+ai memory embedding set
+ai memory embedding set jina https://api.jina.ai/v1 jina_xxx jina-embeddings-v3 --type jina
+ai memory embedding test "ping"
+ai memory embedding clear
+```
+
+无参数执行 `ai memory embedding` 会进入交互菜单，可查看、设置、测试或清空配置。Jina 类型默认使用：
+
+| 用途 | task |
+|------|------|
+| 查询当前 prompt | `retrieval.query` |
+| 写入记忆文本 | `retrieval.passage` |
+
+配置示例：
+
+```json
+{
+  "embedding": {
+    "enabled": true,
+    "name": "jina",
+    "baseUrl": "https://api.jina.ai/v1",
+    "apiKey": "jina_xxx",
+    "model": "jina-embeddings-v3",
+    "providerType": "jina",
+    "queryTask": "retrieval.query",
+    "passageTask": "retrieval.passage",
+    "dimensions": 1024,
+    "updatedAt": "2026-07-10T00:00:00.000Z",
+    "lastCheckedAt": "2026-07-10T00:00:00.000Z",
+    "lastError": null
+  }
+}
+```
+
+说明：
+
+- `set` 默认会调用 embeddings 接口做一次轻量探测，确认返回真实向量维度。
+- `--skip-test` 可跳过探测，只写入配置。
+- API Key 仅保存在本机配置中；CLI 日志会脱敏。
+- 该配置只是向量搜索的前置能力；当前检索链路仍未把记忆写入向量表，也未执行语义召回。
+
 ---
 
-## 代码变更清单
+## 自动记忆抽取
 
-| 文件/目录 | 变更 | 说明 |
-|------|------|------|
-| `src/telegram/memory/types.ts` | 新增 | MemoryEntry / MemoryScope / MemoryCategory / MemoryDuration 类型定义 |
-| `src/telegram/memory/memory-store.ts` | 新增 | 打开 `getMemoryDbPath()` 中央库（WAL + busy_timeout）、建表、CRUD、`visibilityClause()` 收口 |
-| `src/telegram/memory/memory-service.ts` | 新增 | 业务逻辑：`save()` / `saveProfile()`（global 覆盖写）/ `savePersona(botId)`（bot 覆盖写）/ `getProfile()` / `promote()` / 检索 / TTL 清理 / `/remember` 写入时本地分类 |
-| `src/telegram/memory/memory-inject.ts` | 新增 | `buildPromptWithMemory(memoryService, chatId, prompt)` — XML 注入，profile+persona 必注入 |
-| `src/telegram/memory/memory-crypto.ts` | 未实现（Phase 2） | PBKDF2 + AES-256-GCM |
-| `src/core/config/paths.ts` | 修改 | 新增 `getMemoryDbPath()`、`getMemoryBackupDir()` |
-| `src/telegram/interaction/prompt-middleware.ts` | 修改 | 注册 `bot-memory` middleware；最终 prompt 顺序为 memory → recent conversation → user prompt/attachments |
-| `src/telegram/handlers/message.ts` | 修改 | 调用 `applyPromptMiddlewares()`，不再读取 `BOT.md` 注入旧画像 |
-| `src/telegram/handlers/command.ts` | 扩展 | 注册 /remember /forget /memories /memory |
-| `src/telegram/handlers/memory.ts` | 新增 | Memory 命令处理；加密和 import/export 当前为占位提示 |
-| `src/telegram/handlers/callback.ts` | 未扩展 | 暂无记忆相关 inline button |
-| `src/telegram/handlers/setup.ts` | 修改 | `completeAgentProfile` 实现双层画像分流（见上）；移除 `BOT_PROFILE_FILENAME`、`PROMPT_PROFILE_FILENAME` 及相关文件读写函数 |
-| `src/telegram/bot.ts` | 修改 | 初始化 MemoryService（注入 botId），启动时清理过期记忆并执行一次日期备份 |
-| `src/telegram/config.ts` | 未扩展 | Memory 预算和 TTL 当前由 MemoryService 默认值控制，尚未暴露为 Telegram config |
+### 抽取输入
 
-**关键行为变更：**
-- `completeAgentProfile()` — 不再写 `PROMPT.md` + `BOT.md` 文件，改为写入中央记忆库；已有 global 画像时走"仅人设"快速通道
-- `buildPromptWithAgentContext()` — 整个移除；画像、人设和用户记忆统一由 `buildPromptWithMemory()` 注入
-- MemoryService 构造时持有 `botId`，调用方无需每次传递
+Post-Run Hook 不直接把整段历史丢给抽取器，而是传结构化上下文：
 
-**不动的（引擎相关）：**
-- `src/telegram/engine/*` — 引擎调用逻辑不变
-- `src/telegram/session/manager.ts` / `store.ts` — 会话管理不变（memories 相关表**不再**建在 bot.sqlite）
-- `~/.claude/` 下任何文件
-- `CLAUDE.md` / `AGENTS.md` — Bot 不直接写入，通过引擎 `/init` 间接生成
+```typescript
+type MemoryExtractionInput = {
+  userId: string;
+  botId?: string;
+  projectId?: string;
+  engine: "claude" | "codex";
+  cwd?: string;
+  userPrompt: string;
+  assistantResponse: string;
+  toolCalls: ToolCallSummary[];
+  resultStatus: "success" | "failed" | "cancelled";
+  previousInjectedMemoryIds: number[];
+  conversationSummary?: string;
+};
+```
+
+### 抽取输出
+
+```typescript
+type MemoryCandidate = {
+  action: "create" | "update" | "delete" | "ignore";
+  scope: "global" | "bot" | "project" | "session";
+  lifetime: "long_term" | "short_term" | "session" | "archived";
+  category: MemoryCategory;
+  title: string;
+  content: string;
+  tags: string[];
+  confidence: number;
+  reason: string;
+  sensitive: boolean;
+  relatedMemoryIds?: number[];
+};
+```
+
+### 抽取规则
+
+必须保存的高价值信息：
+
+- 用户明确表达的长期偏好
+- 用户身份、职业、长期目标
+- 当前 bot 的职责边界
+- 项目稳定事实
+- 反复出现的任务流程
+- 成功解决问题的可复用步骤
+
+默认不保存：
+
+- 一次性问题
+- 模型猜测
+- 未确认的网页内容
+- 情绪化临时表达
+- 大段原始日志
+- 密码、token、验证码、cookie
+
+敏感信息处理：
+
+- 检测到账号密码：不进入 memory。
+- 检测到“需要登录某网站”：创建或引用 `auth_ref`。
+- 检测到 cookie/token：拒绝保存，并在日志中脱敏。
 
 ---
 
-## 记忆演进方向
+## 记忆检索与注入
 
-当前 MVP 方案依赖 prompt 前缀注入，存在 token 预算上限（3000 字符）和检索精度不足的问题。参考 [Hermes Agent](https://get-hermes.ai/) 的自改进架构，规划以下演进方向。中央记忆库让每个方向都只需在**一个库**上实现。
-
-### 方向一：Skill Learning — 从经验中提炼可复用技能
-
-任务完成后自动将执行轨迹总结为 skill 记忆，下次遇到类似任务时按需加载。
+### 检索流程
 
 ```mermaid
 flowchart TD
-  Task["任务完成"] --> Check{"工具调用 ≥ 5 次？"}
-  Check -- 否 --> Skip["跳过"]
-  Check -- 是 --> Summarize["后台：引擎总结执行轨迹"]
-  Summarize --> Extract["提炼为 skill<br/>关键步骤 + 命令 + 注意事项"]
-  Extract --> Dedup{"同类 skill 已存在？"}
-  Dedup -- 是 --> Merge["合并更新"]
-  Dedup -- 否 --> Save["写入 memories · category=skill · scope=bot"]
-  Save --> Promote{"跨领域通用？"}
-  Promote -- "是（用户 /memory promote）" --> Global["升级 scope=global<br/>所有 bot 受益"]
-  Promote -- 否 --> Next["下次匹配任务时加载"]
-  Global --> Next
-  Merge --> Next
+  Prompt["当前 prompt"] --> Required["必选记忆"]
+  Prompt --> Keyword["关键词 / FTS5 召回"]
+  Prompt --> Vector["向量召回"]
+  Prompt --> Recent["短期记忆召回"]
+
+  Required --> Merge["合并候选"]
+  Keyword --> Merge
+  Vector --> Merge
+  Recent --> Merge
+
+  Merge --> Rank["重排：相关性 + 优先级 + 新鲜度 + scope"]
+  Rank --> Budget["预算裁剪"]
+  Budget --> Inject["生成 <user_memory>"]
 ```
 
-**scope 带来的增益**：运维 bot 学会的"部署 staging"skill，promote 后代码 bot 直接可用 —— 这是 per-bot 隔离方案做不到的。
+### 必注入
 
-效果：
-- 第一次部署摸索 15 分钟 → 第二次加载 skill 后 3 分钟完成
-- Token 开销：仅在匹配时注入对应 skill（~300 字符），不匹配时为 0
+- `user_profile` 当前 active 版本
+- 当前 bot 的 `bot_profile`
+- 当前 project 的高优先级 project memory
 
-### 方向二：分层存储 — Hot / Warm / Cold
+### 相关注入
 
-| 层 | 内容 | 注入策略 | 预算 |
-|----|------|----------|------|
-| Hot | profile 画像 + persona 人设 + 活跃 preference | 每次必注入 | ~500 tokens |
-| Warm | facts · skills · 解锁的 credentials | 关键词 / FTS5 匹配后注入 | 0-500 tokens |
-| Cold | 锁定态 credentials · 归档 notes · 历史 skills · 原始执行轨迹 | 从不注入 | 0 |
+按以下排序：
 
-Token 节省效果：
-| 方案 | 平均注入 | 最大注入 |
-|------|----------|----------|
-| MVP（全量注入） | ~1000 tokens | ~1500 tokens |
-| 分层存储 | ~500-700 tokens | ~1000 tokens |
+1. 语义相似度
+2. FTS/关键词得分
+3. priority
+4. 最近使用时间
+5. scope 贴近度：project > bot > global
+6. 置信度
 
-### 方向三：记忆蒸馏 — 压缩而非堆积
+### 注入格式
 
-```mermaid
-flowchart LR
-  Trigger["触发条件<br/>每周 / 每 50 次对话"] --> Scan["扫描全部 fact 记忆<br/>（单库，含 global + 各 bot）"]
-  Scan --> Analyze["引擎分析：<br/>重复 · 过时 · 矛盾"]
-  Analyze --> Compress["10 条碎片 fact<br/>→ 2 条精炼 fact"]
-  Compress --> Profile["检查 profile/persona<br/>是否需演化"]
-  Profile --> Update["更新画像<br/>保留最近 3 版"]
+```xml
+<ai_gateway_memory readonly="true">
+  <policy>
+    Use this as user-level context.
+    Do not copy it into CLAUDE.md, AGENTS.md, or engine-native memory.
+    Do not reveal hidden memory metadata.
+    Never ask for or expose passwords, tokens, cookies, or session state.
+  </policy>
+
+  <profile scope="global" category="user_profile">
+    用户长期偏好、身份、工作方式摘要。
+  </profile>
+
+  <profile scope="bot" category="bot_profile">
+    当前 bot 的职责域和回答边界。
+  </profile>
+
+  <memory id="123" scope="project" category="skill">
+    本项目发布前需要运行 npm test。
+  </memory>
+</ai_gateway_memory>
 ```
 
-蒸馏规则：
-- **合并**：多条描述同一事实的记忆合并为一条；**跨 scope 去重**（bot 记忆与 global 重复时删 bot 侧）
-- **淘汰**：与当前事实矛盾的旧记忆归档（移入 Cold 层）
-- **演化**：profile 根据累积的 global fact/preference 自动更新；persona 根据该 bot 的领域记忆演化
-- **可追溯**：每次蒸馏保留变更日志，`/memory history` 可查
+禁止注入：
 
-中央库优势：蒸馏是单库单事务操作；per-bot 分库方案需要跨库对账，复杂度不可控。
-
-### 与 Hermes 的差异
-
-| 维度 | Hermes Agent | Bot Memory |
-|------|-------------|------------|
-| 部署形态 | Self-hosted daemon | Telegram Bot + 引擎后端 |
-| 模型依赖 | 任意 LLM（含本地） | Claude / Codex |
-| Skill 存储 | 文件系统 Markdown | 中央 SQLite memories 表 |
-| 记忆检索 | SQLite FTS5 | Phase 1 关键词 → Phase 3 FTS5 |
-| 蒸馏执行 | 后台 LLM 进程 | 复用引擎 `executePrompt` |
-| 优势 | 完全自主、本地运行 | 利用引擎原生能力，无需额外后台 LLM |
+- 明文密码
+- API key
+- cookie
+- localStorage/sessionStorage 原始值
+- 浏览器 storage state 路径
+- auth session 解密材料
 
 ---
 
-## 实现计划与进度
+## Auth Session Broker
 
-### Phase 1 — MVP（中央库 + scope + 双层画像 + 引擎初始化）
-1. ✅ `core/config/paths.ts` — `getMemoryDbPath()` / `getMemoryBackupDir()`
-2. ✅ `memory/types.ts` — 含 scope、profile/persona 分类定义
-3. ✅ `memory/memory-store.ts` — 中央库建表（WAL）+ CRUD + `visibilityClause()` 收口 + scope 隔离单测
-4. ✅ `memory/memory-service.ts` — 业务逻辑 + 检索 + `saveProfile()` / `savePersona()` / `getProfile()`
-5. ✅ `memory/memory-inject.ts` — prompt 注入，profile + persona 必注入
-6. ✅ 集成到 `executePrompt` 的 Prompt middleware 构建链
-7. ✅ 画像构建流程：分流逻辑（首个 bot 完整引导 / 新 bot 仅人设快速通道）
-8. ✅ `/cwd` / setup 工作目录选择后触发引擎 `/init`
-9. ✅ 移除旧 `BOT.md` / `PROMPT.md` 文件写入与普通对话注入逻辑
-10. ✅ `/remember`（含 global/bot/profile/persona/temp 子命令）`/forget` `/memories` `/memory promote/clear` 命令
-11. ✅ `/remember` 写入时本地规则分类（含默认 scope 映射）+ 短期记忆 TTL 清理
-12. ◐ 启动时备份 `memory.sqlite` → `memory.backup/`（保留 7 份）；常驻每日定时备份未实现
-13. ❌ 旧 `BOT.md` / `PROMPT.md` 自动迁移未实现，需要专门迁移命令或脚本
+### 设计目标
 
-### Phase 2 — 加密
-14. `memory/memory-crypto.ts`
-15. `/memory pin` + `/memory unlock` + `/memory lock`（PIN 用户级，unlock 进程级）
-16. credential 强制加密流程
-17. 锁定/解锁态的不同注入策略
+解决“需要访问登录网站，但不想让大模型接触账号密码”的痛点。
 
-### Phase 3 — 智能检索
-18. SQLite FTS5 全文搜索替换关键词匹配（单库一份索引）
-19. 同义词/别名表优化召回率
-20. 两阶段召回（FTS5 候选 → 引擎筛选相关性）
-21. 冲突检测（同 scope + title/tag 提示覆盖）
-22. `/memory export` / `/memory import`
-23. ✅ `/memory promote`（bot → global）已在 Phase 1 提前实现
+> 账号密码不进入大模型上下文，登录校验交给 AI CLI 本地服务层。
 
-### Phase 4 — Skill Learning（越用越聪明）
-24. 任务完成后自动判定是否触发 skill 提炼（工具调用 ≥ 5 次）
-25. 引擎总结执行轨迹 → 写入 skill 记忆（scope=bot）
-26. 同类 skill 去重合并
-27. 任务匹配时按需加载 skill 注入 prompt
-28. skill 升级 global 的 promote 流程
+大模型只负责提出操作意图，例如“打开预算网站并查询基金亏损情况”。服务层负责：
 
-### Phase 5 — 记忆蒸馏与分层存储
-29. Hot / Warm / Cold 三层存储策略
-30. 周期蒸馏：碎片 fact 合并、跨 scope 去重、过时记忆归档
-31. profile / persona 自动演化（保留最近 3 版，支持回滚）
-32. 记忆使用统计 + `/memory history` 变更日志
-33. AI 自动建议记忆（分析引擎回复）
+- 判断是否已有可用登录态
+- 打开隔离浏览器上下文
+- 注入已保存 session state
+- 检测登录是否过期
+- 需要重新登录时切换到人工登录流程
+- 防止模型读取或输出敏感凭证
 
-### Phase 6 — 向量检索（Future · 按需扩展）
+### 工作流
 
-> 当前 FTS5 + 别名表 + 两阶段召回足以覆盖单用户几百条记忆的检索需求。
-> 满足以下任一条件时再引入，避免过早增加架构复杂度：
-> - 单用户记忆 >500 条，关键词召回噪声过大
-> - Skill 记忆积累量大，语义匹配需求强（"怎么部署" vs "上线流程" vs "发布到生产"）
-> - 多 bot 全局 skill 库规模化，需要语义级检索
+```mermaid
+sequenceDiagram
+  participant User
+  participant CLI as AI CLI Service
+  participant Broker as Auth Session Broker
+  participant Browser
+  participant Model
 
-**推荐方案**：sqlite-vec 扩展（SQLite 原生向量搜索，保持单文件中央库架构 —— 只需建一份向量索引）
+  User->>CLI: ai auth login budget
+  CLI->>Browser: 打开登录页
+  User->>Browser: 手动输入账号密码/验证码
+  Browser->>Broker: 登录成功后保存 storage state
+  Broker->>Broker: 加密保存本地登录态
 
-34. 评估 sqlite-vec vs sqlite-vss 扩展选型
-35. 记忆写入时通过 embedding API 计算向量并存储
-36. 检索时 query embedding + 余弦相似度 top-K（在 visibilityClause 过滤后的可见集内）
-37. 混合检索：FTS5 关键词 + 向量语义 加权融合排序
-38. embedding 缓存策略（避免重复计算，控制 API 调用成本）
+  User->>Model: 帮我查预算网站
+  Model->>CLI: 需要访问 budget
+  CLI->>Broker: checkSession("budget")
+  Broker-->>CLI: 已登录
+  CLI->>Browser: 使用已登录上下文打开页面
+  Browser-->>Model: 只返回页面可见信息/操作结果
+```
+
+### auth_profiles 表
+
+```sql
+CREATE TABLE auth_profiles (
+  id              TEXT PRIMARY KEY,
+  user_id         TEXT NOT NULL,
+  name            TEXT NOT NULL,
+  domains_json    TEXT NOT NULL,
+  login_url       TEXT NOT NULL,
+  check_url       TEXT,
+  storage_path    TEXT NOT NULL,
+  status          TEXT NOT NULL CHECK (status IN ('active', 'expired', 'revoked')),
+  last_login_at   INTEGER,
+  expires_at      INTEGER,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+```
+
+### 服务层命令
+
+```text
+ai auth login <name>
+ai auth list
+ai auth status <name>
+ai auth refresh <name>
+ai auth logout <name>
+ai auth clear <name>
+```
+
+Telegram 未来可以提供按钮入口，但密码输入必须发生在用户可控的网页登录流程中，不通过聊天消息传递。
+
+### 与记忆系统的关系
+
+记忆系统可以保存 auth 引用，但不保存 secret。
+
+示例：
+
+```text
+category: auth_ref
+scope: bot
+title: 预算网站登录态
+content: budget auth profile 可用于 budget.offerpilot.life，只读查询优先。
+```
+
+这条记忆只告诉模型“有一个名为 budget 的登录能力”，不包含账号、密码、cookie、storage state。
+
+### 安全边界
+
+| 风险 | 策略 |
+|------|------|
+| 模型看到密码 | 禁止密码进入 prompt、日志、memory |
+| 模型读取 cookie | Browser tool 不暴露 raw cookie/storage |
+| session 文件泄漏 | 本地加密，macOS Keychain 保存密钥 |
+| 登录过期 | 服务层检测并要求人工重新登录 |
+| 敏感操作误执行 | 删除、转账、下单、提交表单前强制用户确认 |
+| 钓鱼域名 | auth profile 固定 domain allowlist |
+| 日志泄密 | header、cookie、password、token 全部脱敏 |
+
+---
+
+## Telegram 与 ai use 的统一接入
+
+### 统一执行上下文
+
+```typescript
+type AiExecutionContext = {
+  userId: string;
+  source: "telegram" | "cli" | "browser" | "scheduler";
+  botId?: string;
+  projectId?: string;
+  cwd?: string;
+  engine: "claude" | "codex";
+  provider?: string;
+  model?: string;
+  sessionId?: string;
+};
+```
+
+Telegram：
+
+- `userId = telegram chat/user id`
+- `botId = Telegram bot token 派生 id`
+- `projectId = cwd hash`
+
+CLI：
+
+- `userId = local OS user 或 AI Gateway profile id`
+- `botId = cli profile / 默认 default`
+- `projectId = cwd hash`
+
+### 接入点
+
+| 入口 | Pre-Read Hook | Post-Run Hook |
+|------|---------------|---------------|
+| Telegram 普通消息 | `executePrompt()` 前 | `executePrompt()` 成功/失败后 |
+| Telegram `/claude` `/codex` 映射命令 | 执行前 | 执行后 |
+| CLI `ai use claude ...` | runner 启动前 | 子进程退出后 |
+| CLI `ai use codex ...` | runner 启动前 | 子进程退出后 |
+| Browser 自动化 | 打开页面前检查 auth | 页面任务完成后更新状态 |
+
+---
+
+## 用户体验
+
+新的默认体验：
+
+- 用户不需要输入任何记忆命令。
+- 聊天过程中自然表达偏好、身份、项目约定，系统自动提炼。
+- 系统默认静默保存高置信度记忆。
+- 对低置信度或影响较大的记忆，系统可以提示确认。
+- 用户可以查看、撤销、删除、导出记忆。
+
+记忆查看、撤销、删除、导出等能力通过统一设置/审计界面提供，不再设计独立的记忆类 Telegram 命令。
+
+---
+
+## 权限与确认策略
+
+| 行为 | 默认策略 |
+|------|----------|
+| 保存普通偏好 | 自动保存 |
+| 更新用户画像 | 自动更新草稿，周期性合并 |
+| 更新 bot 画像 | 当前 bot 内自动更新 |
+| 保存项目事实 | 自动保存到 project scope |
+| 保存 skill | 任务成功后自动候选，高置信度保存 |
+| 保存敏感信息 | 拒绝进入 memory |
+| 创建 auth profile | 必须用户主动登录 |
+| 使用已登录 session 读取页面 | 允许 |
+| 使用已登录 session 执行敏感写操作 | 必须确认 |
+| 删除大量记忆 | 必须确认 |
+
+---
+
+## 开发计划
+
+### Phase 1：Core Memory 抽离
+
+- 将 `src/telegram/memory` 迁移为 `src/core/memory`
+- 保持 Telegram 现有行为不变
+- 新增 `AiExecutionContext`
+- Telegram 通过 adapter 调用 core memory
+- CLI `ai use` 接入 Pre-Read Hook
+
+### Phase 2：Hook 自动记忆 MVP
+
+- 新增 Post-Run Hook
+- 本地规则 + 小模型/当前模型抽取记忆候选
+- 自动保存高置信度 `preference/fact/task_note`
+- 敏感信息检测和拒绝
+- 新增 `memory_events` 审计日志
+
+### Phase 3：长期/短期/项目记忆分层
+
+- 扩展 schema：`lifetime`、`project_id`、`status`
+- 自动 TTL 清理
+- 项目 scope 注入
+- 画像自动合并
+
+### Phase 4：Auth Session Broker
+
+- 新增 `ai auth login/list/status/logout/clear`
+- Playwright/Browser storage state 加密保存
+- macOS Keychain 保存加密密钥
+- Browser 自动化执行前检查登录态
+- 模型只能使用 auth capability，不能读取 secret
+
+### Phase 5：检索增强
+
+- FTS5 索引
+- alias/synonym 表
+- 混合检索：必选 + FTS + recent
+- 记忆使用统计
+
+### Phase 6：向量搜索
+
+- 已完成前置：`ai memory embedding` 配置和探测专用 embedding provider
+- embedding 生成：保存/更新记忆时生成向量
+- sqlite-vec/sqlite-vss 或外部向量库
+- 语义召回 + rerank
+- 大量记忆下的预算优化
+
+### Phase 7：蒸馏与 Skill Learning
+
+- 多轮对话自动压缩为 skill
+- 冲突检测
+- 重复合并
+- profile/persona 周期性更新
+- 可回滚 memory history
+
+---
+
+## 测试计划
+
+### Core Memory
+
+- scope 隔离：global/bot/project/session 不串读
+- lifetime：short_term 到期清理
+- 自动抽取：高置信度保存，低置信度 pending
+- 敏感拦截：password/token/cookie 不写入 memory
+- 注入预算：profile/persona 必保留，其他按相关性裁剪
+
+### Telegram
+
+- 普通聊天自动写入记忆
+- 切换 `/claude` `/codex` 记忆仍可用
+- 统一设置/审计界面可管理自动写入的记忆
+
+### CLI
+
+- `ai use claude ...` 执行前注入可见记忆
+- `ai use codex ...` 执行后自动提炼记忆
+- cwd 改变时 project scope 生效
+
+### Auth Session
+
+- 首次登录只在浏览器人工输入
+- 登录态可复用
+- 登录过期会提示重新登录
+- cookie/token 不出现在 prompt、日志、memory
+- 非 allowlist 域名不能复用 auth profile
+- 敏感操作需要确认
+
+---
+
+## 关键结论
+
+1. 记忆系统应该是 AI Gateway Core 能力，不属于 Telegram。
+2. 旧的手动记忆命令应移除，默认依靠 hook 自动记忆。
+3. 长期记忆、短期记忆、项目记忆和会话记忆必须分层。
+4. 用户画像和 bot 画像是必注入核心记忆，其他记忆按相关性检索。
+5. SQLite 继续作为主存储，Markdown 只用于导出和人工审计。
+6. 向量搜索可以扩展；当前已完成 embedding provider 配置，真正的向量入库、召回和 rerank 应在 FTS5 和事件审计稳定后再做。
+7. 账号密码不属于 memory，登录态由 Auth Session Broker 维护。
+8. 大模型只使用服务层提供的登录能力，不接触 secret。
