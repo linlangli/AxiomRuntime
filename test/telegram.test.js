@@ -33,9 +33,12 @@ import {
   buildAgentProfileKeyboard,
   buildCliKeyboard,
   buildModelPickerKeyboard,
+  buildMemoryClearConfirmKeyboard,
+  buildMemoryManageKeyboard,
   buildProviderPickerKeyboard,
   buildReadyKeyboard,
   buildReadyModeKeyboard,
+  buildRememberScopeKeyboard,
   buildUsagePricingKeyboard,
   buildWorkdirListKeyboard,
   buildWorkdirStartKeyboard
@@ -49,6 +52,14 @@ import { TelegramHandlerRegistry } from "../dist/telegram/handler-registry.js";
 import { TelegramTaskLifecycleRegistry } from "../dist/telegram/lifecycle-registry.js";
 import { deleteRecentChatMessages, registerCommands, shouldHandleStartCommand } from "../dist/telegram/handlers/command.js";
 import { registerDocumentHandler } from "../dist/telegram/handlers/document.js";
+import {
+  handleMemoryCommand,
+  handleMemoryManageCallback,
+  handleMemoryManageInput,
+  handleRememberCommand,
+  handleRememberInput,
+  handleRememberScopeCallback
+} from "../dist/telegram/handlers/memory.js";
 import { executePrompt, registerMessageHandler, runCliInit, startTypingStatus } from "../dist/telegram/handlers/message.js";
 import { completeAgentProfile, inferEngineFromModel, setWorkdir } from "../dist/telegram/handlers/setup.js";
 import { parseModelPriceInput } from "../dist/telegram/handlers/usage.js";
@@ -182,6 +193,10 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     assert.equal(custom.setupStep, "custom_workdir");
     const profile = manager.update(setup.id, { setupStep: "agent_profile" });
     assert.equal(profile.setupStep, "agent_profile");
+    manager.update(setup.id, { setupStep: "remember_global" });
+    assert.equal(manager.getOrCreate(123).setupStep, "remember_global");
+    manager.update(setup.id, { setupStep: "memory_promote" });
+    assert.equal(manager.getOrCreate(123).setupStep, "memory_promote");
     manager.rememberWorkdir(123, path.join(tempDir, "project-a"));
     assert.deepEqual(manager.getWorkdirs(123), [path.join(tempDir, "project-a")]);
     store.close();
@@ -307,6 +322,155 @@ test("memory service stores global profile and isolates bot scoped memories", as
     assert.match(injected, /用户偏好中文直接回答/);
     assert.match(injected, /投资 bot/);
     assert.doesNotMatch(injected, /代码 bot/);
+    store.close();
+  });
+});
+
+test("remember command uses interactive scope picker and saves next message", async () => {
+  await withTempHome(async (tempDir) => {
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "111:abc",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const memoryStore = new MemoryStore(path.join(tempDir, "memory.sqlite"));
+    const memory = new MemoryService({ botId: getBotIdFromToken(config.token), store: memoryStore });
+    const deps = {
+      sessionManager: manager,
+      approvalManager: { request: async () => true },
+      config,
+      memoryService: memory
+    };
+
+    const commandReplies = [];
+    await handleRememberCommand({
+      chat: { id: 123 },
+      match: "",
+      reply: async (text, extra) => commandReplies.push([text, extra])
+    }, deps);
+
+    assert.equal(commandReplies[0][0], "🤖 这条记忆保存到哪里？");
+    assert.deepEqual(commandReplies[0][1].reply_markup.inline_keyboard, [[
+      { text: "global", callback_data: "memory:remember:scope:global" },
+      { text: "bot", callback_data: "memory:remember:scope:bot" },
+      { text: "auto", callback_data: "memory:remember:scope:auto" }
+    ]]);
+
+    const edits = [];
+    await handleRememberScopeCallback({
+      chat: { id: 123 },
+      editMessageText: async (text) => edits.push(text),
+      reply: async (text) => edits.push(text)
+    }, deps, "global");
+    assert.equal(edits[0], "🤖 输入要记录的记忆吧");
+    assert.equal(manager.getOrCreate(123).setupStep, "remember_global");
+
+    const replies = [];
+    const session = manager.getOrCreate(123);
+    const handled = await handleRememberInput({
+      chat: { id: 123 },
+      reply: async (text) => replies.push(text)
+    }, deps, "我喜欢直接给结论", session);
+
+    assert.equal(handled, true);
+    assert.equal(manager.getOrCreate(123).setupStep, "ready");
+    const entry = memory.listVisible(123).find((item) => item.content === "我喜欢直接给结论");
+    assert.equal(entry?.scope, "global");
+    assert.equal(entry?.category, "preference");
+    assert.match(replies[0], /Scope：<code>global<\/code> · Category：<code>preference<\/code>/);
+    memoryStore.close();
+    store.close();
+  });
+});
+
+test("memory command uses interactive management buttons", async () => {
+  await withTempHome(async (tempDir) => {
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "111:abc",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const memoryStore = new MemoryStore(path.join(tempDir, "memory.sqlite"));
+    const memory = new MemoryService({ botId: getBotIdFromToken(config.token), store: memoryStore });
+    const deps = {
+      sessionManager: manager,
+      approvalManager: { request: async () => true },
+      config,
+      memoryService: memory
+    };
+
+    const botEntry = memory.remember(123, {
+      scope: "bot",
+      content: "部署 staging 需要先跑 npm test"
+    });
+    memory.remember(123, {
+      scope: "bot",
+      content: "临时记录本周要复盘发布流程"
+    });
+
+    const commandReplies = [];
+    await handleMemoryCommand({
+      chat: { id: 123 },
+      match: "",
+      reply: async (text, extra) => commandReplies.push([text, extra])
+    }, deps);
+    assert.equal(commandReplies[0][0], "🤖 选择你要管理的记忆操作吧");
+    assert.deepEqual(commandReplies[0][1].reply_markup.inline_keyboard, buildMemoryManageKeyboard().inline_keyboard);
+
+    const edits = [];
+    await handleMemoryManageCallback({
+      chat: { id: 123 },
+      editMessageText: async (text, extra) => edits.push([text, extra]),
+      reply: async (text, extra) => edits.push([text, extra])
+    }, deps, "promote");
+    assert.equal(edits[0][0], "🤖 输入要升级为 global 的记忆编号吧");
+    assert.equal(manager.getOrCreate(123).setupStep, "memory_promote");
+
+    const replies = [];
+    const session = manager.getOrCreate(123);
+    const handled = await handleMemoryManageInput({
+      chat: { id: 123 },
+      reply: async (text) => replies.push(text)
+    }, deps, String(botEntry.id), session);
+    assert.equal(handled, true);
+    assert.equal(manager.getOrCreate(123).setupStep, "ready");
+    assert.equal(memory.listVisible(123).find((entry) => entry.id === botEntry.id)?.scope, "global");
+    assert.match(replies[0], /已升级为 global/);
+
+    await handleMemoryManageCallback({
+      chat: { id: 123 },
+      editMessageText: async (text, extra) => edits.push([text, extra]),
+      reply: async (text, extra) => edits.push([text, extra])
+    }, deps, "clear", "bot");
+    assert.equal(edits.at(-1)[0], "🤖 确认清空 bot 记忆吗？");
+    assert.deepEqual(edits.at(-1)[1].reply_markup.inline_keyboard, buildMemoryClearConfirmKeyboard("bot").inline_keyboard);
+
+    await handleMemoryManageCallback({
+      chat: { id: 123 },
+      editMessageText: async (text, extra) => edits.push([text, extra]),
+      reply: async (text, extra) => edits.push([text, extra])
+    }, deps, "clear_confirm", "bot");
+    assert.match(edits.at(-1)[0], /已清空 bot 记忆 1 条/);
+    assert.equal(memory.listVisible(123).filter((entry) => entry.scope === "bot").length, 0);
+    memoryStore.close();
     store.close();
   });
 });
@@ -862,6 +1026,20 @@ test("workdir setup keyboards use compact labels and absolute path buttons", () 
   assert.deepEqual(buildUsagePricingKeyboard().inline_keyboard, [[
     { text: "输入价格", callback_data: "usage:price:input" },
     { text: "未知", callback_data: "usage:price:unknown" }
+  ]]);
+  assert.deepEqual(buildRememberScopeKeyboard().inline_keyboard, [[
+    { text: "global", callback_data: "memory:remember:scope:global" },
+    { text: "bot", callback_data: "memory:remember:scope:bot" },
+    { text: "auto", callback_data: "memory:remember:scope:auto" }
+  ]]);
+  assert.deepEqual(buildMemoryManageKeyboard().inline_keyboard, [
+    [{ text: "升级为 global", callback_data: "memory:manage:promote" }],
+    [{ text: "清空 bot 记忆", callback_data: "memory:manage:clear:bot" }],
+    [{ text: "清空 global 记忆", callback_data: "memory:manage:clear:global" }]
+  ]);
+  assert.deepEqual(buildMemoryClearConfirmKeyboard("bot").inline_keyboard, [[
+    { text: "确认清空", callback_data: "memory:manage:clear_confirm:bot" },
+    { text: "取消", callback_data: "memory:manage:panel" }
   ]]);
 });
 

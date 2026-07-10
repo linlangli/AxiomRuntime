@@ -21,6 +21,7 @@ import {
   showWorkdirStart
 } from "./setup.js";
 import { runCliInit, type MessageHandlerDeps } from "./message.js";
+import { handleMemoryManageCallback, handleRememberScopeCallback, type RememberScopeMode } from "./memory.js";
 import { askUsagePrice, showUsagePanel } from "./usage.js";
 
 export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
@@ -238,6 +239,24 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
       }
     }
 
+    if (data.startsWith("memory:remember:scope:")) {
+      const mode = parseRememberScopeMode(data.split(":")[3]);
+      if (!mode) {
+        await ctx.answerCallbackQuery({ text: "Invalid memory scope." });
+        return;
+      }
+      await ctx.answerCallbackQuery();
+      await handleRememberScopeCallback(ctx, deps, mode);
+      return;
+    }
+
+    if (data.startsWith("memory:manage:")) {
+      const [, , action, scope] = data.split(":");
+      await ctx.answerCallbackQuery();
+      await handleMemoryManageCallback(ctx, deps, parseMemoryManageAction(action), scope);
+      return;
+    }
+
     await ctx.answerCallbackQuery();
   });
 }
@@ -259,4 +278,13 @@ function isTelegramPermissionMode(value: string | undefined): value is TelegramP
 
 function parseTelegramEngine(value: string | undefined): "claude" | "codex" | undefined {
   return value === "claude" || value === "codex" ? value : undefined;
+}
+
+function parseRememberScopeMode(value: string | undefined): RememberScopeMode | null {
+  return value === "global" || value === "bot" || value === "auto" ? value : null;
+}
+
+function parseMemoryManageAction(value: string | undefined): "panel" | "promote" | "clear" | "clear_confirm" {
+  if (value === "promote" || value === "clear" || value === "clear_confirm") return value;
+  return "panel";
 }

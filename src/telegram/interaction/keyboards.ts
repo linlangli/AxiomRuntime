@@ -126,11 +126,35 @@ export function buildUsagePricingKeyboard(): InlineKeyboard {
     .text("未知", "usage:price:unknown");
 }
 
+export function buildRememberScopeKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("global", "memory:remember:scope:global")
+    .text("bot", "memory:remember:scope:bot")
+    .text("auto", "memory:remember:scope:auto");
+}
+
+export function buildMemoryManageKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("升级为 global", "memory:manage:promote")
+    .row()
+    .text("清空 bot 记忆", "memory:manage:clear:bot")
+    .row()
+    .text("清空 global 记忆", "memory:manage:clear:global");
+}
+
+export function buildMemoryClearConfirmKeyboard(scope: MemoryClearScope): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("确认清空", `memory:manage:clear_confirm:${scope}`)
+    .text("取消", "memory:manage:panel");
+}
+
 export function formatPermissionModeLabel(mode: TelegramPermissionMode): string {
   if (mode === "acceptEdits") return "接受编辑";
   if (mode === "bypassPermissions") return "跳过权限";
   return "默认权限";
 }
+
+type MemoryClearScope = "bot" | "global";
 
 function buildProviderPickCallback(scope: PickerScope, index: number, forcedEngine?: TelegramEngineName): string {
   return ["setup", "ready"].includes(scope) && forcedEngine

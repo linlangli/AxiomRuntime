@@ -7,6 +7,10 @@ export type TelegramSetupStep =
   | "custom_workdir"
   | "edit_custom_workdir"
   | "usage_price_input"
+  | "remember_global"
+  | "remember_bot"
+  | "remember_auto"
+  | "memory_promote"
   | "cli"
   | "agent_profile"
   | "ready";

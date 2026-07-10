@@ -13,6 +13,7 @@ import { emitTelegramTaskCompleted, emitTelegramTaskFailed } from "../lifecycle-
 import type { SessionManager, TelegramSession } from "../session/manager.js";
 import type { MemoryService } from "../memory/memory-service.js";
 import { writeTelegramLog } from "../log.js";
+import { handleMemoryManageInput, handleRememberInput } from "./memory.js";
 import { completeAgentProfile, remindSetup, setWorkdir, showReadyCard } from "./setup.js";
 import { handleUsagePriceInput } from "./usage.js";
 
@@ -55,6 +56,12 @@ export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void
     const session = deps.sessionManager.getOrCreate(chatId);
     if (text.startsWith("/")) {
       await executeMappedSlashCommand(ctx, deps, text, session);
+      return;
+    }
+    if (await handleMemoryManageInput(ctx, deps, text, session)) {
+      return;
+    }
+    if (await handleRememberInput(ctx, deps, text, session)) {
       return;
     }
     if (session.setupStep === "custom_workdir") {
