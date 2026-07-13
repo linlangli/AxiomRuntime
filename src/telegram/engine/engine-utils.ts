@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CliToolType, Provider } from "../../core/types.js";
-import { resolveProviderForTool } from "../../core/runner/fallback.js";
+import { resolveExactProviderForTool, resolveProviderForTool } from "../../core/runner/fallback.js";
 import { buildRunnerEnv, cleanupTemporaryFiles, getToolBaseUrl, writeTemporaryClaudeSettings } from "../../core/runner/tool-runner.js";
 import { resolveToolCommand } from "../../core/runner/command-resolver.js";
 import type { PermissionRequest } from "./types.js";
@@ -15,7 +15,12 @@ export type RuntimeSelection = {
 };
 
 export async function prepareEngineRuntime(tool: CliToolType, providerName?: string, modelName?: string): Promise<RuntimeSelection> {
-  const { provider, model } = await resolveProviderForTool(tool, providerName, modelName);
+  // Telegram resolves and orders fallback candidates before invoking an
+  // engine. Once a candidate is selected, execute it exactly so the engine
+  // cannot perform a second, conflicting provider fallback.
+  const { provider, model } = providerName
+    ? await resolveExactProviderForTool(tool, providerName, modelName)
+    : await resolveProviderForTool(tool, providerName, modelName);
   const command = resolveWorkingCommand(tool);
   if (!command) {
     throw new Error(`Failed to find ${tool} CLI. Run \`ai doctor\` to check local CLI installation.`);

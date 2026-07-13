@@ -8,7 +8,7 @@ import { readCache, recordProviderRuntimeFailure, upsertProviderCache } from "..
 import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
 import { getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
-import { resolveProviderForTool } from "../dist/core/runner/fallback.js";
+import { resolveExactProviderForTool, resolveProviderForTool, resolveProviderCandidatesForTool } from "../dist/core/runner/fallback.js";
 import { checkAndRecordMemoryEmbeddingConfig } from "../dist/core/memory/embedding-check.js";
 import {
   clearMemoryEmbeddingConfig,
@@ -278,6 +278,62 @@ test("resolveProviderForTool skips unhealthy providers and falls back", async ()
     const resolved = await resolveProviderForTool("codex");
     assert.equal(resolved.provider.name, "good");
     assert.equal(resolved.model, "gpt-5.4");
+  });
+});
+
+test("explicit model requests drop providers whose catalog lacks that model", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "codex", baseUrl: "https://codex.test/v1", apiKey: "codex", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "claude-only", baseUrl: "https://claude.test/v1", apiKey: "claude", mode: "auto", level: 2, model: "claude-opus-4-6" }
+    ]);
+    await upsertProviderCache("codex", { status: "ok", models: ["gpt-5.5", "gpt-5.6-sol"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("claude-only", { status: "ok", models: ["claude-opus-4-6"], lastCheckedAt: "now", lastError: null });
+
+    const candidates = await resolveProviderCandidatesForTool("codex", undefined, "gpt-5.6-sol");
+    assert.deepEqual(candidates.map((candidate) => candidate.provider.name), ["codex"]);
+    assert.equal(candidates.every((candidate) => candidate.model === "gpt-5.6-sol"), true);
+  });
+});
+
+test("expired runtime circuits become half-open candidates", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "recovering", baseUrl: "https://recovering.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.6-sol" }
+    ]);
+    await upsertProviderCache("recovering", {
+      status: "error",
+      models: ["gpt-5.6-sol"],
+      lastCheckedAt: "now",
+      lastError: "temporary upstream failure",
+      consecutiveFailures: 3,
+      circuitOpenUntil: new Date(Date.now() - 1_000).toISOString()
+    });
+
+    const candidates = await resolveProviderCandidatesForTool("codex", "recovering", "gpt-5.6-sol");
+    assert.deepEqual(candidates.map((candidate) => candidate.provider.name), ["recovering"]);
+  });
+});
+
+test("exact provider resolution ignores health routing after candidate selection", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "selected", baseUrl: "https://selected.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.6-sol" },
+      { name: "other", baseUrl: "https://other.test/v1", apiKey: "key", mode: "auto", level: 2, model: "gpt-5.6-sol" }
+    ]);
+    await upsertProviderCache("selected", {
+      status: "error",
+      models: ["gpt-5.6-sol"],
+      lastCheckedAt: "now",
+      lastError: "temporary upstream failure",
+      consecutiveFailures: 3,
+      circuitOpenUntil: new Date(Date.now() + 60_000).toISOString()
+    });
+    await upsertProviderCache("other", { status: "ok", models: ["gpt-5.6-sol"], lastCheckedAt: "now", lastError: null });
+
+    const resolved = await resolveExactProviderForTool("codex", "selected", "gpt-5.6-sol");
+    assert.equal(resolved.provider.name, "selected");
+    assert.equal(resolved.model, "gpt-5.6-sol");
   });
 });
 

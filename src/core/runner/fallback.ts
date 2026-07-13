@@ -30,6 +30,33 @@ export async function resolveProviderForTool(
   return resolved;
 }
 
+export async function resolveExactProviderForTool(
+  tool: CliToolType,
+  providerName: string,
+  modelName?: string
+): Promise<ResolvedRun> {
+  const providers = await readProviders();
+  const provider = providers.find((candidate) => candidate.name === providerName);
+  if (!provider) {
+    throw new Error(`Provider not found: ${providerName}`);
+  }
+
+  const cache = await readCache();
+  const models = cache.providers[provider.name]?.models ?? [];
+  const model = resolveModel(tool, provider.model, models, modelName);
+  if (!model) {
+    throw new Error(`Provider ${providerName} does not offer a compatible ${tool} model.`);
+  }
+
+  await writeLog({
+    category: "strategy",
+    action: "provider_resolved_exact",
+    message: `Resolved exact provider ${provider.name} with model ${model}.`,
+    metadata: { provider: provider.name, tool, model, requestedProvider: providerName, requestedModel: modelName ?? null }
+  });
+  return { provider, model };
+}
+
 export async function resolveProviderCandidatesForTool(
   tool: CliToolType,
   providerName?: string,
@@ -63,7 +90,9 @@ export async function resolveProviderCandidatesForTool(
       continue;
     }
 
-    if (cached?.status === "error") {
+    // Runtime-opened circuits become half-open after their cooldown. A stale
+    // status=error must not keep a provider disabled forever after the timer.
+    if (cached?.status === "error" && !cached.circuitOpenUntil) {
       await writeLog({
         level: "warn",
         category: "strategy",
@@ -99,6 +128,13 @@ export async function resolveProviderCandidatesForTool(
 
 function resolveModel(tool: CliToolType, defaultModel: string, cachedModels: string[], requestedModel?: string): string | null {
   if (requestedModel) {
+    // Only offer the requested model when the provider's known catalog serves
+    // it; otherwise drop this provider from the rotation instead of guaranteeing
+    // an upstream model_not_found. An unknown/never-probed catalog is allowed
+    // through optimistically so newly added providers still get a chance.
+    if (cachedModels.length && !cachedModels.includes(requestedModel)) {
+      return null;
+    }
     return requestedModel;
   }
   if (defaultModel && isModelCompatible(tool, defaultModel)) {
