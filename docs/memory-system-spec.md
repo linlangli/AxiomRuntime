@@ -76,7 +76,7 @@ Claude Code 的 `CLAUDE.md`、Codex 的 `AGENTS.md` 仍然由各自 `/init` 管�
 6. 每个阶段必须同时交付代码、migration、单元测试、故障注入测试、可观测日志和本文对应的验收用例。
 7. 功能未满足验收标准时使用 feature flag 关闭，不得以删除该功能作为解决方案。
 
-规范优先级：本节与「最终数据模型」「执行入口协议」「已知风险与实施决策」属于规范性章节；示例和 Mermaid 图仅用于说明。发生冲突时，按上述规范性章节的更具体条款执行，并修正文档冲突。
+规范优先级：本节与「最终增强架构」「最终数据模型」「执行入口协议」「风险与强制实施决策」属于规范性章节；示例 Mermaid 图用于解释规范，但图中出现的核心组件和安全边界不是可选项。发生冲突时，按上述规范性章节的更具体条款执行，并修正文档冲突。
 
 ---
 
@@ -96,27 +96,113 @@ flowchart TD
   Entry --> CliUse
   Entry --> Future
 
-  Telegram --> RuntimeHook["Runtime Hook Pipeline"]
-  CliUse --> RuntimeHook
-  Future --> RuntimeHook
+  Telegram --> Proxy["Memory Proxy<br/>本地 HTTP 拦截"]
+  CliUse --> Proxy
+  Future --> Proxy
 
-  RuntimeHook --> PreRead["Memory Pre-Read Hook"]
+  Proxy --> PreRead["Memory Pre-Read Hook"]
   PreRead --> Retriever["Memory Retriever"]
   Retriever --> MemoryStore["Core Memory Store<br/>SQLite + FTS + Vector"]
   Retriever --> Injection["Prompt Injection Builder"]
 
-  Injection --> Engine["Claude Code / Codex"]
-  Engine --> Result["Execution Result"]
+  Injection --> Proxy
+  Proxy --> UpstreamAPI["Upstream API<br/>Anthropic / OpenAI Provider"]
+  UpstreamAPI --> Proxy
+  Proxy --> CLI["Claude Code / Codex CLI<br/>（收到注入后的 response）"]
 
-  Result --> PostWrite["Memory Post-Run Hook"]
+  Proxy --> PostWrite["Memory Post-Run Hook"]
   PostWrite --> Extractor["Memory Extractor"]
   Extractor --> Policy["Policy + Safety Filter"]
   Policy --> MemoryStore
 
-  RuntimeHook --> AuthBroker["Auth Session Broker"]
+  Proxy --> AuthBroker["Auth Session Broker"]
   AuthBroker --> BrowserState["Encrypted Browser State<br/>Keychain / local state"]
   AuthBroker --> BrowserTool["Browser Automation"]
 ```
+
+> 所有入口都通过 spawn CLI + Memory Proxy 执行。Telegram bot 使用 `--output-format stream-json` headless 模式 spawn CLI，CLI 入口使用原生 TUI 模式 spawn CLI，两者共用同一套 Proxy 链路。区别只在用户交互层（Telegram 消息 vs 终端 TUI）。
+
+### 最终增强架构
+
+下面是系统完成全部阶段后的目标架构。它不是替换前述基础链路，而是在统一 Hook、Memory Proxy 和 SQLite 主存储之上，增加类型化记忆、证据账本、来源权限、规划式检索、时序事件图、可验证 Skill、未来意图、负向经验和能力安全内核。
+
+```mermaid
+flowchart TD
+  Input["执行输入<br/>Telegram / CLI / Scheduler / Browser"] --> Identity["身份、Scope 与隐私策略"]
+  Identity --> Planner["记忆查询规划器<br/>意图 / 实体 / 时间 / 类型 / Scope"]
+
+  Planner --> Working["工作记忆 / 激活记忆<br/>当前会话与热点上下文"]
+  Planner --> Semantic["语义记忆<br/>Claim + Evidence"]
+  Planner --> Episodic["情景记忆<br/>Episode / Event / Outcome"]
+  Planner --> Graph["时序事件超图<br/>Entity / Relation / Event"]
+  Planner --> Skills["程序记忆<br/>Verified Skill IR"]
+  Planner --> Future["前瞻记忆<br/>Goal / Commitment / Reminder"]
+  Planner --> Negative["负向记忆<br/>Failure / Avoidance / Rejection"]
+
+  Working --> Fusion["混合召回融合<br/>FTS / Vector / Recent / Graph / Temporal"]
+  Semantic --> Fusion
+  Episodic --> Fusion
+  Graph --> Fusion
+  Skills --> Fusion
+  Future --> Fusion
+  Negative --> Fusion
+
+  Fusion --> Authority["来源权限与污染传播过滤<br/>Origin-bound Authority"]
+  Authority --> Conflict["时序与冲突消解<br/>有效时间 / 证据支持与反驳"]
+  Conflict --> Reranker["重排与证据覆盖<br/>相关性 / 权限 / 新鲜度 / 效用 / 成本"]
+  Reranker --> Compiler["上下文编译器<br/>Profile / Memory / Skill / Constraint"]
+  Compiler --> Model["Claude Code / Codex"]
+
+  Model --> Capability["能力安全内核<br/>临时 Capability Handle"]
+  Model --> Search["受限只读 Memory Search Tool"]
+  Search --> Planner
+
+  Model --> Durable["持久化 Execution / Episode / Job"]
+  Capability --> Durable
+  Durable --> Extract["候选记忆编译器"]
+  Extract --> Verify["证据、NLI 与工具结果验证"]
+  Verify --> Automata["分类 Policy Automata<br/>按记忆类型独立迁移"]
+
+  Automata --> Semantic
+  Automata --> Graph
+  Automata --> Skills
+  Automata --> Future
+  Automata --> Negative
+
+  Semantic --> Distill["周期巩固与抽象<br/>去重 / 压缩 / 演化 / 冷热迁移"]
+  Episodic --> Distill
+  Graph --> Distill
+  Distill --> Profiles["版本化 Profile Snapshot"]
+  Distill --> Skills
+  Distill --> Parametric["可逆规则 / Adapter 编译产物"]
+
+  Events["不可变事件与完整性 Hash Chain"] --> Durable
+  Shadow["Shadow Memory 实验与回放评测"] -.-> Planner
+  Shadow -.-> Reranker
+  Shadow -.-> Automata
+```
+
+#### 中文链路说明
+
+1. **身份与安全先行**：所有入口先解析 canonical account、bot、project、会话类型和 privacy policy。身份不明确或 scope 校验失败时禁止记忆读写，不能靠模型猜测用户或项目。
+2. **查询规划而非固定关键词搜索**：`MemoryQueryPlanner` 将当前任务拆成意图、实体、时间范围、所需记忆类型和检索路线；简单请求走快速路径，复杂问题可以组合语义、情景、图谱、Skill、未来承诺和负向经验。
+3. **多层记忆并行召回**：工作记忆负责当前会话热点；语义记忆保存可验证 Claim；情景记忆保存执行经过；程序记忆保存可验证 Skill；前瞻记忆保存未来触发条件；负向记忆保存失败和禁忌。
+4. **先过滤权限，再判断事实**：所有候选先经过 origin-bound authority 和污染传播过滤。模型摘要、蒸馏或工具转述不能把 external 来源洗白成可信用户事实。
+5. **冲突和时间是检索主流程的一部分**：系统在注入前判断事实当前是否有效、是否已被新版本取代、支持与反驳证据各有多少；不能把互相冲突的记忆不加说明地同时交给主模型。
+6. **上下文是编译产物**：Profile、普通记忆、约束、Skill 和 auth capability 由 `ContextCompiler` 按 audience、token budget 和任务目的生成；Profile Snapshot 不是事实源，随底层 Claim 更新而重新编译。
+7. **允许一次受限的主动回忆**：初始 Pre-Read 后，如果主模型发现信息不足，可以调用只读 `memory.search` 补查；该工具继续执行相同的 user/scope/privacy/authority 过滤，并受调用次数和 token 上限约束。
+8. **工具能力与记忆完全解耦**：模型只能获得当前 execution 临时签发的 capability handle；记忆正文、Skill 或网页内容都不能创建、扩权或延长 capability。
+9. **写入采用证据驱动状态机**：Post-Run 先持久化 execution、episode 和 durable job，再异步抽取 Claim、Evidence、Event、Skill 候选；本地 Policy Automata 按类别决定 active、pending、验证、归档或拒绝。
+10. **长期记忆持续巩固而非只做追加**：Periodic Distill 负责多粒度摘要、Profile 编译、Skill 演化、冷热迁移、重复压缩、失败模式提取和可逆 parametric promotion。
+11. **所有演化均可回放和审计**：写入、合并、取代、权限变化、Skill 升级和 Profile 编译均写不可变事件；事件建立 hash chain，Shadow Memory 使用真实脱敏轨迹回放候选策略而不影响生产回答。
+
+#### 设计目标
+
+- **不阉割能力**：FTS、向量、时序、图谱、蒸馏、Skill、Auth、主动检索和多 Agent 共享均保留，低可行性环节通过结构化验证和回放机制增强，而不是删除。
+- **记忆是一等系统资源**：记忆具有类型、来源权限、证据、有效时间、版本、生命周期、检索成本和可迁移表示，不等同于一段可搜索文本。
+- **模型负责理解，内核负责裁决**：模型可以提出候选、查询计划和 Skill 草案，但数据库状态迁移、权限提升、冲突取代和工具授权必须由本地确定性组件执行。
+- **完整性优先于召回率**：禁止泄漏、错误自动激活、来源洗白和过期事实误用的优先级高于多召回几条相关记忆。
+- **演化必须可验证**：任何声称“更聪明”的检索、蒸馏或 Skill 策略都必须通过离线黄金集、历史回放、shadow mode 和线上匿名质量指标证明。
 
 ### 模块边界
 
@@ -125,9 +211,9 @@ flowchart TD
 | `core/memory` | 记忆存储、分类、检索、注入、自动提取、蒸馏 |
 | `core/auth-session` | 登录态维护、cookie/storage state、凭证隔离、人工登录流程 |
 | `core/execution` | 统一执行编排、hook 生命周期、trace、入口能力校验、持久化 Post-Run 入队 |
-| `telegram/*` | Telegram UI、session、消息收发、调用 core memory |
-| `cli/*` | `ai use` 执行入口、调用 core memory |
-| `runner/*` | Claude Code / Codex 进程与流式事件适配，不直接理解记忆策略 |
+| `core/proxy` | 本地 Memory Proxy，拦截 CLI→API 的 HTTP 请求实现记忆注入与事件捕获；所有入口共用 |
+| `telegram/*` | Telegram UI、session、消息收发、spawn CLI（headless stream-json 模式） |
+| `cli/*` | `ai use` 执行入口、spawn CLI（原生 TUI 模式） |
 
 ### 目标目录结构
 
@@ -135,27 +221,41 @@ flowchart TD
 src/core/
 ├── execution/
 │   ├── execution-context.ts      # AiExecutionContext 与 capability
-│   ├── execution-orchestrator.ts # Pre-Read -> engine -> durable Post-Run
-│   └── execution-events.ts       # 统一流式事件协议
+│   └── execution-orchestrator.ts # spawn CLI + proxy 生命周期 + durable Post-Run
 ├── memory/
 │   ├── memory-service.ts         # 唯一公开 facade
 │   ├── memory-store.ts           # SQL 与短事务
-│   ├── memory-policy.ts          # trust/confidence/safety/状态迁移
-│   ├── memory-retriever.ts       # required/FTS/vector/recent/graph
+│   ├── memory-policy.ts          # category automata/confidence/safety/状态迁移
+│   ├── memory-authority.ts       # origin authority/taint/独立证据判定
+│   ├── memory-derivation.ts      # Evidence DAG/结构化确认/影响面重算
+│   ├── memory-query-planner.ts   # 意图/实体/时态/类型检索计划
+│   ├── memory-retriever.ts       # required/FTS/vector/recent/graph/episode
 │   ├── memory-ranker.ts          # 分数归一与融合
-│   ├── memory-injection.ts       # token 预算与只读块
+│   ├── memory-context-compiler.ts# profile/memory/skill/constraint 上下文编译
 │   ├── memory-extractor.ts       # 模型适配与输出校验
+│   ├── memory-verifier.ts        # claim/evidence/NLI/tool outcome 验证
 │   ├── memory-worker.ts          # jobs lease/retry/dead-letter
 │   ├── memory-distiller.ts       # episode -> semantic/skill
+│   ├── memory-consolidator.ts    # 多粒度抽象/冷热迁移/profile 编译
+│   ├── memory-integrity.ts       # event hash chain/checkpoint/校验
+│   ├── memory-shadow.ts          # replay/shadow policy 实验
+│   ├── memory-simulation.ts      # 长期虚拟用户/多设备/演化仿真
+│   ├── memory-replication.ts     # 签名 event envelope/materializer
+│   ├── artifact-store.ts         # 加密 content-addressed artifact
 │   ├── project-identity.ts       # project_id 规范化
 │   ├── identity-service.ts       # canonical account/link/unlink
 │   ├── migrations/               # 001...NNN，单向、可重入
 │   └── types.ts
 ├── auth-session/                 # 独立 RFC/模块，通过 capability 接口接入
-└── runner/
-    ├── managed-engine.ts         # ManagedEngine 接口
-    ├── claude-managed-engine.ts
-    └── codex-managed-engine.ts
+└── proxy/
+    ├── memory-proxy.ts           # 本地 HTTP proxy 主入口
+    ├── api-adapter.ts            # Anthropic/OpenAI API 格式识别与注入
+    ├── protocol-exchange.ts      # exchange 状态机/retry/continuation/compaction
+    ├── turn-correlator.ts        # execution/protocol/content 指纹关联
+    ├── adapter-registry.ts       # protocol/provider/version compatibility profile
+    ├── turn-collector.ts         # 从流式 SSE 中累积完整 turn 数据
+    ├── fixtures/                  # 脱敏协议 request/stream/replay corpus
+    └── types.ts                  # TurnEnvelope、ProxyConfig
 ```
 
 `telegram/memory` 在 Phase 1 仅保留兼容 adapter，禁止出现第二套 Policy、Retriever 或 schema。
@@ -180,6 +280,7 @@ type MemoryPostRunReceipt = {
 
 interface MemoryService {
   preRead(input: MemoryPreReadInput): Promise<MemoryPreReadResult>;
+  search(input: BoundedMemorySearchInput): Promise<MemorySearchResult>;
   enqueuePostRun(input: MemoryPostRunInput): Promise<MemoryPostRunReceipt>;
   list(query: MemoryListQuery): Promise<MemoryPage>;
   pin(input: ExplicitMemoryInput): Promise<MemoryEntry>;
@@ -189,6 +290,8 @@ interface MemoryService {
   export(input: MemoryExportInput): Promise<string>;
 }
 ```
+
+`search` 是给主模型和受信 Agent 使用的受限只读接口，不是数据库查询透传：必须执行与 `preRead` 相同的 canonical identity、scope、privacy、authority、时态和 token budget 过滤；默认每个 turn 最多调用 1 次、最多返回 8 条、最多 1200 tokens。调用方不能指定其他 `user_id`，也不能要求读取 deleted、secret、原始 Evidence 正文或 auth storage。
 
 写接口必须接收 `operationId` 并保持幂等；相同 `operationId` 重试只能产生一个最终状态和一组审计事件。
 
@@ -230,11 +333,15 @@ flowchart TD
     PRE --> RET --> RANK --> BUD --> INJ
   end
 
-  INJ --> ENG["④ Claude Code / Codex 执行"]
-  ENG --> RES["执行结果<br/>回复 / tool calls / file changes"]
+  INJ --> ROUTE{"入口类型"}
+  INJ --> PROXY["④ Memory Proxy 拦截 CLI→API 请求<br/>注入记忆到 system message"]
+  PROXY --> UPSTREAM["上游 API Provider"]
+  UPSTREAM --> PROXY
+  PROXY --> CLITUI["Claude Code / Codex CLI<br/>Telegram: headless stream-json<br/>CLI: 原生 TUI"]
+  PROXY --> RES["执行结果<br/>回复 / tool calls / file changes"]
   RES --> REPLY["⑤ 立即返回用户"]
 
-  PROJ -. auth capability 声明 不含 secret .-> ENG
+  PROJ -. auth capability 声明 不含 secret .-> PROXY
 
   RES -.->|"持久化入队后异步消费 R2"| POST
 
@@ -338,9 +445,9 @@ type MemoryPostRunInput = {
   assistantResponse: string;
   injectedMemoryIds: number[];
   injectedSkillIds: string[];
-  events: EngineEvent[];
+  toolCalls: Array<{ id: string; name: string; input: unknown; output?: string }>;
+  usage?: { inputTokens: number; outputTokens: number };
   result: "success" | "failed" | "cancelled" | "abandoned";
-  userConfirmations: Array<{ action: string; approved: boolean; paramsHash: string }>;
   startedAt: number;
   finishedAt: number;
 };
@@ -534,6 +641,165 @@ CREATE INDEX idx_identity_account ON identity_links (account_id);
 
 以下 schema 是最终 canonical model。Phase 只控制功能是否启用，不再定义相互冲突的替代列。
 
+### 统一 Memory Unit 与类型化载荷
+
+`memories` 保留为面向兼容层和通用检索的语义记忆投影，但不再承担全部真相源职责。最终模型使用 `memory_units` 作为统一治理头部，并以类型化表保存 Claim、Evidence、Episode、Event、Skill、Goal、Constraint、Failure 和 Profile Snapshot。任何新记忆类型禁止继续向 `memories` 增加只对单一类别有意义的 nullable 列。
+
+```sql
+CREATE TABLE memory_units (
+  id                TEXT PRIMARY KEY,
+  user_id           TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  memory_type       TEXT NOT NULL CHECK (memory_type IN (
+                      'semantic','episodic','procedural','prospective',
+                      'constraint','negative','profile_snapshot','artifact_ref'
+                    )),
+  scope             TEXT NOT NULL CHECK (scope IN ('global','bot','project','team','agent')),
+  scope_id          TEXT,
+  authority_level   TEXT NOT NULL CHECK (authority_level IN (
+                      'external','assistant','model_inferred','tool_verified',
+                      'user_stated','user_confirmed','system_policy'
+                    )),
+  origin_set_hash   TEXT NOT NULL,
+  status            TEXT NOT NULL CHECK (status IN ('pending','active','archived','deleted')),
+  confidence        REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+  salience          REAL NOT NULL DEFAULT 0.5 CHECK (salience >= 0 AND salience <= 1),
+  utility           REAL NOT NULL DEFAULT 0.5 CHECK (utility >= 0 AND utility <= 1),
+  volatility        REAL NOT NULL DEFAULT 0.5 CHECK (volatility >= 0 AND volatility <= 1),
+  valid_from        INTEGER,
+  valid_to          INTEGER,
+  transaction_from  INTEGER NOT NULL,
+  transaction_to    INTEGER,
+  content_hash      TEXT NOT NULL,
+  current_version   INTEGER NOT NULL DEFAULT 1,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL,
+  CHECK (valid_to IS NULL OR valid_from IS NULL OR valid_to >= valid_from),
+  CHECK (transaction_to IS NULL OR transaction_to >= transaction_from)
+);
+
+CREATE INDEX idx_memory_units_visible
+ON memory_units (user_id, scope, scope_id, memory_type, status);
+
+CREATE INDEX idx_memory_units_temporal
+ON memory_units (user_id, valid_from, valid_to, transaction_to);
+```
+
+类型化表与统一头部是 1:1 或 1:N 关系：
+
+| 类型化表 | 作用 |
+|----------|------|
+| `memory_claims` | 可验证的语义断言，不保存来源细节 |
+| `memory_evidence` | 不可变支持/反驳/限定证据，承载 provenance 和 authority |
+| `memory_episodes` | 一次 execution 的结构化经过、动作与 outcome |
+| `memory_events_graph` | 事件节点和时序事件超图索引 |
+| `skills` / `skill_versions` | 结构化 Skill IR、版本、验证与回滚 |
+| `prospective_memories` | goal、commitment、reminder、waiting-for 和触发条件 |
+| `memory_constraints` | 必须遵守的用户约束和项目约束，区别于普通 preference |
+| `negative_memories` | failure、avoidance、known-bad strategy、用户拒绝模式 |
+| `profile_snapshots` | 从 active Claim 编译的版本化只读画像，不是真相源 |
+
+`memories.id` 继续作为现有 API 的稳定数字 id；新增 `unit_id TEXT UNIQUE REFERENCES memory_units(id)`。迁移后所有新写入先创建 `memory_units`，再写类型化表，并按需维护 `memories` 兼容投影。旧调用方在迁移期间读取投影，不允许绕过 `MemoryService` 修改投影。
+
+### Claim 与 Evidence 账本
+
+稳定事实必须拆成 Claim 和 Evidence。`evidence_json` 仅保留为旧数据迁移输入，迁移完成后不再作为证据真相源。
+
+```sql
+CREATE TABLE memory_claims (
+  id                 TEXT PRIMARY KEY,
+  unit_id            TEXT NOT NULL UNIQUE REFERENCES memory_units(id) ON DELETE CASCADE,
+  subject_key        TEXT,
+  predicate          TEXT NOT NULL,
+  object_json        TEXT NOT NULL,
+  normalized_value   TEXT,
+  cardinality        TEXT NOT NULL CHECK (cardinality IN ('single','multi')),
+  temporal_kind      TEXT NOT NULL CHECK (temporal_kind IN ('atemporal','instant','interval','relative','recurring','fuzzy','unknown')),
+  event_time_start   INTEGER,
+  event_time_end     INTEGER,
+  temporal_precision TEXT NOT NULL DEFAULT 'unknown'
+                     CHECK (temporal_precision IN ('exact','minute','hour','day','week','month','year','range','unknown')),
+  timezone           TEXT,
+  temporal_expression TEXT,
+  anchor_event_id    TEXT,
+  relative_offset_json TEXT,
+  asserted_at        INTEGER,
+  observed_at        INTEGER,
+  recurrence_rule    TEXT,
+  status             TEXT NOT NULL CHECK (status IN ('pending','active','archived','deleted')),
+  created_at         INTEGER NOT NULL,
+  updated_at         INTEGER NOT NULL
+);
+
+CREATE TABLE memory_evidence (
+  id                    TEXT PRIMARY KEY,
+  claim_id              TEXT NOT NULL REFERENCES memory_claims(id) ON DELETE CASCADE,
+  execution_run_id      TEXT REFERENCES execution_runs(id) ON DELETE SET NULL,
+  provenance_kind       TEXT NOT NULL CHECK (provenance_kind IN ('user','assistant','tool','file','web','system')),
+  origin_principal      TEXT NOT NULL,
+  origin_set_hash       TEXT NOT NULL,
+  source_ref_hash       TEXT,
+  quote_hash            TEXT NOT NULL,
+  quote_ciphertext      BLOB,
+  polarity              TEXT NOT NULL CHECK (polarity IN ('support','contradict','qualify')),
+  authority_cap         TEXT NOT NULL,
+  taint_labels_json     TEXT NOT NULL DEFAULT '[]',
+  derivation_hash       TEXT NOT NULL,
+  corroboration_group   TEXT NOT NULL,
+  observed_at           INTEGER,
+  asserted_at           INTEGER,
+  created_at            INTEGER NOT NULL,
+  retracted_at          INTEGER,
+  UNIQUE (claim_id, quote_hash, polarity, derivation_hash)
+);
+
+CREATE INDEX idx_memory_evidence_claim
+ON memory_evidence (claim_id, polarity, authority_cap, retracted_at);
+
+CREATE TABLE memory_derivations (
+  child_evidence_id  TEXT NOT NULL REFERENCES memory_evidence(id) ON DELETE CASCADE,
+  parent_evidence_id TEXT NOT NULL REFERENCES memory_evidence(id) ON DELETE RESTRICT,
+  transform_type     TEXT NOT NULL CHECK (transform_type IN (
+                       'extract','summarize','normalize','merge','distill',
+                       'profile_compile','graph_extract','skill_generalize',
+                       'user_confirm','tool_verify'
+                     )),
+  transform_version  TEXT NOT NULL,
+  created_at         INTEGER NOT NULL,
+  PRIMARY KEY (child_evidence_id, parent_evidence_id)
+);
+
+CREATE INDEX idx_memory_derivations_parent
+ON memory_derivations (parent_evidence_id, transform_type);
+
+CREATE TABLE memory_confirmations (
+  id                   TEXT PRIMARY KEY,
+  claim_id             TEXT NOT NULL REFERENCES memory_claims(id) ON DELETE CASCADE,
+  claim_hash           TEXT NOT NULL,
+  displayed_value_hash TEXT NOT NULL,
+  decision             TEXT NOT NULL CHECK (decision IN ('confirm','reject','qualify')),
+  qualifier_json       TEXT,
+  execution_run_id     TEXT REFERENCES execution_runs(id) ON DELETE SET NULL,
+  created_at           INTEGER NOT NULL
+);
+```
+
+硬规格：
+
+- Evidence 默认不可变；纠错使用 `retracted_at` 或新增反驳证据，不覆盖历史行。
+- 独立证据必须具有不同 `corroboration_group`；同一网页的多个摘要、同一用户消息的模型复述、同一 tool output 的重复解析都属于同组。
+- 派生证据的 `authority_cap` 不得高于其全部原始来源中的最低上限；external 内容经过摘要、蒸馏、工具转述后仍保持 external authority cap。
+- 每次派生必须写 `memory_derivations`；`origin_set_hash` 只是快速比较字段，不能代替可遍历的 Derivation DAG。Authority、purge 影响面和独立证据均从 DAG 可重算。
+- 用户确认必须写 `memory_confirmations` 并绑定规范化 Claim hash 与用户实际看到的 value hash；“都记住”“按网页说的做”等泛化确认不能提升多个未知 Claim。
+- confidence 是 Evidence Aggregator 的派生结果；模型可以给 extraction likelihood，但不能直接写最终 confidence。
+- purge 某来源时必须撤回其 Evidence，并事务性重算受影响 Claim；仍有其他独立证据时不得误删 Claim。
+- `user_confirm` 和 `tool_verify` 是仅有的 authority 升级边；前者只能提升被确认的具体 Claim，后者只能提升白名单 assertion 实际验证的 predicate/value/time 范围。
+
+#### 时态不确定性
+
+时间解析不能把“去年年底”“搬家后”“最近”“每隔一阵子”等模糊表达伪造成精确毫秒值。`temporal_kind=fuzzy|relative|unknown` 时保留原始 `temporal_expression`，可选保存候选区间和 anchor event；检索按区间重叠与 anchor relation 计算 `temporalFit`。
+
+解析采用两级机制：ISO/明确日期/标准 recurrence 先由本地 parser 处理；复杂表达才调用时态抽取模型。模型输出必须包含 `kind/precision/timezone/anchor/candidateRange`，缺少依据时返回 `unknown`。后续出现更精确信息时新增 Evidence 并产生新 Claim version，禁止静默覆盖原表达。
+
 ### memories 表
 
 ```sql
@@ -625,6 +891,8 @@ CREATE TABLE memory_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   memory_id   INTEGER,
   user_id     TEXT NOT NULL,
+  stream_id   TEXT NOT NULL,
+  stream_seq  INTEGER NOT NULL,
   operation_id TEXT NOT NULL,
   event_seq   INTEGER NOT NULL,
   event_type  TEXT NOT NULL,
@@ -632,14 +900,20 @@ CREATE TABLE memory_events (
   before_json TEXT,
   after_json  TEXT,
   reason      TEXT,
+  previous_hash TEXT,
+  event_hash  TEXT NOT NULL,
   created_at  INTEGER NOT NULL,
   FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE SET NULL,
   FOREIGN KEY (user_id) REFERENCES accounts(id) ON DELETE CASCADE,
-  UNIQUE (operation_id, event_seq)
+  UNIQUE (operation_id, event_seq),
+  UNIQUE (user_id, stream_id, stream_seq),
+  UNIQUE (user_id, stream_id, event_hash)
 );
 ```
 
 `before_json/after_json` 默认只保存允许审计的字段，正文保存 `content_hash + content_length`。只有“可恢复删除”才把正文写入由本机密钥加密的 payload；`purge` 必须清理该账号的可逆 payload。
+
+`stream_id` 至少区分 semantic、episodic、skill、purge、auth-audit；同一 stream 使用短 `BEGIN IMMEDIATE` 原子分配 `stream_seq` 和 previous hash。定期把所有 stream head 写入 `memory_integrity_checkpoints` 并用 SecretStore 中的完整性密钥签名。多设备复制使用独立签名 event envelope，不能直接把本机自增 `id` 当全局顺序。
 
 ### memory_embeddings 表
 
@@ -1012,37 +1286,64 @@ short_term TTL 默认 72 小时，允许 1 小时到 30 天；用户明确给出
 
 ```mermaid
 flowchart TD
-  Prompt["当前 prompt"] --> Required["必选记忆"]
-  Prompt --> Keyword["关键词 / FTS5 召回"]
-  Prompt --> Vector["向量召回"]
-  Prompt --> Recent["短期记忆召回"]
-
-  Required --> Merge["合并候选"]
+  Prompt["当前 prompt + recent conversation"] --> Planner["Memory Query Planner"]
+  Planner --> Required["必选 Profile / Policy / Constraint"]
+  Planner --> Keyword["关键词 / FTS5"]
+  Planner --> Vector["向量召回"]
+  Planner --> Recent["短期 / 工作记忆"]
+  Planner --> Temporal["时态 / Goal / Commitment"]
+  Planner --> Graph["事件超图 / Entity Path"]
+  Planner --> Episode["Episode / Failure / Outcome"]
+  Planner --> Skill["Skill Trigger / Environment"]
+  Required --> Merge["候选融合"]
   Keyword --> Merge
   Vector --> Merge
   Recent --> Merge
+  Temporal --> Merge
+  Graph --> Merge
+  Episode --> Merge
+  Skill --> Merge
+  Merge --> Authority["Authority / Taint / Scope 过滤"]
+  Authority --> Conflict["时态与冲突消解"]
+  Conflict --> Rank["重排：相关性 + 证据覆盖 + 效用 + 成本"]
+  Rank --> Budget["预算与多样性裁剪"]
+  Budget --> Compile["Context Compiler"]
+  Compile --> Inject["生成只读记忆上下文"]
+```
 
-  Merge --> Rank["重排：相关性 + 优先级 + 新鲜度 + scope"]
-  Rank --> Budget["预算裁剪"]
-  Budget --> Inject["生成 <user_memory>"]
+`MemoryQueryPlanner` 使用规则优先、模型补充的两级策略：先用本地意图词典、时间表达式、实体别名和工具能力生成基础计划；只有复杂多跳或歧义请求才调用廉价模型补充结构化计划。Planner 输出必须通过 JSON Schema，不能生成 SQL、任意 user id 或绕过 scope 的检索条件。
+
+```typescript
+type MemoryQueryPlan = {
+  intents: string[];
+  queryVariants: string[];
+  entityHints: string[];
+  temporalFilters: Array<{ from?: number; to?: number; relation?: string }>;
+  memoryTypes: Array<"semantic" | "episodic" | "procedural" | "prospective" | "constraint" | "negative">;
+  retrievalRoutes: Array<"required" | "fts" | "vector" | "recent" | "temporal" | "graph" | "episode" | "skill">;
+  iterativeRecallAllowed: boolean;
+};
 ```
 
 ### 必注入
 
-- `user_profile` 当前 active 版本，但必须通过 `memory_policies.audience` 和 source/project 隐私规则；策略不允许时不注入。
+- 当前 audience 对应的 `profile_snapshot`，但 snapshot 必须携带 source Claim ids、compiler version 和有效期；策略不允许时不注入。
 - 当前 bot 的 `bot_profile`。
+- 当前任务命中的 system/user/project constraint；约束与 preference 分段注入，不能混成同等强度的自然语言。
 - 当前 project 的高优先级 project memory 只进入候选优先区，仍受总 token budget 约束，不能无限必注入。
 
 ### 相关注入
 
 检索和排序必须使用同一条可测试代码路径：
 
-1. SQL 硬过滤：`user_id` 精确匹配、`status=active`、当前时态有效、未过期，并执行 scope 可见性谓词；禁止先全库向量召回再在应用层过滤。
-2. FTS、vector、recent 各取 top 50；不可用的召回源记录降级原因后跳过。
-3. 用 Reciprocal Rank Fusion 合并：`rrf = Σ sourceWeight / (60 + rank)`，默认 `FTS=1.0, vector=1.0, recent=0.6, graph=0.8`。同分按 `memory.id ASC` 保持确定性。
-4. 将候选集 rrf 最大值归一为 1，再计算：`final = 0.55*rrfNorm + 0.15*scope + 0.10*confidence + 0.08*freshness + 0.07*priority + 0.05*utility`。
-5. `scope` 为 `project=1, bot=0.8, global=0.6`；`priority=clamp((priority+10)/20,0,1)`；`freshness=exp(-ageDays/90)`，时间取 `last_effective_at ?? updated_at`；`utility=(cited_count+1)/(inject_count+2)`。
-6. 权重存入 `memory.json.rankingVersion` 对应的版本化配置；每次修改权重必须更新版本并运行 R11 harness。禁止在调用方覆写排序。
+1. SQL 硬过滤：`user_id` 精确匹配、`status=active`、当前时态有效、未过期，并执行 scope/audience/purpose 可见性谓词；禁止先全库向量召回再在应用层过滤。
+2. Authority 硬过滤：候选必须满足当前任务最低 authority；tainted external 派生物不能因模型摘要或重复蒸馏获得更高权限。
+3. FTS、vector、recent、temporal、graph、episode、skill 各取 top 50；不可用的召回源记录降级原因后跳过。
+4. 用 Reciprocal Rank Fusion 合并：`rrf = Σ sourceWeight / (60 + rank)`；默认 `FTS=1.0, vector=1.0, recent=0.6, temporal=0.9, graph=0.8, episode=0.7, skill=0.9`。同分按稳定 id 升序保持确定性。
+5. RRF 后执行 conflict group 聚合：single-cardinality Claim 同时存在多个当前值时，不允许全部作为普通事实注入；必须选出 resolved current value，或以显式 `<conflict>` 段携带支持/反驳摘要。
+6. 排序基础式升级为：`final = 0.42*rrfNorm + 0.12*scope + 0.10*confidence + 0.08*authority + 0.07*temporalFit + 0.06*utility + 0.05*salience + 0.04*evidenceCoverage + 0.03*freshness + 0.03*priority - tokenCostPenalty - interferencePenalty`。
+7. `evidenceCoverage` 奖励多个独立 corroboration group，不能按同源 Evidence 数量刷分；`temporalFit` 衡量候选有效区间与查询时间的匹配；`interferencePenalty` 惩罚重复、矛盾且无法解决或与任务无关的画像内容。
+8. 权重存入 `memory.json.rankingVersion` 对应的版本化配置；每次修改权重必须更新版本并运行 R11 harness、端到端 QA 和 Shadow replay。禁止在调用方覆写排序。
 
 短于 3 个字符的 CJK 查询不能只依赖 trigram，必须并行执行转义后的 `LIKE`/精确 tag fallback。所有 SQL 参数绑定，禁止拼接用户查询。
 
@@ -1093,6 +1394,301 @@ Auth capability 不从 memory 正文推导。Pre-Read 直接调用 Broker，按 
 - localStorage/sessionStorage 原始值
 - 浏览器 storage state 路径
 - auth session 解密材料
+
+---
+
+## 高级记忆能力
+
+以下能力属于最终增强架构的正式组成，不是可有可无的扩展建议。可以按 Phase 分步启用，但 schema、事件类型和公开接口必须在 canonical model 中预留，禁止后续用不兼容旁路实现。
+
+### Profile Compiler 与多粒度抽象
+
+`user_profile` / `bot_profile` 不再允许被抽取模型直接整体覆写。Profile 是 active Claim、Preference、Constraint、Goal 和 Privacy Policy 的版本化编译产物：
+
+```text
+事实源：Claim + Evidence + Policy
+  → interaction profile（语言、格式、沟通习惯）
+  → identity profile（身份背景）
+  → domain profile（专业和领域）
+  → relationship profile（人物关系）
+  → safety profile（确认、风险和禁忌）
+  → project profile（当前项目上下文）
+```
+
+Compiler 必须按 audience 和 purpose 选择切片；敏感 identity/relationship 信息默认不进入普通 coding/browser 任务。每个 snapshot 保存 `source_claim_ids_json`、`compiler_version`、`content_hash`、`valid_from/valid_to`，底层 Claim 改变后旧 snapshot 失效并异步重编译。
+
+同一经历允许存在多粒度派生层：raw episode → turn summary → session summary → topic summary → stable claim → profile snapshot / skill。派生层必须保存来源 id，删除底层来源时可以重建或失效，而不是留下无法解释的摘要。
+
+### 前瞻记忆、约束记忆与负向记忆
+
+- **前瞻记忆**保存未来意图：goal、commitment、reminder、deadline、waiting-for、recurring intention。它由事件触发器激活，而不是仅靠文本相关性。
+- **约束记忆**保存“不能违反/必须满足”的用户和项目约束，与 preference 分开排序和注入；安全 system policy 永远高于记忆约束。
+- **负向记忆**保存 failure signature、known-bad strategy、environment incompatibility、用户拒绝模式和副作用，检索成功 Skill 时必须同时检索相关失败经验。
+
+```typescript
+type ProspectiveMemory = {
+  trigger: { event: string; projectId?: string; temporalRule?: string };
+  conditions: Assertion[];
+  action: "remind" | "inject_constraint" | "request_confirmation" | "schedule";
+  validUntil?: number;
+  completionPolicy: "once" | "until_confirmed" | "recurring";
+};
+```
+
+前瞻记忆触发时只创建提醒、约束或确认请求；除非有独立 capability 和 scheduler policy，不得直接执行外部副作用动作。
+
+### Origin-bound Authority 与污染传播
+
+Authority 是不可提升上限，不等同于普通 confidence。每条 Memory Unit 必须保留完整 origin set 和 derivation hash：
+
+```text
+external < assistant/model_inferred < tool_verified < user_stated < user_confirmed < system_policy
+```
+
+派生物的 authority cap 取所有关键来源的最低上限；以下操作不能洗白来源：模型摘要、模型复述、向量相似命中、蒸馏、Profile 编译、图谱抽取、Skill 归纳、同一 tool output 的多次解析。只有绑定具体 Claim hash 的用户确认、或白名单工具产生的独立可验证 outcome，才能新增更高 authority 的 Evidence。
+
+### Policy Automata
+
+统一 confidence 阈值只作为默认兜底。每个 category 必须配置独立状态机：接受哪些 Evidence、最低 authority、独立证据数、验证器、自动激活许可、过期策略和冲突策略。
+
+```typescript
+type ActivationPolicy = {
+  category: string;
+  acceptedEvidence: EvidenceRule[];
+  minimumIndependentEvidence: number;
+  minimumAuthority: string;
+  automaticActivationAllowed: boolean;
+  requiredVerifiers: string[];
+  expirationPolicy: string;
+  conflictPolicy: string;
+};
+```
+
+默认规则：明确语言偏好一次用户陈述可 active；隐式偏好需要跨 session 的独立行为；项目依赖需要用户陈述或 manifest/tool 验证；external fact 永不自动 active；高危 Skill 需要多次 outcome、replay 和确认。
+
+Policy 不得扩散成散落在业务代码中的 `if/else`。实现使用版本化声明式 Policy DSL，DSL 只允许配置 accepted evidence、最低 authority、独立证据数、verifier、冲突策略、过期/重验证策略和允许的状态迁移动作，不允许执行任意脚本。
+
+```yaml
+category: project_dependency
+policyVersion: 1
+acceptedEvidence:
+  - user_stated
+  - tool_verified:package_manifest
+minimumAuthority: tool_verified
+minimumIndependentEvidence: 1
+automaticActivationAllowed: true
+conflict:
+  cardinality: single
+  strategy: newest_verified
+expiry:
+  strategy: revalidate_on_artifact_change
+```
+
+每次 Policy 决策必须保存 `policy_version + matched_rules + rejected_rules + final_action`，同一候选可以在 Shadow Policy 下并行求值但只能由 production policy 提交状态。
+
+### 可验证 Skill IR
+
+Skill 的事实源不再是自然语言 `steps_json`，而是版本化、可验证和可回滚的 Skill IR。自然语言 `<steps>` 仅是 Context Compiler 生成的显示投影。
+
+```typescript
+type SkillIR = {
+  id: string;
+  version: number;
+  trigger: IntentMatcher;
+  preconditions: Assertion[];
+  parameters: TypedSlot[];
+  steps: SkillStep[];
+  postconditions: Assertion[];
+  rollbackSteps: SkillStep[];
+  invariants: Assertion[];
+  requiredCapabilities: string[];
+  riskClass: "low" | "medium" | "high" | "critical";
+  environmentFingerprint: EnvironmentConstraint[];
+  evidenceEpisodeIds: string[];
+};
+
+type SkillStep =
+  | { type: "tool"; tool: string; argsTemplate: object }
+  | { type: "assert"; assertion: Assertion }
+  | { type: "branch"; condition: Assertion; then: SkillStep[]; else: SkillStep[] }
+  | { type: "confirm"; risk: string }
+  | { type: "checkpoint"; rollbackTo: string };
+```
+
+Skill 升级流水线固定为：candidate mining → 参数归一 → LLM 生成 IR → schema 校验 → episode trace alignment → 静态风险分析 → sandbox replay → shadow invocation → validated → active。任何一步失败都不能通过提高 confidence 绕过。环境指纹变化、工具 major version 变化或失败率越界时自动降为 `needs_revalidation`。
+
+### Capability Security Kernel
+
+Auth Broker 和工具权限统一签发不可伪造的 execution-bound capability handle。Prompt 中只出现 opaque handle 和允许操作摘要；工具执行时服务层验证签名、user、execution、domain、operation、expiry、redirect、confirmation 和 data egress policy。
+
+Capability 不得持久化为普通 memory，不得由 Skill、网页、文件或模型输出创建；跨 execution 自动失效。高危动作必须换取新的 elevated capability，不能复用 read-only capability。
+
+### Shadow Memory、完整性与可逆 Parametric Promotion
+
+- **Shadow Memory**：候选 Planner、embedding、ranking、Policy 或 Skill 在同一脱敏轨迹上影子运行，只记录差异，不影响生产回答。
+- **Replay**：协议 fixture、历史 episode 和黄金评测集必须可确定性回放，用于升级 Proxy adapter、rankingVersion、compilerVersion 和 Skill version。
+- **完整性 Hash Chain**：`memory_events` 增加 `previous_hash/event_hash`；定期生成本机签名 checkpoint，检测手工篡改、事件删除和备份丢失。
+- **可逆 Parametric Promotion**：长期稳定、高频且非敏感的记忆可编译为本地规则、分类器或 adapter，但原始 Claim/Evidence 必须保留；编译产物记录 source ids、版本和撤销路径，不能成为不可解释的新真相源。
+
+### 多 Agent、Team Scope 与多模态记忆
+
+最终 scope 扩展为 private user、agent-private、project-shared、team-shared 和 delegated memory。共享记忆必须带 owner、readers、writers、delegation chain、audience 和 purpose limitation；子 Agent 默认只能写 episode/candidate，提升为共享 semantic memory 需要 owner policy。
+
+图片、文档、音频和 UI 状态使用加密 Artifact Store 保存原始对象，SQLite 只保存 hash、媒体类型、区域引用、OCR/vision observations 和派生 Claim。任何多模态派生内容继续继承原始 artifact 的 authority 和 privacy 标签。
+
+## 可行性增强机制
+
+本节针对完整增强架构中工程风险最高的能力规定实现方式。目标不是删减能力，而是为每项能力增加可验证中间层、降级语义和明确的生产门槛。
+
+### 分层延迟预算
+
+Pre-Read 的 300ms deadline 只覆盖快速本地路径，不要求远程 Planner、远程 embedding、复杂图搜索、NLI 和现场 Profile 编译都在同一预算内完成。
+
+| 延迟层 | 默认预算 | 内容 | 超时行为 |
+|--------|----------|------|----------|
+| L0 required cache | 10ms | policy、constraint、预编译 profile、bot profile | 缓存 miss 转 L1 |
+| L1 local retrieval | 100ms | SQLite scope、FTS、recent、prospective trigger | 返回当前结果 |
+| L2 local semantic | 300ms | 本地 query embedding、vector、受限 graph、temporal | 独立 route 降级 |
+| L3 deliberative | 异步/迭代式 | LLM Planner、复杂多跳、remote reranker、反事实 | 通过 `memory.search` 补查 |
+
+Profile 必须预编译；远程网络请求不得放在 Pre-Read 事务内。首次请求只使用 L0-L2，L3 结果不能迟到后偷偷改变已发送 prompt，只能作为受限补查结果进入后续模型步骤。
+
+### Profile AST 与增量编译
+
+Profile Compiler 输出结构化 AST，不直接生成不可追踪的整段画像：
+
+```typescript
+type ProfileAst = {
+  communication: ProfileField[];
+  identity: ProfileField[];
+  domain: ProfileField[];
+  relationships: ProfileField[];
+  safety: ProfileField[];
+  projects: ProfileField[];
+};
+
+type ProfileField = {
+  claimIds: string[];
+  normalizedValue: unknown;
+  sensitivity: "public" | "private" | "sensitive";
+  allowedAudiences: string[];
+};
+```
+
+确定性 renderer 将 AST 编译成 prompt block；没有 `claimIds` 的字段不得进入 Snapshot。Claim 更新、撤回或 audience policy 变化时只重编受影响 section，并通过 dependency index 失效旧 snapshot。
+
+### 事件触发 DSL
+
+Prospective Memory 使用受限 Event Pattern DSL，禁止存任意脚本：
+
+```typescript
+type EventPattern =
+  | { type: "execution_started"; projectId?: string }
+  | { type: "intent_detected"; intentKey: string }
+  | { type: "tool_before"; tool: string; action?: string }
+  | { type: "time"; schedule: string; timezone: string }
+  | { type: "entity_mentioned"; entityId: string }
+  | { type: "state_changed"; claimKey: string };
+```
+
+Constraint 增加 `overridability = overridable | confirmation_required | non_overridable`；这里只描述用户/项目约束，system safety policy 始终在其上。Negative Memory 必须绑定 environment fingerprint、failure signature、error class 和适用前置条件，单次失败不能泛化成全局禁用规则。
+
+### Event Hypergraph 物化索引
+
+Temporal Event Hypergraph 是可删除、可重建、版本化的物化索引，不是真相源。每个 node/edge 保存 `source_unit_ids/source_evidence_ids/extractor_version/resolution_version/authority_cap/index_generation`。删除或撤回 Evidence 时，相关边进入 invalid 状态并由后台 job 重建。
+
+实体消解顺序固定为：确定性 key → 同 scope 用户 alias → 模型 resolution candidate。模型候选低于阈值或存在多个匹配时不能自动 merge。图查询使用预算化 path search：默认 maxDepth=2、maxNodes=40、maxEdges=60、maxPaths=10；每条可注入路径必须回源 active Claim/Evidence。
+
+### Skill 验证等级与受限 DSL
+
+Skill lifecycle 增加验证等级：
+
+```text
+candidate
+→ syntactically_valid
+→ historically_replayable
+→ sandbox_validated（适用于可安全执行的 Skill）
+→ shadow_validated
+→ active
+→ needs_revalidation / deprecated
+```
+
+第一版 Skill DSL 只允许 sequence、tool、assert、branch、confirm、checkpoint、rollback；禁止任意循环、动态工具名、自修改 Skill、运行时拼接 shell、读取未声明环境变量和使用未声明 capability。
+
+验证方式：
+
+- **Historical Replay**：用历史 episode 的 state/action/outcome 验证 Skill 是否预测相同动作和检查点，不重新执行副作用。
+- **Sandbox Replay**：在临时目录、git worktree、mock HTTP、隔离 browser profile、无真实 secret 的环境执行。
+- **Shadow Validation**：候选 Skill 只生成计划，主 Agent 正常执行；比较计划覆盖、缺失检查、偏离原因和 outcome。
+
+风险分级：只读 Skill 可在 replay + shadow 后 active；本地可回滚写操作需 sandbox；部署/发送/外部写入即使 active 也逐步确认；转账和生产数据破坏类 Skill 永不获得无人确认自动执行权限。
+
+### 分级 Memory Utility 与反事实采样
+
+Utility 不再压成单一模型判断，拆成：`retrieval_utility/answer_contribution/action_contribution/harm_score/token_cost/correction_rate`。
+
+1. 每轮使用确定性信号：tool 参数引用、唯一事实值、constraint compliance、Skill id、用户纠正。
+2. 歧义批次使用廉价 Judge，输出 supported/redundant/unused/contradicted/harmful；只能小幅更新 utility，不能提高事实 confidence。
+3. 对新 active、高频注入、被纠正、高风险约束和候选 ranking 做离线 counterfactual：A 使用原上下文，B 移除单条或一组记忆，再由固定 judge 比较。
+4. Shadow ranking 长期比较任务成功、用户纠正、重复提问、token 成本和 stale-memory error。
+
+反事实必须异步、采样、缓存且受每日预算限制，禁止为每次回答全量双跑。
+
+### Capability Caveat 与浏览器数据出口
+
+Capability handle 采用可收窄 caveat：`profileId/userId/executionRunId/allowedOrigins/allowedActions/readOnly/expiresAt/maxNavigations/maxDataBytes/requiresConfirmationFor`。子流程只能增加限制，不能移除限制或扩权。
+
+Browser Tool 在返回模型前执行字段分类、secret scan、可见文本裁剪、下载 quarantine、跨域数据发送检测和 target origin 记录。Credential、Session、Capability 分库存储和分进程权限；Memory Worker 无权解密 storage state。
+
+### 多设备事件复制
+
+Team/多设备共享不复制 SQLite 文件，只复制签名 append-only event envelope，再由各设备 deterministic materializer 重建状态：
+
+```typescript
+type ReplicatedMemoryEvent = {
+  eventId: string;
+  accountId: string;
+  deviceId: string;
+  lamportTime: number;
+  causalParents: string[];
+  operationId: string;
+  eventType: string;
+  encryptedPayload: string;
+  keyVersion: number;
+  signature: string;
+};
+```
+
+Evidence 采用追加合并；Claim current state 由 materializer 重算；purge 使用 tombstone + 内容密钥销毁；成员移除后停止获得新 team key。离线并发不按本机 wall clock 决胜，使用 causal parents、Lamport time、authority 和 category conflict policy。
+
+### Artifact Store
+
+多模态和大文件使用 content-addressed encrypted store，例如 `artifacts/<hash-prefix>/<sha256>.enc`。SQLite 保存 artifact id、hash、media type、size、key ref、origin/privacy 和派生 observation ids。
+
+派生链固定为 `Artifact → Region/Span → Observation → Evidence → Claim`。删除 artifact 时撤回相关 Evidence、重算 Claim、删除 embedding 和 blob；不允许只删文件而保留无法验证的派生事实。
+
+### 分区完整性链
+
+`memory_events` 不使用全库单热点链，而按 `account_id + logical_stream` 建链，例如 semantic、episodic、skill、purge、auth-audit。事件 hash 包含 stream、sequence、previous_hash 和 canonical payload hash；checkpoint 签名所有 stream head。
+
+Hash Chain 用于检测本地篡改和恢复缺失，不宣称抵御持有全部本机密钥的攻击者。发现断链时自动治理写入 fail-closed，主任务进入 no-memory 模式，并保留只读诊断和恢复工具。
+
+### 分级 Parametric Promotion
+
+Parametric Promotion 按可逆性分级：
+
+1. **Compiled Rule**：确定性语言、格式、路由和约束规则。
+2. **Local Classifier**：intent、memory type、risk、retrieval route 分类器。
+3. **Prompt/Context Adapter**：版本化 renderer、system fragment、tool preference adapter。
+4. **Model Adapter/LoRA**：仅显式 opt-in、固定 base model、足够脱敏样本、独立评测和可删除 artifact 时启用。
+
+前三级是默认生产路径；第四级保持实验状态，但功能不删除。所有编译产物写 registry，包含 source Claim/Evidence、base model、compiler version、eval report、status 和 rollback artifact。来源撤回或评测回退时自动失效。
+
+### 长期 Memory Simulation Harness
+
+除单元和检索黄金集外，必须建立可重复的长期仿真：虚拟用户跨月会话、偏好变化、项目切换、事实纠正、恶意网页、Skill 成功/失败、成员加入/移除、删除/purge 和设备离线冲突。
+
+仿真输出至少包括 memory growth、duplicate rate、contradiction rate、profile drift、authority laundering、stale-memory error、unsupported personalization、Skill degradation、purge completeness、task success 和 token cost。所有 learned ranking、Policy 变更、Skill 自动 active、复制协议和 parametric promotion 均必须通过对应仿真门槛。
 
 ---
 
@@ -1226,7 +1822,7 @@ Auth Session Broker 保留为并行 track，但必须另建 `docs/auth-session-s
 type AiExecutionContext = {
   userId: string;
   source: "telegram" | "cli" | "browser" | "scheduler";
-  interaction: "managed" | "native";
+  interaction: "proxy" | "native";
   botId?: string;
   projectId?: string;
   cwd?: string;
@@ -1237,13 +1833,16 @@ type AiExecutionContext = {
   conversationId: string;
   privacyMode: "normal" | "no_read" | "no_write" | "incognito";
   capabilities: {
-    promptVisible: boolean;
-    responseVisible: boolean;
-    toolEventsVisible: boolean;
+    preReadInjection: boolean;
+    postRunCapture: boolean;
     perTurnHooks: boolean;
   };
 };
 ```
+
+> `interaction` 区分两种接入方式：
+> - `proxy`：通过 Memory Proxy spawn CLI，具备完整的逐 turn Pre-Read 注入和 Post-Run 捕获能力。所有入口默认使用此模式。
+> - `native`：CLI `--native` 模式，绕过 proxy 直连上游，仅支持 session-start 只读注入，不支持 Post-Run。
 
 > `userId` 是**规范化后的 canonical account id**，不是原始来源 id。原始来源 id（telegram chat id / OS user）先经身份绑定映射到 canonical id，否则 `global` 记忆会按来源碎裂，无法跨 Telegram↔CLI 共享。详见「风险与强制实施决策 R1」。
 
@@ -1259,69 +1858,209 @@ CLI：
 - `botId = cli profile / 默认 default`
 - `projectId` = 按「数据存储 · project_id 派生」规则计算
 
-### 受管执行协议
+### Memory Proxy 执行协议
 
-完整自动记忆要求 Gateway 能看到每轮 prompt、最终回复和结构化工具事件。当前直接 `spawn(..., {stdio: "inherit"})` 的原生 TUI 不满足该条件，因此 `ai use` 默认改为 **Gateway Managed REPL**，不再把不可观测子进程误认为完整 hook 已接入。
+完整自动记忆要求 Gateway 能看到每轮 prompt、最终回复和结构化工具事件。采用 **本地 Memory Proxy** 方案：在 CLI 与上游 API 之间插入透明 HTTP 代理，拦截请求注入记忆、捕获响应用于抽取。CLI（Claude Code / Codex）保持原生运行，用户体验不变。
+
+所有入口（Telegram、CLI、Scheduler）统一通过 spawn CLI + Proxy 执行：
+
+- **Telegram**：spawn CLI（headless `--output-format stream-json` 模式），通过 Proxy 注入记忆，同时解析 stdout 做进度展示。
+- **CLI `ai use`**：spawn CLI（原生 TUI 模式），通过 Proxy 注入记忆，用户看到原生终端交互。
+- **`--native`**：绕过 Proxy 直连上游，仅支持只读注入，不支持 Post-Run。
+
+#### 架构
+
+```text
+所有入口共用：
+  → 启动本地 Memory Proxy (随机端口，仅 127.0.0.1)
+  → spawn CLI 子进程
+     env: ANTHROPIC_BASE_URL=http://127.0.0.1:{port}  (Claude Code)
+     env: OPENAI_BASE_URL=http://127.0.0.1:{port}     (Codex)
+     env: 原始 API key 不变
+  → CLI 正常运行，完全不知道被代理
+
+数据流：
+  CLI → Proxy(收到 request)
+    → Pre-Read: 注入记忆到 system message
+    → 转发到真实上游 Provider URL
+  Provider → Proxy(收到 streaming response)
+    → 逐 chunk 透传回 CLI（零额外延迟）
+    → TurnCollector 旁路累积完整 response
+  流结束 → Post-Run: enqueuePostRun() 入队
+```
+
+#### 上游 URL 还原
+
+Proxy 启动时保存原始环境变量，spawn CLI 时只覆盖 `*_BASE_URL` 指向本地：
 
 ```typescript
-type EngineEvent =
-  | { type: "session"; sessionId: string }
-  | { type: "text_delta"; text: string }
-  | { type: "tool_start"; callId: string; tool: string; input: unknown }
-  | { type: "tool_end"; callId: string; output: string; ok: boolean }
-  | { type: "file_change"; path: string; change: "create"|"update"|"delete" }
-  | { type: "usage"; inputTokens?: number; outputTokens?: number; costUsd?: number }
-  | { type: "done"; exitCode: number }
-  | { type: "error"; code: string; message: string; retryable: boolean };
+type ProxyConfig = {
+  listenPort: number;
+  originalAnthropicUrl: string | undefined; // 启动前的 ANTHROPIC_BASE_URL
+  originalOpenAiUrl: string | undefined;    // 启动前的 OPENAI_BASE_URL
+  defaultAnthropicUrl: "https://api.anthropic.com";
+  defaultOpenAiUrl: "https://api.openai.com";
+};
+```
 
-interface ManagedEngine {
-  readonly name: "claude" | "codex";
-  probe(): Promise<EngineCapabilities>;
-  executeTurn(input: {
-    prompt: string;
-    cwd: string;
-    sessionId?: string;
-    provider?: string;
-    model?: string;
-    permissionMode: "ask" | "auto";
-    onPermission(request: { tool: string; paramsHash: string; description: string }): Promise<boolean>;
-    signal?: AbortSignal;
-  }): AsyncIterable<EngineEvent>;
+转发时使用 `originalAnthropicUrl ?? defaultAnthropicUrl` 作为上游地址。
+
+#### 核心接口
+
+```typescript
+type TurnEnvelope = {
+  engine: "claude" | "codex";
+  turnId: string;
+  requestBody: {
+    system: string;
+    messages: unknown[];
+    model: string;
+    tools?: unknown[];
+  };
+  response: {
+    textContent: string;
+    toolCalls: Array<{ id: string; name: string; input: unknown; output?: string }>;
+    usage: { inputTokens: number; outputTokens: number };
+  };
+  injectedMemoryIds: number[];
+  injectedSkillIds: string[];
+  requestCount: number;
+  startedAt: number;
+  finishedAt: number;
+};
+
+type ProtocolExchange = {
+  exchangeId: string;
+  executionRunId: string;
+  protocol: "openai_responses" | "openai_chat" | "anthropic_messages" | "unknown";
+  requestFingerprint: string;
+  conversationFingerprint?: string;
+  previousResponseId?: string;
+  turnId?: string;
+  relation: "new_turn" | "continuation" | "retry" | "compaction" | "unknown";
+  streamState: "started" | "completed" | "cancelled" | "failed";
+  startedAt: number;
+  finishedAt?: number;
+};
+
+interface ApiAdapter {
+  detectEngine(req: IncomingMessage): "claude" | "codex" | null;
+  injectMemory(body: unknown, memoryBlock: string): unknown;
+  extractTurnData(chunks: SSEChunk[]): TurnEnvelope;
+  getUpstreamUrl(req: IncomingMessage, config: ProxyConfig): string;
+  isNewTurn(body: unknown, prevBody: unknown | null): boolean;
 }
 ```
 
-实现办法：
+`ApiAdapter` 负责单个协议的语法解析，`TurnCorrelator` 负责跨请求关联，禁止由 adapter 仅凭最后一条 message 独自决定 turn。Proxy 同时维护 API Capture 和 Execution Capture：前者解析请求/流/tool item，后者记录进程、cwd、exit、文件/outcome；协议解析失败时仍保留 execution episode，但不得生成未经验证的完整 turn。
 
-1. `ai use claude|codex` 启动 readline/TTY REPL，每次用户提交形成一个 turn。
-2. Orchestrator 调 `memory.preRead`，把返回 prompt 交给对应 `ManagedEngine`。
-3. Claude/Codex adapter 使用各自稳定的非交互 JSON/stream-json 模式；实际 argv 只存在 adapter 内，并由 CLI 版本矩阵集成测试锁定。现有 Telegram engine 的流式解析逻辑迁入这些 adapter 复用。
-4. adapter 将厂商事件归一为 `EngineEvent`，Orchestrator 一边显示文本/工具进度，一边累积可脱敏的 Post-Run envelope。
-5. `done/error/cancel` 都调用 `enqueuePostRun`；同步成功标准是 job 已提交 SQLite，而不是抽取已完成。
-6. session id 由 adapter 返回并写入现有 session service，下一 turn resume；切换 provider/model 或 cwd 时按 adapter capability 决定 resume 或创建新 session。
+#### Turn 边界判定
 
-managed REPL 必须保留现有权限体验：adapter 将厂商 permission/tool request 转给 `onPermission`，CLI 在 TTY 询问，Telegram 复用 ApprovalManager；决定的 `paramsHash + approved` 进入 Post-Run confirmations。SIGINT 第一次取消当前 turn 并传 AbortSignal，第二次才退出 REPL，cancelled turn 仍提交 episode/job。
+Claude Code / Codex 在一次用户输入中可能产生多次 API 请求（模型请求 tool → CLI 执行 → 结果回传 → 模型继续），也可能 retry、resume、compact 或切 provider。Proxy 使用三层信号判定：
 
-provider fallback 属同一个 execution run：Pre-Read 只执行一次，所有候选 provider 使用完全相同的 injected prompt；失败尝试记录为 engine event，只有最终结果生成一个 Post-Run job。若前一 provider 已产生有副作用的 tool event，则禁止自动切换 provider，必须要求用户确认重试，避免重复执行。
+1. **Execution marker**：Orchestrator 为本次用户输入创建 `executionRunId/turnSeed`，能注入本地 header 或环境 metadata 时优先使用。
+2. **协议关联字段**：OpenAI `previous_response_id`、response/item/call id，Anthropic message/tool_use/tool_result id，以及 provider 会话字段。
+3. **内容指纹与状态机**：规范化 user content hash、tool result parent id、请求历史后缀 hash、流完成状态和时间窗口共同判断。
 
-保留 `ai use ... --native` 直接进入厂商 TUI，用于需要原生界面的用户。native 模式通过引擎原生 hook bridge 接入：支持 `UserPromptSubmit/Stop` 等同等事件的版本可获得完整 hook；探测不到逐轮 hook 时启动前必须明确显示 `memory capability=read-at-session-start`，且不得自动写入不完整记录。完整功能始终由默认 managed 模式提供，不因某个厂商缺少 hook 而取消。
+单纯 `messages[-1].role === "user"` 只能作为弱信号。相同 request fingerprint 在退避窗口内重发判为 retry；历史被压缩或 system 内容变化但 user turn seed 不变判为 compaction；无法确定时 relation=`unknown`，该 exchange 透传并记录 execution episode，不做自动 semantic write。
 
-`probe()` 在首次运行和 CLI 版本变化时执行，结果缓存到 `integrations.json`。缺少 JSON 输出、resume 或结构化事件时：managed 模式拒绝启动并给出受支持版本与 `--native` 选择，禁止静默退回不可观测解析。adapter 必须为记录的 Claude/Codex 最低/最高兼容版本各跑一组 fixture 测试。
+- **Pre-Read 注入策略**：仅对状态机确认的 `new_turn` 第一次 exchange 注入；continuation/retry/compaction 继承当前 turn 的 injection manifest。
+- **Post-Run 收集**：收到协议级完成事件后进入短暂 settle window；若出现关联 continuation 则继续累计，否则完成 TurnEnvelope。连接关闭不是成功完成的充分条件。
+- **幂等**：`turnId + requestFingerprint + protocol item id` 作为事件幂等键；retry 不能重复落 tool call、episode 或 extract job。
+
+#### API 格式适配
+
+| | Anthropic (Claude Code) | OpenAI (Codex) |
+|--|--|--|
+| 拦截端点 | `POST /v1/messages` | `POST /v1/chat/completions` |
+| 注入位置 | `body.system` 末尾追加 | `body.messages[0]` (system role) content 末尾追加 |
+| 流式格式 | SSE `event: content_block_delta` | SSE `data: {"choices":[...]}` |
+| Tool calls | `content[].type = "tool_use"` | `choices[].delta.tool_calls` |
+| 新 turn 判定 | `messages[-1].role === "user"` | `messages[-1].role === "user"` |
+| 非标准 provider | 按 Content-Type 和 endpoint 推断；无法识别时透传不注入 |
+
+协议比 CLI 人类可读输出更适合适配，但仍会新增事件类型、字段和 provider 扩展，必须按版本化兼容层治理，不能假定零耦合。
+
+#### 协议 Fixture Corpus 与回放
+
+每个 adapter 必须维护脱敏 fixture corpus，至少覆盖：普通文本、流式文本、单/并行 tool call、arguments 多 delta、tool continuation、reasoning item、retry、429/5xx、连接中断、用户取消、compaction、resume、unknown event 和 provider extra field。fixture 同时包含原始 request、SSE/event stream、期望 `ProtocolExchange`、期望 TurnEnvelope 和透传字节 hash。
+
+新增协议或升级 adapter 前必须执行 replay：
+
+- 未识别字段仍原样透传；
+- 解析器不能改变上游/下游字节语义；
+- tool item 不重不漏；
+- turn relation、streamState 和 result 符合 fixture；
+- 失败 fixture 不产生 active memory；
+- 旧 fixture 全部通过后才能更新 adapter version。
+
+#### 非标准 Provider 处理
+
+如果 provider 使用非标准 API 格式（既不是 Anthropic Messages 也不是 OpenAI Chat Completions），`detectEngine()` 返回 `null`，proxy 行为降级为：
+
+- 请求和响应**原样透传**，不注入记忆
+- 不捕获 response，本 turn 不产生 Post-Run
+- 写 `memory.skip` 日志（reason=`unknown_api_format`）
+- CLI 正常使用不受影响
+
+这保证了 proxy 不会因为不认识的格式而破坏 CLI 执行。
+
+#### 实现要点
+
+1. **生命周期**：proxy 监听 `127.0.0.1` 随机端口，仅接受本地连接。Telegram 常驻进程中 proxy 随进程启动持续运行；CLI `ai use` 中 proxy 随命令启动/退出，用 `process.on('exit')` 确保不留孤儿。
+2. **Pre-Read 时机**：proxy 收到新 turn 的第一个请求时，同步调用 `memoryService.preRead()`，将返回的记忆块注入 system message 后再转发上游。Pre-Read 默认 deadline 300ms，超时则不注入记忆但继续转发（fail-open）。
+3. **流式透传**：proxy 逐 chunk 转发 SSE 给 CLI，不等待完整解析；`TurnCollector` 旁路增量组装，设置内存/单 item/总响应上限，超长内容只保存类型化摘要和 hash。
+4. **Post-Run 时机**：协议级 `response.completed/message_stop/[DONE]` 进入 settle window；确认没有 continuation 后构造 TurnEnvelope。连接关闭分别映射 cancelled/failed/abandoned，不能一律视为完成。
+5. **Session 与权限**：CLI 原生处理 session resume、工具权限提示、SIGINT。proxy 不干预这些交互。
+6. **Provider fallback**：CLI 内部决定 provider 切换。Proxy 对每个 HTTP 请求独立处理，不感知 CLI 的 fallback 逻辑。
+7. **SIGKILL 恢复**：proxy 在收到第一个 API 请求时写 `execution_runs(status=running)`，正常结束或超时后更新状态。进程异常退出时下次启动将遗留 run 标记 `abandoned`。
+8. **会话空闲判定**（R2 debounce）：以"距离上次 API 请求流结束"计时。超过 `debounceMs`（默认 5 分钟）无新请求，视为会话空闲，触发 extract job 消费。
+9. **Adapter registry**：按 `protocol + adapterVersion + providerCompatibilityProfile` 选择适配器；provider 特例只允许在 registry profile 中声明，禁止散落条件分支。
+
+#### Proxy 安全规则
+
+Proxy 位于 CLI 与 API 之间，能看到完整请求和响应：
+
+- **API key 脱敏**：`Authorization` / `x-api-key` header 不写入任何日志、TurnEnvelope 或 job payload。
+- **TurnEnvelope 脱敏**：构造 envelope 前经过 `SecretScanner` 扫描 response 文本；命中的 credential/token 以占位符替换。
+- **不缓存请求体**：Pre-Read 注入后的 request body 只存在于转发的网络流中，不落盘。
+- **本地限定**：仅绑定 `127.0.0.1`，不接受远程连接；端口随机避免可预测。
+- **进程隔离**：proxy 不暴露管理端口或 API，不接受外部指令。
+
+#### 与 CLI system prompt 的关系
+
+Claude Code 自身有完整的 system prompt（含 `CLAUDE.md`、工具定义等）。Proxy 在 `body.system` 末尾追加 `<ai_gateway_memory>` 块。两者关系：
+
+- 记忆块的 `<policy>` 已声明"Current explicit user instructions override conflicting memory"
+- 注入位置在 system prompt 末尾，优先级低于 CLI 原有指令
+- 注入内容只包含事实/偏好/技能，不包含执行指令（R3 去指令化清洗保证）
+- 如果 system prompt 总长度超过模型上下文的 20%，记忆块按 token 预算裁剪，不挤占 CLI 的工具定义空间
+
+#### `--native` 直连模式
+
+保留 `ai use ... --native` 绕过 proxy 直接进入 CLI 原生 TUI。此模式下：
+
+- 不设置 `*_BASE_URL`，CLI 直连上游 API
+- 启动时执行一次 `memoryService.preRead()`，结果通过 CLI 的 system prompt 文件（如 `CLAUDE.md` 临时追加）或环境变量注入
+- Post-Run 自动写入不可用（proxy 不在链路上无法捕获响应）
+- 启动前明确显示 `memory capability=read-at-session-start, write=disabled`
+- 适用于需要原生体验或调试场景的用户
 
 ### 错误分类与入口行为
 
 ```typescript
 type MemoryErrorCode =
-  | "IDENTITY_UNRESOLVED" | "SCOPE_DENIED" | "POLICY_DISABLED"
-  | "STORE_UNAVAILABLE" | "PRE_READ_DEADLINE" | "QUEUE_WRITE_FAILED"
-  | "MODEL_OUTPUT_INVALID" | "SECRET_DETECTED" | "CONFLICT_RETRY_EXHAUSTED"
-  | "ENGINE_CAPABILITY_MISSING";
+  | “IDENTITY_UNRESOLVED” | “SCOPE_DENIED” | “POLICY_DISABLED”
+  | “STORE_UNAVAILABLE” | “PRE_READ_DEADLINE” | “QUEUE_WRITE_FAILED”
+  | “MODEL_OUTPUT_INVALID” | “SECRET_DETECTED” | “CONFLICT_RETRY_EXHAUSTED”
+  | “PROXY_UPSTREAM_FAILED”;
 ```
 
 - `IDENTITY_UNRESOLVED/SCOPE_DENIED`：记忆读写 fail-closed，主任务继续；UI 不显示任何记忆数量。
 - `STORE_UNAVAILABLE/PRE_READ_DEADLINE`：Pre-Read fail-open，运行无记忆；写 `memory.skip/error`。
-- `QUEUE_WRITE_FAILED`：模型结果仍返回，但 Telegram/CLI 显示一次非阻塞告警“本轮未能提交自动记忆”，execution_run 标 failed-to-enqueue，后续 doctor 可修复/重放不含正文的状态，不能声称已记住。
+- `QUEUE_WRITE_FAILED`：模型结果仍返回，但 Telegram/CLI 显示一次非阻塞告警”本轮未能提交自动记忆”，execution_run 标 failed-to-enqueue，后续 doctor 可修复/重放不含正文的状态，不能声称已记住。
 - `MODEL_OUTPUT_INVALID/SECRET_DETECTED`：worker retry 或 drop/pending，不影响原任务；日志不包含原始输出。
-- `ENGINE_CAPABILITY_MISSING`：managed 模式启动前失败，并提供版本诊断；native 模式按探测能力显式降级。
+- `PROXY_UPSTREAM_FAILED`：proxy 无法连接上游 API；透传错误给 CLI 处理，proxy 本身不重试（重试由 CLI 或 provider fallback 逻辑负责）。
 
 所有错误对象只包含 code、retryable、traceId 和脱敏 message；原始模型输出或 secret 只允许存在于有 TTL 的加密 job payload。
 
@@ -1329,14 +2068,13 @@ type MemoryErrorCode =
 
 | 入口 | Pre-Read Hook | Post-Run Hook |
 |------|---------------|---------------|
-| Telegram 普通消息 | `executePrompt()` 前 | `executePrompt()` 成功/失败后 |
-| Telegram `/claude` `/codex` 映射命令 | 执行前 | 执行后 |
-| CLI managed `ai use claude ...` | 每个 REPL turn 提交后、engine 前 | 每个 turn 的 done/error/cancel 后持久化入队 |
-| CLI managed `ai use codex ...` | 每个 REPL turn 提交后、engine 前 | 每个 turn 的 done/error/cancel 后持久化入队 |
-| CLI native `--native` | 原生 prompt hook；无 hook 时仅 session-start 只读 | 仅原生 stop/event hook 完整时启用自动写 |
-| Browser 自动化 | 打开页面前检查 auth | 页面任务完成后更新状态 |
+| Telegram（headless spawn CLI） | Proxy 拦截 API 请求时注入 | Proxy 捕获流式 response 结束后入队 |
+| CLI `ai use claude ...` | Proxy 拦截 API 请求时注入 | Proxy 捕获流式 response 结束后入队 |
+| CLI `ai use codex ...` | Proxy 拦截 API 请求时注入 | Proxy 捕获流式 response 结束后入队 |
+| CLI `--native` | 仅 session-start 一次性只读注入 | 不可用（无 proxy 无法捕获 response） |
+| Scheduler / Browser 自动化 | Proxy 拦截 API 请求时注入 | Proxy 捕获流式 response 结束后入队 |
 
-Orchestrator 必须用 `try/finally` 保证已开始的 turn 产生终态 envelope。若进程被 `SIGKILL`，managed REPL 在每个 turn 开始时先写 `execution_runs(status=running)`，下次启动将遗留 run 标记 `abandoned` 并入队一个 cancelled episode，确保事件链可闭合。
+所有经 Proxy 的入口共用同一套 Pre-Read + Post-Run 逻辑。Proxy 必须用 `try/finally` 保证已开始的 turn 产生终态 envelope。若进程被 `SIGKILL`，proxy 在收到第一个 API 请求时已写 `execution_runs(status=running)`，下次启动将遗留 run 标记 `abandoned` 并入队一个 cancelled episode，确保事件链可闭合。
 
 ---
 
@@ -1379,8 +2117,10 @@ Orchestrator 必须用 `try/finally` 保证已开始的 turn 产生终态 envelo
 
 ### Phase 0：契约、评测与迁移保护
 
-- 固化本文最终 schema、TypeScript public API、`ManagedEngine/EngineEvent` 协议和 feature flags。
+- 固化本文最终 schema（含 `memory_units + claims + evidence`）、TypeScript public API、Memory Proxy 协议（`ApiAdapter/TurnEnvelope`）和 feature flags。
 - 建立 R11 最小黄金集：scope 隔离、中文/英文召回、冲突、预算、forbidden leak；在任何 Retriever 改动前得到 baseline。
+- 增加端到端 QA 基线：知识更新、时序推理、证据不足拒答、stale-memory error、unsupported personalization。
+- 建立 Memory Simulation Harness 最小场景和 Proxy fixture corpus；所有随机时间、模型输出和 embedding 使用可重放 seed/stub。
 - 实现 migration runner、SQLite Online Backup、恢复演练、文件权限检查。
 - 实现 `memory_policies` 与 `--incognito`，确保自动写入上线前已有关闭和 purge 能力。
 - 退出条件：空库/旧库 migration 可重入；故障注入中断后可恢复；`forbiddenLeak=0`；公开类型通过 TypeScript contract test。
@@ -1390,20 +2130,23 @@ Orchestrator 必须用 `try/finally` 保证已开始的 turn 产生终态 envelo
 - 将 `src/telegram/memory` 迁移为 `src/core/memory`，Telegram 仅保留兼容 adapter，现有行为不变。
 - 落地 accounts/identity_links、`AiExecutionContext`、安全的 `project_id` 派生和群聊硬守卫。
 - 实现 Retriever/Rank/Budget/Injection 的统一只读路径和 R17 trace 日志。
-- 实现 Claude/Codex ManagedEngine adapter；`ai use` 默认 managed REPL，每 turn 接入 Pre-Read；保留显式 `--native`。
-- 退出条件：Telegram 与两个 managed CLI 的同一 fixture 产生相同注入 id；native capability 探测不虚报；Pre-Read p95 本地检索小于 100ms。
+- 实现 Memory Proxy（`core/proxy`）；所有入口（Telegram headless spawn、CLI TUI spawn）统一通过 Proxy 注入记忆；保留 `--native` 直连模式。
+- 实现 ProtocolExchange、TurnCorrelator、adapter registry、双层 API/Execution Capture 和 fixture replay。
+- 退出条件：Telegram spawn 和 CLI spawn 的同一 fixture 产生相同注入 id；retry/continuation/compaction 不重复写；未知事件字节透传；非标准 provider 正确降级；`--native` 正确标注 write=disabled；L1 Pre-Read p95 小于 100ms。
 
 ### Phase 2：持久化 Post-Run 与自动记忆 MVP
 
 - 实现 execution_runs、memory_jobs、worker lease/retry/dead-letter；Post-Run 同步只做 durable enqueue。
 - 每 turn 写轻量 episode/envelope；本地启发式筛选后才调用廉价专用抽取模型，按会话空闲/结束合批。
-- 自动保存明确 user-stated 的 `preference/fact/task_note`；隐含推断进入 pending；模型不能直接更新或删除。
-- 实现敏感过滤、provenance、MemoryPolicy、本地 confidence、memory_events 和管理界面的 `pin/correct/forget`。
-- 退出条件：进程在 enqueue 后强杀，重启仍能完成且不重复写；external 永不 active；用户回复延迟只增加一次本地 SQLite 入队时间。
+- 自动保存明确 user-stated 的 `preference/fact/task_note`；写入 Claim 与不可变 Evidence；隐含推断进入 pending；模型不能直接更新或删除。
+- 实现敏感过滤、provenance、Derivation DAG、结构化 confirmation、origin-bound authority、corroboration group、声明式 category Policy DSL、分区 memory_events 和管理界面的 `pin/correct/forget`。
+- 退出条件：进程在 enqueue 后强杀，重启仍能完成且不重复写；external 经过摘要/转述/蒸馏后仍永不 active；同源重复证据不触发升级；用户回复延迟只增加一次本地 SQLite 入队时间。
 
 ### Phase 3：长期/短期/项目分层与治理
 
-- 启用 canonical schema 中的 lifetime、project、status、时态字段；自动 TTL、画像合并、冲突候选和软删除。
+- 启用 canonical schema 中的 lifetime、project、status、完整时态字段；自动 TTL、Claim 冲突候选和软删除。
+- Profile 改为由 active Claim 编译的 audience-specific snapshot，不再允许模型整体覆写画像正文。
+- 启用 Profile AST 增量编译、prospective/constraint/negative typed payload 和 Event Pattern DSL；失败经验与相关成功 Skill 同时召回。
 - 完成 export/delete/purge、审计历史、privacy audience 与跨来源绑定告知。
 - 增加 profile/persona 单例并发测试和 project scope 跨 bot 行为测试。
 - 退出条件：scope/identity 泄漏为零；purge 后正文、向量、episode、可逆审计 payload 和备份均不可恢复。
@@ -1417,14 +2160,14 @@ Orchestrator 必须用 `try/finally` 保证已开始的 turn 产生终态 envelo
 - macOS Keychain 保存加密密钥
 - Linux libsecret/受限加密文件与 Windows DPAPI SecretStore adapter
 - Browser 自动化执行前检查登录态
-- 模型只能使用 auth capability，不能读取 secret
+- 模型只能使用 execution-bound、签名、短时有效的 capability handle，不能读取 secret；跨 execution 自动失效
 - 完成重定向 allowlist、数据分类、类型化动作和高危确认威胁测试
 
 ### Phase 5：检索增强
 
 - FTS5 索引（中文用 `trigram` 或外挂分词器，见「数据存储 · CJK 分词」；上线前做 CJK 召回验证）
 - alias/synonym 表
-- 混合检索：必选 + FTS + recent
+- MemoryQueryPlanner + 混合检索：required + FTS + recent + temporal + episode + constraint/negative
 - 记忆使用统计
 - 使用本文固定 RRF/重排公式；R11 CI 对比 Phase 1 baseline
 - 退出条件：CJK 短词 fallback 通过，质量指标不回退，p95 满足配置阈值
@@ -1444,33 +2187,56 @@ Orchestrator 必须用 `try/finally` 保证已开始的 turn 产生终态 envelo
 - 批量 episode 蒸馏为语义事实和 skill candidate，蒸馏任务幂等
 - 冲突检测
 - 重复合并
-- profile/persona 周期性更新
+- Profile Compiler 周期性更新版本化 snapshot
 - 可回滚 memory history
 - 退出条件：蒸馏重放不重复产物；来源证据可追溯；失败不会标记 episode 已消费
 
 ### Phase 8：检索质量与时序正确性（Tier 1）
 
 - 扩充 Phase 0 已落地的检索评测 harness、黄金集和 CI 回归闸
-- 双时态事实模型 `valid_from/valid_to/superseded_by`（R12）
+- 完整时态模型：event/asserted/observed/ingested/transaction time、fuzzy/relative/unknown、precision、timezone、recurrence 和 event anchor（R12）
 - fact_key 归一 + 冲突检测与消解（R13）
 - R11 评测集补矛盾/时序用例，基线阈值写入 baseline.json
 
 ### Phase 9：知识图谱、回流与三层记忆（Tier 2）
 
-- 实体-关系图谱层 entities/relations + 受限多跳检索（R14）
-- 检索有用性回流 reward_score + 学习式 tiebreak（R15）
+- 实体-关系图谱升级为可重建 Temporal Event Hypergraph 物化索引：Entity/Claim/Event/Episode/Action/Outcome/Artifact + 预算化 path search（R14）
+- 检索有用性拆分为多维 utility；启用确定性使用信号和廉价 Judge，反事实仍在 Phase 11 异步采样（R15）
 - 启用 `memory_episodes` 的长窗口蒸馏与情景/语义/程序三层检索（表从 Phase 2 已开始积累，R16）
 - 图层与回流全部可降级回退到 Phase 8 基线
 - 退出条件：关闭任一 Tier 2 flag 即回到 Phase 8 结果；多跳/回流在独立套件有可测增益
 
 ### Phase 10：Skill 自沉淀（程序性记忆）
 
-- `skills` 表 + candidate→validated→active→deprecated 生命周期
+- `skills + skill_versions` + candidate→syntactically_valid→historically_replayable→sandbox_validated→shadow_validated→active→needs_revalidation→deprecated 生命周期
 - 归纳型（episodes 序列挖掘）+ 示范型（用户确认）双来源
-- Skill 注入 + Post-Run 回流强化 + 蒸馏合并/参数化/版本取代
+- 生成结构化 Skill IR，执行 schema validation、trace alignment、static risk analysis、sandbox replay 和 shadow invocation
+- Skill 注入 + Post-Run 回流强化 + 蒸馏合并/参数化/版本取代；环境指纹变化时强制重验证
 - 高危护栏、external 不自动执行、跨 scope 提升需显式、全程 memory_events 留痕
 - Skill 仅作为 advisory 程序记忆，运行时 permission policy 独立生效
-- 退出条件：success criteria 可验证或经用户确认；exit code 不能单独计成功；高危动作 100% 触发确认
+- 退出条件：success criteria 可验证或经用户确认；exit code 不能单独计成功；DSL 禁止项无法编码；高危动作 100% 触发确认；未通过对应风险等级 replay/sandbox/shadow 的 Skill 不得 active
+
+### Phase 11：主动回忆、因果反馈与 Shadow Memory
+
+- 暴露受限只读 `MemoryService.search`，主模型每 turn 默认最多一次迭代式补查
+- 增加多维 utility：answer/action contribution、failure attribution、harm、redundancy、correction 和 token opportunity cost；对高影响记忆异步采样 counterfactual replay
+- 建立 production/candidate 双策略 Shadow Memory，比较 Planner、ranking、embedding、Policy 和 compiler 结果
+- 退出条件：主动补查不产生 scope/authority 泄漏；candidate policy 不影响生产结果；端到端 QA 有统计显著增益且 stale-memory error 不上升
+
+### Phase 12：多 Agent、Team Scope 与多模态 Artifact Memory
+
+- 增加 agent-private/project-shared/team-shared/delegated scope 与 owner/readers/writers/delegation/purpose policy
+- 子 Agent 默认只能写 episode/candidate；提升共享 semantic memory 需要 owner policy
+- 建立加密 Artifact Store，支持 image/document/audio/UI region 的 hash、观察结果、区域引用和多模态 embedding
+- 增加签名 append-only event replication、causal parents、Lamport time、team key rotation 和 deterministic materializer
+- 退出条件：跨 Agent purpose limitation 和撤销测试全部通过；离线并发可确定性合并；删除 artifact 时全部派生 Claim 可定位、重算或失效；purge tombstone 和 key destruction 传播到所有已注册副本
+
+### Phase 13：完整性证明与可逆 Parametric Promotion
+
+- `memory_events` 建立按 account+stream 分区的 previous_hash/event_hash 链和本机签名 checkpoint，备份/恢复后执行完整性校验
+- 高频稳定且非敏感的记忆按 rule→local classifier→prompt/context adapter→可选 model adapter 分级提升；保留 source Claim/Evidence、base model、版本、评测和撤销路径
+- 编译产物在 shadow/replay 通过前不进入生产；来源撤回或 Claim supersede 时自动失效
+- 退出条件：篡改、删除事件、错序恢复能够被检测；前三类 promotion 可确定性撤销并回到 plaintext memory 基线；Model Adapter 未满足 opt-in/样本/评测门槛时保持 experimental
 
 ### 贯穿全程：可观测性（不单列 Phase）
 
@@ -1484,6 +2250,11 @@ Orchestrator 必须用 `try/finally` 保证已开始的 turn 产生终态 envelo
 ### Core Memory
 
 - scope 隔离：global/bot/project 不串读
+- 类型化模型：Memory Unit 与 Claim/Evidence/Skill/Prospective/Constraint/Negative payload 事务一致，兼容投影不可绕过真相源
+- 证据独立性：同源网页摘要、模型复述和重复 tool parse 属同一 corroboration group，不能把 pending 刷成 active
+- 派生图：summary→distill→profile/skill 的每条 transform 可回溯；purge/retract 后 authority 和 Claim 状态可从 DAG 重算
+- 结构化确认：claim hash 或 displayed value hash 不匹配时确认失败；模糊“都记住”不批量提升 authority
+- authority 传播：external 经 summary/distill/profile/graph/skill 后 authority cap 不提升；仅具体 Claim 用户确认或白名单 tool outcome 可新增高权限 Evidence
 - 身份绑定：多来源映射到同一 canonical account 后 global 记忆互通；群聊/非私聊禁用记忆（R1、R7）
 - lifetime：short_term 到期清理
 - 自动抽取：durable enqueue 不阻塞回复；高置信度保存，低置信度 pending（R2、R4）
@@ -1493,21 +2264,34 @@ Orchestrator 必须用 `try/finally` 保证已开始的 turn 产生终态 envelo
 - 注入预算：profile/persona 各有 token cap，其他按相关性裁剪，任何条目都不能突破总预算（R6）
 - 迁移：旧 schema 行正确升级，profile/persona 单例不重复（R5）
 - 并发：两个进程同时写同一 operation 只产生一次结果；lease 过期重领不重复抽取
+- Profile 编译：Claim 更新/撤回后 snapshot 失效并重编译；敏感 profile slice 不进入无关 audience
+- Profile AST：没有 source claimIds 的字段不能进入 Snapshot；仅受影响 section 增量重编译
+- 前瞻/约束/负向：事件触发正确，完成后按 policy 关闭；约束强度不与 preference 混淆；成功 Skill 检索同步带回相关 failure
+- 时态不确定性：fuzzy/relative/unknown 不伪造精确时间；anchor event 更新后相关查询结果可重算
+- 完整性：event hash chain 在正常备份恢复后有效，手工改行、删事件和错序恢复可被发现
 - 故障恢复：enqueue 后强杀、worker 模型超时、SQLite busy、磁盘满、migration 中断均有确定结果
 - 隐私：no_read/no_write/incognito/audience 生效；purge 清理全部派生数据和可逆备份
 
 ### Telegram
 
+- headless spawn CLI 通过 Proxy 自动注入记忆
 - 普通聊天自动写入记忆
 - 切换 `/claude` `/codex` 记忆仍可用
 - 统一设置/审计界面可管理自动写入的记忆
+- Proxy 与 stdout stream-json 解析并行工作互不干扰
 
 ### CLI
 
-- managed `ai use claude/codex` 每 turn 都产生完整 Pre-Read、EngineEvent、Post-Run job 和 resume session
-- adapter fixture 覆盖受支持 CLI 版本；未知版本 probe 失败时不静默解析 TUI
-- `--native` 正确展示 capability；原生 hook 不完整时禁用自动写而不是写入残缺记忆
+- `ai use claude/codex` 通过 Memory Proxy 每 turn 都产生完整 Pre-Read 注入、TurnEnvelope 捕获和 Post-Run job
+- Proxy 正确识别 Anthropic/OpenAI 两种 API 格式并注入记忆
+- Turn 状态机正确：tool continuation/retry/compaction 不重复注入，新 user message 触发新 turn，unknown relation 不自动写 semantic memory
+- Protocol fixture replay：普通/stream/tool/retry/cancel/compaction/unknown event 的透传 hash、exchange relation 和 envelope 与黄金 fixture 一致
+- 非标准 provider 格式正确降级：透传不注入不报错，CLI 正常执行
+- Proxy Pre-Read 超时时 fail-open（不注入但继续转发），不阻塞 CLI 正常使用
+- Proxy 安全：Authorization header 不出现在日志、envelope 或 job payload
+- `--native` 正确展示 `memory capability=read-at-session-start, write=disabled`
 - cwd 改变时 project scope 生效
+- Proxy 进程随 `ai use` 启动/退出自动管理，不留孤儿进程
 
 ### Auth Session
 
@@ -1518,6 +2302,8 @@ Orchestrator 必须用 `try/finally` 保证已开始的 turn 产生终态 envelo
 - 非 allowlist 域名不能复用 auth profile
 - redirect/punycode/相似域名/恶意网页指令不能绕过 allowlist 和 tool policy
 - 敏感操作需要确认
+- capability caveat：子流程只能收窄 origin/action/expiry/data limit，不能移除限制；跨 execution/agent/profile 重放失败
+- 数据出口：下载 quarantine、跨域发送、popup/redirect 和超出 maxDataBytes 均被策略拦截或要求确认
 
 ### 检索质量与增强（Phase 0、5-10）
 
@@ -1528,6 +2314,23 @@ Orchestrator 必须用 `try/finally` 保证已开始的 turn 产生终态 envelo
 - 回流：cited 提升有用率并影响 tiebreak；contradicted 触发消解且不误伤"否定做法"（R15）
 - 三层：单轮只写 episode 不同步调抽取模型；蒸馏批量消费 `distilled_at IS NULL`（R16）
 - Skill：满足 success criteria 的三个独立 run 才生成 validated skill；单独 exit code 0 不计成功；高危 skill 执行前必确认；external skill 不自动 active
+- Planner：时间、实体、失败经验、约束和 Skill 查询生成正确 route；Planner 不能输出 SQL/user id 或越权 scope
+- 主动回忆：受限 search 调用次数、条数和 token cap 生效；与 Pre-Read 使用同一过滤和排序路径
+- 端到端：测量 memory-assisted accuracy、stale-memory error、unsupported personalization、abstention accuracy、temporal update accuracy 和 contradiction resolution accuracy
+- Skill IR：每个步骤可回映 episode signature；sandbox replay/shadow 未通过时不能 active；环境指纹变化进入 needs_revalidation
+- Shadow：candidate ranking/policy/compiler 只记差异，不改变生产 injected ids 或数据库状态
+- 延迟分层：L0/L1/L2 分别满足预算；L3 不阻塞首次 prompt，也不迟到修改已发送上下文
+- 图索引：删除 source Evidence 后边失效并可重建；所有注入 path 可回源 active Claim/Evidence；超预算查询确定性截断
+- Utility：Judge 不能提高事实 confidence；counterfactual 只在异步采样队列执行并满足每日预算
+
+### 长期仿真、复制与 Promotion
+
+- 长期仿真：跨月偏好变化、项目切换、事实纠正、恶意网页、Skill 退化、成员撤销、设备离线冲突和 purge 场景可固定 seed 重放
+- 演化指标：memory growth、duplicate、contradiction、profile drift、authority laundering、stale error、Skill degradation 和 purge completeness 达到基线
+- 事件复制：离线设备产生并发 Evidence 后 deterministic materializer 收敛到同一状态；wall clock 不决定冲突胜负
+- Team key：成员移除后不能解密新事件；key rotation 和 purge tombstone 能传播到已注册副本
+- Artifact：删除 blob 后派生 Evidence/Claim/embedding 全部撤回或重算，无孤儿 Observation
+- Promotion：rule/classifier/context adapter 撤销后行为回到 plaintext baseline；LoRA 未 opt-in 或评测不足时无法切 active
 
 ### 可观测性（R17/R18）
 
@@ -1588,7 +2391,7 @@ CREATE TABLE account_merge_operations (
 
 硬规格：
 
-- **持久化异步**：Post-Run Hook 在返回前只把任务写入 `memory_jobs`，写入成功即返回；禁止使用进程内 fire-and-forget Promise。CLI 每个 managed turn 结束都入队，进程退出不丢任务。
+- **持久化异步**：Post-Run Hook 在返回前只把任务写入 `memory_jobs`，写入成功即返回；禁止使用进程内 fire-and-forget Promise。CLI 每个 proxy 拦截的 turn 结束都入队，进程退出不丢任务。
 - **两级过滤**：
   1. 本地启发式先筛——只有命中偏好/身份/项目约定/重复流程等信号才进下一级。纯闲聊、纯问答直接丢弃，不调模型。
   2. 通过初筛的才交给**廉价专用抽取模型**（如 Haiku 级），禁止用主对话模型（Opus）逐轮抽取。
@@ -1608,9 +2411,9 @@ CREATE TABLE account_merge_operations (
 - **注入侧清洗**：`<ai_gateway_memory>` block 内每条都是数据不是指令；危险短语检测只用于降级/告警，不能把正则清洗当作安全边界。真正边界是 provenance、类型分离和独立 tool permission。
 - 高危动作词（删除、转账、下单、提交、发送）出现在候选里时，即使 `user_stated` 也降为 pending。
 
-### R4 confidence 状态机（Phase 2-3）
+### R4 confidence 与分类 Policy Automata（Phase 2-3）
 
-confidence 由本地 Policy 计算，抽取模型不得直接给分。初始值：
+confidence 由本地 Evidence Aggregator 计算，抽取模型不得直接给最终分。下表仅是无专用 category policy 时的默认先验，不得覆盖「高级记忆能力 · Policy Automata」的分类规则：
 
 | 来源 | 初始 confidence |
 |------|-----------------|
@@ -1621,13 +2424,13 @@ confidence 由本地 Policy 计算，抽取模型不得直接给分。初始值�
 
 加减分与迁移：
 
-- 同一事实再次被证实：`confidence += 0.15`（上限 1.0）。
-- 命中冲突证据：`confidence -= 0.2`，跌破 0.45 转 pending。
-- `pending → active`：confidence 升到 ≥ 0.75，或第二次独立证据出现，或用户确认。独立证据要求不同 `execution_run.id` 且 quote hash 不同，模型重复复述同一用户消息不计数。
+- 同一事实新增独立支持 Evidence 时，按来源可靠性、corroboration group、时间相关性和 extraction reliability 重算；禁止简单按 Evidence 行数累加。
+- 命中反驳 Evidence 时按 authority、时间和 specificity 重算；是否转 pending/supersede 由 category conflict policy 决定。
+- 默认 `pending → active`：confidence ≥ 0.75 且满足 category 的最低独立证据/authority/verifier 条件，或用户对具体 Claim hash 确认。不同 `execution_run.id` 但相同 `corroboration_group` 不算独立证据。
 - `active → archived`：`last_effective_at` 超过 90 天且连续至少 5 次相关查询未被采用，或被更新版本取代；仅仅 90 天没聊天不能归档 profile。
 - `archived → active`：再次被检索命中且相关性达标。
 - 每次注入只更新 `inject_count/last_injected_at`；判定 cited 才更新 `cited_count/last_effective_at`。注入与真正有用必须分开统计。
-- 用户明确确认直接设 `trust=user_stated, confidence>=0.9`；高危动作即使确认也只影响“记住该偏好”，不能授予未来工具执行权限。
+- 用户明确确认会新增 `user_confirmed` Evidence 并触发重算，不直接覆盖历史 Evidence；高危动作即使确认也只影响“记住该偏好/约束”，不能授予未来工具执行权限。
 
 ### R5 迁移脚本（Phase 1）
 
@@ -2095,12 +2898,101 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - **降级安全**：所有中间态展示是最佳努力，`ProgressReporter` 现有 429 退避与"best-effort 不影响任务完成"语义继续适用。
 - `memory_injected` 的 N 与 `skill_applied` 的技能名与 R17 `memory.inject` 日志同源，保证"看到的"与"记录的"一致。
 
+### R19 Claim/Evidence 与来源权限不可洗白（Phase 2 起）
+
+- 所有 semantic memory 写入必须产生 Claim 和至少一条 Evidence；`memories.evidence_json` 只用于旧库迁移。
+- Evidence 必须保存 origin set、derivation hash、corroboration group、polarity、authority cap 和 taint labels。
+- summary/distill/profile/graph/skill 等派生操作的 authority cap 取关键来源最低值；external 不因经过可信模型或可信工具处理而升级。
+- 独立证据判定使用 corroboration group，不使用“不同模型输出”“不同 job”或“不同摘要文本”作为独立性证明。
+- 用户确认只提升绑定 Claim hash 的事实；工具验证只提升其白名单 assertion 能证明的 predicate/value/time 范围。
+
+### R20 规划式与迭代式检索（Phase 5、11）
+
+- Planner 输出只能是受 schema 约束的 intent/entity/time/type/route，不得包含 SQL、任意账号、文件路径遍历或 raw auth 标识。
+- 初始 Pre-Read 必须保持 deadline；复杂图/episode/iterative route 超时独立降级，不能阻塞 required/profile/constraint 快速路径。
+- 主模型 `memory.search` 默认每 turn 一次、8 条、1200 tokens；其结果不自动写回新记忆，也不能请求其他 audience 或历史 deleted 内容。
+- 检索排序必须显式考虑 authority、temporal fit、evidence coverage、interference 和 token cost；权重升级须经 Shadow replay。
+
+### R21 Profile Compiler、前瞻/约束/负向记忆（Phase 3、7）
+
+- Profile Snapshot 是 active Claim 的编译投影，保存 source ids 和 compiler version；模型不能整体覆写 profile。
+- prospective memory 只能触发提醒、约束、确认或受 scheduler policy 控制的任务，不能仅凭记忆获得副作用权限。
+- constraint 与 preference 使用不同注入段和优先级；system safety policy 不受用户记忆覆盖。
+- negative memory 与相关 Skill/方案共同召回，避免系统只记住成功而重复已知失败。
+
+### R22 Skill IR 验证流水线（Phase 10）
+
+- `steps_json` 只保留为兼容显示；执行与生命周期依据版本化 Skill IR。
+- Skill active 前必须完成 schema validation、episode trace alignment、static risk analysis、sandbox replay 和 shadow invocation。
+- environment fingerprint、required capabilities、pre/postcondition、invariant 和 rollback 是 Skill version 的必填治理字段；不适用时使用明确空数组，不能省略验证语义。
+- 工具 major version、环境指纹或关键 Claim 变化时进入 `needs_revalidation`，不得继续按 active 注入执行建议。
+
+### R23 Capability Security Kernel（Phase 4）
+
+- capability handle 必须签名、短时有效并绑定 user/execution/domain/operation；跨 execution 和跨 Agent 复用失败。
+- Memory、Profile、Skill、网页、文件和模型输出均无权创建或扩权 capability；只有 Broker/Policy Kernel 可以签发。
+- redirect、data egress、confirmation 和 action risk 在工具执行时验证，不能只依赖 prompt 中的 capability 描述。
+
+### R24 Shadow、完整性与可逆编译（Phase 11-13）
+
+- candidate Planner/ranking/policy/compiler/skill 先在 shadow mode 运行，不得影响生产 injected ids、工具权限或数据库状态。
+- memory_events 使用 hash chain；checkpoint、备份和恢复必须可验证，发现断链时 fail-closed 禁止自动治理写入，但主任务仍可在 no-memory 模式运行。
+- parametric promotion 必须保存 source Claim/Evidence、compiler version、评测结果和撤销路径；来源撤回、冲突取代或评测回退时自动失效。
+
+### R25 Derivation DAG 与结构化确认（Phase 2）
+
+- `origin_set_hash` 只用于缓存和快速比较，所有派生关系必须写 `memory_derivations`，并能从 parent Evidence 重算 authority、taint、corroboration 和 purge 影响面。
+- 只有 `user_confirm` 和 `tool_verify` transform 可以提升 authority；其他 transform 的 cap 取关键 parent 最低值。
+- 用户确认必须绑定 claim hash 和 displayed value hash；hash 不一致、Claim 已变更或 audience 不匹配时确认失效并要求重新展示。
+
+### R26 ProtocolExchange 状态机与回放（Phase 1）
+
+- Turn 关联必须综合 execution marker、协议 id、内容指纹和流状态；末尾 role 只能是弱信号。
+- retry/continuation/compaction 继承 injection manifest 且不重复写事件；relation unknown 时透传并只落低风险 execution episode。
+- adapter 变更必须通过完整 fixture corpus；未知事件原样透传，失败/取消/断流不得误判成功。
+
+### R27 分层延迟预算（Phase 1、5、11）
+
+- 300ms 只覆盖 L0-L2 本地路径；远程 Planner、remote reranker、复杂 NLI 和反事实属于 L3。
+- Profile 必须预编译，网络 I/O 不得进入只读事务；L3 只能通过受限迭代式 search 返回，不能修改已发送 prompt。
+- 每个 route 独立记录 deadline、timeout 和 degradation reason，不能用总超时隐藏单路退化。
+
+### R28 模糊时态与图索引可重建（Phase 8-9）
+
+- fuzzy/relative/unknown 时间是一等合法值；没有证据时不得填充精确 epoch。
+- 图谱 node/edge 必须携带 source ids 和 index generation；图不是事实源，允许整体删除后从 Claim/Evidence/Episode 重建。
+- 每条注入 graph path 必须回源 active Claim/Evidence，并受深度、节点、边、路径和 authority 预算。
+
+### R29 Skill DSL、验证等级与风险上限（Phase 10）
+
+- Skill DSL 禁止任意循环、动态工具名、自修改、未声明环境值和 capability；无法表达的流程保留 advisory 文本，但不能 active 自动执行。
+- 风险等级决定最低验证门槛：只读需 replay+shadow，可回滚本地写需 sandbox，外部写即使 active 仍确认，转账/生产破坏永不无人确认执行。
+- 只有 Skill 被实际遵循且后置条件成功才提升；Agent 偏离但任务成功不能归功于 Skill。
+
+### R30 分级 Utility 与反事实预算（Phase 9、11）
+
+- Utility 拆成 retrieval/answer/action/harm/token/correction，多维信号保留原始计数；排序版本负责组合，禁止写回事实 confidence。
+- counterfactual 只对高影响样本异步执行，使用固定 judge、缓存、每日预算和可复现输入；全量逐条双跑禁止进入同步链路。
+- learned ranking 上线前必须同时改善端到端质量并不增加 stale-memory error、forbidden leak 和 harm score。
+
+### R31 事件复制、Team Key 与 Artifact 生命周期（Phase 12）
+
+- 多设备只复制签名 event envelope，不复制 SQLite；materializer 必须确定性并支持 causal parents/Lamport time。
+- Evidence 追加合并，Claim 状态重算；purge 使用 tombstone + 内容密钥销毁。成员撤销后不得获得新 team key。
+- Artifact 删除必须沿 Artifact→Observation→Evidence→Claim 派生链撤回，禁止遗留不可验证事实。
+
+### R32 分级 Parametric Promotion 与长期仿真门槛（Phase 0、13）
+
+- 默认 production promotion 依次为 compiled rule、local classifier、prompt/context adapter；Model Adapter/LoRA 保持 opt-in experimental，但不删除能力。
+- 每个产物必须有 source ids、base model、compiler version、eval report、shadow result 和 rollback artifact；来源失效时自动停用。
+- learned ranking、自动 Skill active、复制协议和 promotion 必须通过固定 seed 的长期 Memory Simulation Harness，不得仅用短检索黄金集宣称完成。
+
 ## 关键结论
 
 1. 记忆系统应该是 AI Gateway Core 能力，不属于 Telegram。
 2. 默认依靠 hook 自动记忆，但显式 pin/correct/forget/purge 是用户控制面；旧命令只能在等价 UI/CLI 上线后移除。
 3. 长期记忆、短期记忆、项目记忆必须分层；会话上下文由 conversation buffer 承载，不落库。
-4. 用户画像和 bot 画像是优先注入核心记忆，但仍受 audience/privacy policy 与 token cap 约束；其他记忆按相关性检索。
+4. 用户画像和 bot 画像是由 Claim 编译的版本化 Snapshot，不是真相源；按 audience/purpose 注入并受 privacy policy 与 token cap 约束。
 5. SQLite 继续作为主存储，Markdown 只用于导出和人工审计。
 6. 向量搜索可以扩展；当前已完成 embedding provider 配置，真正的向量入库、召回和 rerank 应在 FTS5 和事件审计稳定后再做。
 7. 账号密码不属于 memory，登录态由 Auth Session Broker 维护。
@@ -2109,10 +3001,24 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 10. 自动记忆的信任边界不止凭证：不可信来源的候选（R3）永不自动 active，遗忘/彻底清除/导入导出（R10）是一等命令。
 11. Auth Session Broker 是并行 track，其进度不阻塞记忆分层与检索增强。
 12. 检索评测 harness（R11）在 Phase 0 建立，先于 FTS/向量/时序/图谱/回流，之后每次检索改动都以它把关。
-13. 时序正确性（R12/R13）与证据强度（R4）是正交两轴：前者管"现在是否成立"，后者管"证据多强"，冲突消解同时用两者。
-14. Skill 是程序性记忆，不是新范式：它由"情景层(R16)→ 蒸馏(Phase7)"自沉淀，复用 R2/R3/R4/R12/R13/R15 全套机制；风险高于静态事实，高危步骤与 external 来源必须人工确认。
+13. 时序正确性（R12/R13）与证据强度（R4/R19）是正交两轴：前者管"何时成立"，后者管"哪些独立来源支持或反驳"，冲突消解同时用两者。
+14. Skill 是程序性记忆，由"情景层→蒸馏→Skill IR→回放/Shadow 验证"沉淀；高危步骤、external 来源和环境变化必须进入确认或重验证路径。
 15. 记忆是隐式自动的，必须可观测：链路日志（R17，`traceId` 贯穿、复用 `writeLog`、全程脱敏）和 Telegram 中间态（R18，复用 `ProgressReporter`、只显状态不泄内容）从一开始就随每个节点同步落地，不作事后补丁。
-16. `ai use` 默认使用 Gateway Managed REPL 和结构化 EngineEvent，逐 turn 实现完整 hook；不可观测的 native TUI 只作为显式兼容模式，不能虚报自动写能力。
+16. 所有入口统一通过 spawn CLI + 本地 Memory Proxy 执行。Proxy 必须作为版本化协议兼容层实现 OpenAI Responses/Chat、Anthropic Messages、streaming state machine、tool assembler 和 fixture replay；未知协议透明透传并禁用当前 turn 自动写，不能宣称版本耦合风险极低。
 17. Post-Run 的“异步”必须是 SQLite durable job，不是进程内 Promise；operation id、lease、重试和 dead-letter 保证进程退出后仍可完成且不重复。
-18. canonical schema 一次定义 lifetime/status/trust/时态/回流字段；Phase 只启用能力，不再创建含义重复的列。
+18. canonical schema 使用统一 Memory Unit + 类型化 Payload + Claim/Evidence Ledger；Phase 只启用能力，不再向万能 memories 单表叠加类别专用字段。
 19. prompt 注入清洗不是安全边界；provenance、结构化类型、scope SQL 过滤、独立 tool permission 和用户确认共同构成边界。
+20. 来源权限必须绑定原始 origin 并随派生传播，模型摘要、蒸馏、Profile 编译、图谱抽取和 Skill 归纳都不能洗白 external 来源。
+21. 检索由 Query Planner、多源融合、authority/时态冲突过滤和 Context Compiler 组成；主模型可以进行受限只读的迭代式补查。
+22. 系统同时管理语义、情景、程序、前瞻、约束和负向记忆；失败经验与禁忌是一等记忆，不是日志附属品。
+23. capability 是 execution-bound 的安全对象，不是 prompt 文本；任何记忆都不能授予或扩展工具权限。
+24. 所有策略演化先经过 replay/shadow；事件 hash chain 和可逆 parametric promotion 保证系统可审计、可验证、可回退。
+25. Evidence 的可信度传播依赖可遍历 Derivation DAG，`origin_set_hash` 不能替代来源图；用户确认必须绑定具体 Claim 和展示值。
+26. Memory Proxy 是协议交换状态机而不是普通 HTTP 中间件；retry、continuation、compaction、cancel 和 unknown event 必须通过 fixture replay 证明不重不漏。
+27. Pre-Read 使用 L0-L2 分层延迟预算；远程规划、复杂图推理和反事实属于 L3 主动补查，不能阻塞首次请求。
+28. 模糊时间和相对时间是一等数据类型；Temporal Event Hypergraph 是可从 Claim/Evidence/Episode 重建的物化索引。
+29. Skill 的自动化可行性由受限 DSL、Historical Replay、Sandbox 和 Shadow Validation 保证，不以重复成功次数单独决定 active。
+30. Memory Utility 使用多维信号和异步采样反事实；反馈只能改变排序效用，不能自我强化事实 confidence。
+31. 多设备/Team Memory 使用签名事件复制、因果顺序和密钥轮换；Artifact 生命周期必须沿派生链完整撤回。
+32. Parametric Promotion 分为 rule、classifier、context adapter 和 opt-in model adapter；完整能力保留，但每一级都有独立评测与撤销门槛。
+33. 长期 Memory Simulation Harness 是 learned ranking、自动 Skill、复制和 promotion 的生产闸门，短期 retrieval 指标不能替代长期演化验证。
