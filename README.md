@@ -1,6 +1,27 @@
-# AI Gateway
+# AI Runtime（当前阶段：AI Gateway）
 
-本地 AI Provider 管理工具，用一个 `ai` 命令统一管理 Claude Code、Codex CLI 和 Hermes 机器人的 provider、模型、优先级、健康度和诊断。
+本项目的长期目标是构建一套企业级 AI Runtime：让模型、Agent、记忆、知识、技能、工作流和工具在统一的运行、治理与学习体系中协作，并持续把个人经验沉淀为组织能力。
+
+Runtime 才是产品。Memory、Agent 和 LLM 都是可以替换和组合的能力模块。
+
+当前可用版本是 Runtime 的 Gateway 基础层：通过统一的 `ai` 命令管理 Claude Code、Codex CLI 和 Hermes 的 provider、模型、优先级、健康度、故障转移、用量、会话、诊断与 Telegram 入口。后续能力会在保持现有命令稳定的基础上，逐步演进到统一执行、受治理学习、Skill/Capability 沉淀和组织级共享。
+
+北极星目标：**每一次交互，都让 Runtime 更有能力。**
+
+## 文档导航
+
+- [中文文档总览](./docs/README.md)
+- [中文使用指南](./docs/USAGE.md)
+- [HTML 命令手册](./docs/USAGE.html)
+- [中文技术架构说明](./docs/ARCHITECTURE.md)
+
+AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/PROJECT_CONSTITUTION.md`、`docs/AI_RUNTIME_ARCHITECTURE.md`、`docs/SPEC.md` 和 `docs/CONVENTIONS.md`。
+
+## 当前边界
+
+- 已交付：本地 Provider Gateway、Claude/Codex 启动与 fallback、Hermes、Telegram、会话、用量、诊断和早期 Memory。
+- 演进中：统一 Runtime 执行上下文、自动学习与记忆治理、Skill/Capability 生命周期、插件体系。
+- 长期方向：组织与租户隔离、能力注册与共享、企业集成、Web/Desktop/API 治理界面。
 
 ## 安装开发依赖
 

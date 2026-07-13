@@ -1,12 +1,38 @@
-# AI Gateway Product Specification
+# AI Runtime Product Specification
+
+> Audience: AI agents and maintainers. This document is normative and must remain in English.
 
 ## 1. Product Goal
 
-Build a local `ai` tool, named AI Gateway, to manage providers, models, permission modes, priority, health status, and usage across Claude Code and Codex CLI.
+Build an enterprise AI Runtime that continuously turns execution experience into governed, reusable organizational capability.
 
-The first version is CLI-first, but the architecture must support a future local web control panel and Flutter desktop app.
+The existing AI Gateway is the first Runtime foundation: a local `ai` command that manages providers, models, permission modes, health, fallback, usage, Claude Code, Codex, Hermes, Telegram, sessions, and early memory capabilities.
 
-All product surfaces should share the same core business logic instead of reimplementing provider management separately.
+The Runtime is the product. Models, providers, agents, memory, knowledge, skills, workflows, tools, execution, reasoning, and learning are replaceable capabilities.
+
+The first release remains CLI-first, while the architecture must support Telegram, schedulers, a local web control panel, enterprise APIs, and future desktop clients through the same core contracts.
+
+All surfaces must share Runtime orchestration, policy, execution, learning, and capability APIs instead of reimplementing domain behavior.
+
+Normative product principles:
+
+- Runtime first: capabilities belong to the Runtime, not to one surface or agent.
+- Provider agnostic: no core contract depends on one model vendor.
+- Plugin first: adapters and capabilities are discoverable, replaceable, composable, and governed.
+- Learning by default: success and failure produce evidence, but promotion requires policy and authority.
+- Organization first: optimize durable shared capability, not only a single response.
+- Stable interfaces: internal implementations may evolve behind versioned contracts.
+- Enhance before expand: new modules require a distinct, documented responsibility.
+
+### Current Foundation And Target
+
+| Stage | Product responsibility |
+|---|---|
+| Current Gateway foundation | provider routing, model discovery, execution launch, fallback, usage, sessions, diagnostics, Telegram, Hermes, early memory |
+| Unified Execution Runtime | shared execution context, lifecycle events, permissions, retries, idempotency, tool and workflow contracts |
+| Learning Runtime | governed evidence, knowledge, memory, skills, evaluation, promotion, rollback |
+| Organizational Runtime | tenant and organization scope, shared capability registry, policy administration, enterprise integrations |
+| Runtime Platform | stable APIs, plugin ecosystem, web/desktop governance surfaces, organizational intelligence operations |
 
 ## 2. Core User Scenarios
 
@@ -25,6 +51,11 @@ Then enter the interactive workflow and complete common tasks:
 - Select a default provider by priority.
 - Automatically fall back to the next available provider when the current provider is unavailable.
 - Manage Hermes robots that reuse AI Gateway providers and launch through Hermes CLI.
+- Execute work through one governed Runtime context across CLI and Telegram.
+- Accumulate auditable knowledge and skills without allowing model output to bypass policy.
+- Promote validated capabilities to the appropriate user, project, team, or organization scope.
+
+The latter scenarios are target Runtime behavior and must be delivered incrementally without breaking the current Gateway workflows documented below.
 
 ## 3. Commands
 
@@ -270,7 +301,7 @@ Example:
     "tasks": [
       {
         "id": "baf2c13fbe76",
-        "name": "SpaceX SPCX 价格监控",
+        "name": "SpaceX SPCX Price Monitor",
         "type": "cron",
         "enabled": true,
         "state": "scheduled",
@@ -297,6 +328,7 @@ Rules:
 
 - `~/.ai-gateway/hermes-state.json`: AI Gateway-managed Hermes robot runtime state.
 - `~/.ai-gateway/hermes/<robot-name>/`: AI Gateway-managed isolated Hermes runtime home for each robot.
+- `~/.ai-gateway/transport-proxy.json` (target): internal schema-versioned transport limits, worker queue limits, route-lease duration, circuit recovery, and supervisor restart policy. It must not store provider origins, API keys, route nonces, execution ids, prompts, or tool content.
 - `.ai-gateway/context.md`: generated project context package for Claude Code and Codex.
 
 ## 5. Provider Rules
@@ -387,6 +419,10 @@ Default rules:
 - Codex/OpenAI-compatible launches must keep the configured `/v1` suffix.
 - Runtime logs must include provider, model, mode, baseUrl, command path, launch args, auth injection mode, fallback, and an API key fingerprint.
 - Runtime logs must never print the full API key.
+- Transport failures must log a sanitized network diagnostic with provider/model, route path, request byte count, input/tool counts, and low-level error name/code/syscall. They must not log prompts, request bodies, tool arguments, authorization, or API keys.
+- Codex transport retries must use fresh upstream connections. The local proxy must not forward caller-supplied `content-length` or reuse a failed gateway keep-alive socket across attempts; request length is derived from the final forwarded body by the HTTP client.
+- The Codex transport waits at most 45 seconds for upstream response headers. Two consecutive header timeouts open an execution-local short circuit so remaining Codex reconnect attempts fail immediately and Telegram can continue to the next eligible provider. This does not add a proxy-owned model request retry.
+- Telegram progress edits and final delivery retry transient network, timeout, connection, and HTTP 5xx failures with bounded backoff. Request validation and formatting errors are not retried.
 
 ### Automatic Fallback
 
@@ -791,7 +827,100 @@ Planned capabilities:
 - Hermes robot import/export, clear, delete.
 - Hermes native local config sync and task management.
 
-## 10. Acceptance Criteria
+## 10. Governed Automatic Memory And Learning
+
+This section defines target Runtime behavior. It is planned until the corresponding phase exit criteria in `memory-system-spec.md` are implemented and verified; documentation must not report it as shipped earlier.
+
+### Automatic Experience
+
+- Every eligible execution produces durable, privacy-filtered outcome signals without blocking the user response on extraction, embedding, evaluation, or consolidation.
+- The Runtime automatically extracts low-risk explicit preferences, facts, goals, constraints, and failures according to category policy. Model output is always a candidate and cannot directly activate, supersede, delete, promote, or grant permission.
+- Repeated successful procedures become Skill candidates. Failed procedures become environment-bound negative memory. Risk-specific replay, sandbox, shadow, policy, and human gates control activation.
+- Memory consolidation runs automatically on duplication, interference, growth, milestone, source-change, and periodic triggers. It creates reversible summaries, profiles, skill parameterizations, and storage-tier projections while preserving authoritative Claim/Evidence provenance.
+- The Runtime estimates retrieval coverage, conflict, temporal ambiguity, skill applicability, policy ambiguity, and goal impact. It chooses a bounded action: proceed, search, verify, ask one high-value question, or proceed cautiously.
+- Users retain explicit `pin`, `correct`, `forget`, `purge`, `export`, read/write privacy modes, and audit controls. Automatic behavior cannot remove or weaken these controls.
+
+### Learning Control
+
+The governed learning sequence is `RuntimeEvent -> LearningSignal -> LearningDecision -> LearningCandidate or no artifact -> EvaluationResult -> PolicyDecision -> CapabilityGain`.
+
+- A versioned deterministic Learning Governor selects the learning action against explicit Learning Objectives, uncertainty, budget, policy, and authority.
+- `no artifact` is the default when durable reuse value is not demonstrated.
+- Fact confidence derives from Evidence. Retrieval and outcome utility are separate and must not self-reinforce factual confidence.
+- Attribution distinguishes retrieved, injected, referenced, decision changed, and outcome changed. Retrieval frequency alone is not evidence of usefulness.
+- Capability Gain combines task success, correction reduction, verified reuse, latency and cost improvement, stale-memory error, harm, and privacy/policy violations. Artifact count and retrieval count are not success metrics.
+- Privacy violations, forbidden leaks, or high-impact safety regressions block production promotion regardless of aggregate quality gain.
+- User-to-project-to-team-to-organization promotion creates a separately governed, sanitized candidate; it never changes the original private artifact's scope or exports private Evidence.
+
+### Unified Transport Proxy And Memory Extension Behavior
+
+The existing OpenAI Usage Proxy is a shipped execution path with Responses-to-Chat compatibility translation, usage/cost records, metrics, and direct Codex/Telegram callers. Per-turn automatic memory must enhance it into one provider-agnostic Runtime Transport Proxy. The product must not launch or chain a separate Memory HTTP proxy.
+
+- One execution has one listener, one route lease, one upstream path, and one base-URL override.
+- `startOpenAiUsageProxy()` remains a stable compatibility facade. Existing translation, records, metrics, cost source, `usage.json`, and error behavior remain available and pass parity tests.
+- Streaming Responses requests use native Responses first. The transport may translate to Chat Completions only when the upstream explicitly rejects or does not expose the Responses protocol; transient upstream failures, including Cloudflare `52x`, must remain execution failures and must not trigger protocol oscillation.
+- The current Codex transport facade isolates its upstream connection pool per execution and disables upstream connection reuse. This allows the Codex CLI retry loop to recover from a stale gateway socket without adding a second proxy-level request retry.
+- Upstream response headers have a 45-second deadline. After two consecutive header timeouts, the execution-local transport route short-circuits later reconnects so the delivery adapter can rotate providers instead of displaying an unchanged progress state for the 15-minute task ceiling.
+- A protocol-specific rejection is an adapter compatibility signal, not sufficient evidence that the provider is unavailable. Provider fallback applies only after the compatible protocol path fails, and only providers whose discovered catalog contains an explicitly requested model are eligible.
+- Delivery adapters resolve the ordered provider candidates once. An execution adapter must run the selected provider/model exactly and must not perform a second hidden routing decision. Runtime-opened provider circuits enter a half-open probe state after cooldown instead of remaining disabled because of stale `status: error` metadata.
+- Usage is read-only with respect to transport payloads and is the sole writer of accounting state. Memory is a separately controlled extension. Neither owns a server or forwards requests independently.
+- Critical request decoding and Responses/Chat/provider compatibility belong to the transport core, not UsageObserver or MemoryExtension. UsageObserver exclusively owns usage normalization, cost calculation, records, metrics, and `usage.json`; MemoryExtension must not estimate billable usage or persist a second usage ledger.
+- The compatibility facade reads route state from Transport and accounting state from the single UsageObserver. It must not keep a legacy listener, duplicate counter, or independent persistence path after migration.
+- Canonical events identify execution, logical request, actual upstream attempt, provider event when available, and sequence. Usage writes are idempotent per actual attempt so compatibility retry, CLI retry, worker replay, or facade access cannot double count.
+- Usage and Memory consume separate bounded channels from one canonical event source. Memory queue pressure cannot drop Usage events. Usage loss or overflow is surfaced as degraded, recovered from a bounded journal or reconciled from the completed response, and blocks parity claims until resolved.
+- A single transform coordinator applies an allowlisted Memory patch to a canonical AST before approved Responses/Chat/provider compatibility translation. Every changed path is recorded in a transform manifest.
+- The minimal forwarder streams to the CLI before dispatching bounded copies to separate Usage and Memory channels. Non-critical response parser or Memory-worker failure narrows Memory without interrupting the stream or Usage; Usage-worker failure is explicitly degraded and recovered or reconciled. Total forwarder failure may fail the current request; the next request is supervised back to a known listener and no success memory is produced.
+- Raw authorization, full instructions, reasoning, tool arguments, tool output, and attachments are ephemeral. Durable stores receive only recursively redacted allowlisted envelopes, hashes, and encrypted TTL content references.
+- Transport modes are `stopped`, `usage_only`, and `extensions`. Memory modes are independently `disabled`, `passthrough`, `shadow_capture`, `read_only`, and `full`. Health may narrow Memory but cannot silently disable verified Usage behavior.
+- Unknown major versions, unknown turn relations, fixture regressions, parser failures, resource pressure, or an open Memory circuit degrade Memory to shadow, pass-through, or disabled.
+- Route nonces and self-loop detection are required. Random loopback ports do not provide tenant isolation; mutually untrusted tenants require separate OS-user, container, or network isolation.
+- Prompt-cache hit ratio, cached/uncached input tokens, effective input cost, time to first token, and task quality are release metrics for every injection profile.
+- Adapter and MemoryExtension rollback/kill switches are independent from the transport facade, UsageObserver, Memory Store schema, and learned-artifact state.
+- `ai doctor transport-proxy` is the planned diagnostic surface; `ai doctor memory-proxy` remains a compatibility alias during migration.
+
+### Mature Capability Reuse Behavior
+
+The product must preserve its governed Runtime semantics while preferring mature implementations for commodity capability internals.
+
+- Extractors are add-only. Mem0-compatible or other providers may propose create, reinforce, supersede, archive, or ignore, but the Runtime appends a candidate/evidence proposal and performs every authoritative transition through local identity, Evidence, conflict, and Policy evaluation.
+- Retrieval may combine mature semantic, BM25/FTS, entity-linking, temporal, graph, and reranking providers. External ranking cannot bypass local scope, authority, temporal validity, conflict resolution, token budget, or privacy filtering.
+- Vector providers must apply Runtime-supplied authorization metadata filters during search. A provider that only supports account-wide retrieval followed by application filtering is not production-compatible.
+- Temporal graph support should use a Graphiti-compatible `TemporalGraphProjection` when enabled. Graph nodes and edges are rebuildable projections over internal Claim/Evidence ids; local mode may degrade to temporal SQL rather than implement a second incomplete graph engine.
+- Context compilation may expose Letta-style named, versioned, attachable, and shared memory blocks. Blocks are read-only projections; agent edits become candidates, and sharing a block cannot widen the audience of private Evidence.
+- Procedure induction uses a provider-neutral `ProcedureMiner` over sanitized action signatures and should reuse a maintained PrefixSpan or equivalent sequence-mining implementation. Its output is an add-only Skill candidate and never an active capability.
+- Workflow persistence follows LangGraph-style separation between thread-scoped checkpoints and cross-thread Memory. Checkpoint rollback cannot reverse committed Memory events, and checkpoints cannot persist raw reasoning, secrets, or transport bodies.
+- Durable jobs preserve Runtime operation-id, lease, retry, dead-letter, purge, and trace semantics behind a provider-neutral backend. Protected payloads use audited cryptography and SecretStore or KMS/HSM adapters; Runtime business code does not implement cryptographic primitives or manage raw master keys.
+- Policy uses a provider-neutral `PolicyEngine` compatible with mature side-effect-free evaluators such as OPA or Cedar. The product must not require a new general-purpose policy language.
+- Evaluation may reuse versioned LoCoMo, LongMemEval, BEAM, and mature tracing/evaluation adapters, but production gates use reproducible runs with a declared model stack, dataset version, retrieval budget, token budget, and domain-specific authority/privacy suites.
+- Local, team, and enterprise deployment profiles may replace indexes, queues, graphs, stores, and telemetry exporters without changing public contracts, authoritative ids, policy decisions, explicit user controls, or purge semantics.
+- A managed service is optional. Disabling an external extractor, graph, vector, reranker, policy, or evaluation provider falls back by capability and never sends data to an unapproved provider.
+- Every adapter declares its data egress, region, retention, deletion behavior, license, pinned version, health, cost, and fallback. Raw prompts, reasoning, secrets, and private Evidence are denied by default.
+
+### Feature And Release Gates
+
+Automatic extraction, low-risk activation, consolidation, active learning, causal attribution, scope promotion, and parametric promotion use independent `memory.autoWrite`, `memory.autoActivateLowRisk`, `memory.autoConsolidate`, `memory.activeLearning`, `memory.causalAttribution`, `memory.scopePromotion`, and `memory.parametricPromotion` flags. Disabling advanced learning must return to a stable Claim/Evidence plus required/local-retrieval baseline without disabling explicit memory control or primary task execution.
+
+Required release gates include:
+
+- deterministic Learning Decisions for the same versioned input;
+- zero model paths that directly mutate activation or permission state;
+- complete source coverage and rollback for active compressed projections;
+- no task-success regression or stale-memory-error increase after compression;
+- no private Evidence in team or organization promotion candidates;
+- 100% existing Usage Proxy API/records/metrics/translation parity before Memory is enabled;
+- exactly one terminal outcome per actual upstream attempt, at most one usage/cost contribution when usage exists, and one explicit `noUsage` contribution for a successful usage-less response across compatibility retry, CLI retry, observer restart, and event replay fixtures;
+- Memory queue saturation or worker termination does not change Usage records, metrics, `usage.json`, response bytes, or compatibility behavior;
+- exactly one listener and upstream route when Usage and Memory are enabled together;
+- 100% response-byte consistency in pure pass-through and canonical-AST consistency outside declared transform paths;
+- zero raw authorization, full instructions, reasoning, or raw tool arguments/output in durable envelopes, jobs, events, and logs;
+- zero dangerous active-memory creation from failed, cancelled, partial, or unknown Proxy exchanges;
+- Proxy local forwarding overhead p95 at or below 20 ms, excluding memory retrieval;
+- worker failure does not interrupt the active provider stream; total forwarder failure cannot create false success and the next request is supervised back to a known state;
+- cache-read ratio regression no greater than 5 percentage points and effective input-cost regression no greater than 10%, unless an approved objective-specific ADR sets a stricter or explicitly justified exception.
+- swapping a mature capability provider preserves public contracts, internal authoritative ids, scope/authority decisions, purge reachability, and the stable local fallback on contract fixtures;
+- dependency and adapter releases include an ADR, SBOM, license/vulnerability checks, pinned versions, data-egress classification, kill switch, and tested export/replacement path.
+
+## 11. Acceptance Criteria
 
 - `ai` enters interactive mode.
 - `ai help` opens the Chinese HTML usage guide.
@@ -810,7 +939,7 @@ Planned capabilities:
 - Unavailable providers trigger automatic fallback.
 - Manual changes to `providers.json` are recognized on the next command run.
 
-## 11. Todo / Roadmap
+## 12. Todo / Roadmap
 
 ### High Priority
 
@@ -818,6 +947,10 @@ Planned capabilities:
 - `ai doctor`.
 - `ai last`.
 - Local proxy mode with an OpenAI-compatible endpoint.
+- Stable Runtime contracts for execution events, learning objectives, learning signals, learning decisions, uncertainty, evaluation, and capability gain.
+- Governed memory Phase 0/0.5 foundations: migrations, evaluation baseline, deterministic Learning Governor, feature flags, and rollback baseline.
+- Mature capability adapter foundation: add-only extractor, hybrid retrieval, temporal graph projection, workflow checkpoint, policy engine, evaluation harness, local fallback profiles, dependency ADR/SBOM, and provider replacement tests.
+- Unified Runtime Transport Proxy migration behind the existing Usage facade: parity tests, single listener, transform coordinator, isolated workers, MemoryExtension modes, route-loop detection, recursive redaction, cache/cost gates, kill switch, and diagnostics.
 - Smart routing command: `ai do`.
 - Git workflow commands: `ai review`, `ai fix`, `ai commit`, `ai pr`.
 - Project-level profile: `.ai-gateway/project.json`.
@@ -857,7 +990,7 @@ Planned capabilities:
 - Flutter desktop app.
 - Advanced rule-based routing.
 
-## 12. Extension Management Direction
+## 13. Extension Management Direction
 
 ### MCP Direction
 
@@ -873,7 +1006,7 @@ Planned capabilities:
 - AI Gateway should store skill metadata once, then adapt installation or activation to each client.
 - Skill execution can be security-sensitive; future implementation needs trust, source, and permission metadata.
 
-## 13. Multi-Terminal Isolation Decision
+## 14. Multi-Terminal Isolation Decision
 
 Full per-terminal isolation is not a near-term priority.
 

@@ -1,4 +1,8 @@
-# Telegram Bot 集成开发规格书
+# AI Runtime Telegram 入口设计说明
+
+> 文档受众：用户、产品与中文架构评审者。本文件记录 Telegram 入口的完整中文交互与实现设计；英文 `AI_RUNTIME_ARCHITECTURE.md` 和 `SPEC.md` 定义权威 Runtime 边界。
+
+Telegram Bot 是 AI Runtime 的远程交互 Surface，不拥有 Provider、Memory、Learning、Skill、权限或执行策略。可复用能力必须下沉到 Runtime Core，Telegram 只负责身份适配、消息交互、进度展示和用户确认。
 
 ## 概述
 
@@ -1291,6 +1295,14 @@ case "telegram":
 18. `/config` 设置面板 inline keyboard
 19. 错误重试 + 超时处理
 20. `ai telegram logs` 日志查看
+
+当前超时与回复投递规则：
+
+- 普通 CLI 任务总时限仍为 15 分钟，复杂工具任务不会因为短暂无输出被直接终止。
+- Codex 请求等待 Provider 响应头最多 45 秒；连续两次首包超时后，本轮该 Provider 快速失败并进入下一个可用 Provider。
+- Telegram 的状态消息编辑、最终回复和附件发送遇到网络断开、连接超时或 HTTP 5xx 时有限重试。
+- Telegram 回复重试只重发消息，不会重新执行已经完成的 Claude Code 或 Codex 请求。
+- HTML 格式错误、参数错误等确定性失败不做网络重试。
 
 ---
 

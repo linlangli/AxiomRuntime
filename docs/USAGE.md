@@ -1,4 +1,8 @@
-# AI Gateway 使用指南
+# AI Runtime 使用指南（Gateway 基础层）
+
+当前 `ai` 命令提供 AI Runtime 的 Gateway 基础能力，包括 Provider 管理、Claude Code/Codex 执行、Hermes、Telegram、会话、用量和诊断。Runtime 的学习、Skill、Capability 与组织级治理能力会沿用同一命令和核心架构逐步接入。
+
+本指南只描述当前已经可用的用户操作。项目定位和未来能力见 [文档总览](README.md)。
 
 ## 进入交互模式
 

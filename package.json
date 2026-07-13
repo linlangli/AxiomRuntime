@@ -1,7 +1,7 @@
 {
   "name": "ai-gateway",
   "version": "0.1.0",
-  "description": "Local AI provider gateway for Claude Code and Codex CLI.",
+  "description": "CLI-first foundation for an enterprise AI Runtime with provider routing and governed execution.",
   "type": "module",
   "bin": {
     "ai": "./dist/cli/index.js"

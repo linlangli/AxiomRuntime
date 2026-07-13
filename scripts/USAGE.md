@@ -1,4 +1,6 @@
-# Scripts Usage
+# 发布脚本使用说明
+
+> 文档受众：中文发布与运维人员。AI 与维护者的发布规则以英文 `docs/CONVENTIONS.md` 为准。
 
 ## Release
 

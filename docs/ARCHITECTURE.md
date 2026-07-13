@@ -1,8 +1,21 @@
-# AI Gateway 技术架构文档
+# AI Runtime 中文技术架构说明（当前 Gateway 实现）
+
+> 文档受众：用户、产品与中文架构评审者。本文件记录当前实现状态；AI 与维护者应以英文 [AI Runtime Target Architecture](AI_RUNTIME_ARCHITECTURE.md) 为目标架构权威来源。
 
 ## 1. 项目概览
 
-AI Gateway (`ai-gateway`) 是一个本地 AI Provider 网关，统一管理多个 AI 服务提供商（OpenAI 兼容 API），为 Claude Code 和 Codex CLI 提供透明的路由、故障转移和用量追踪能力。同时集成了 Hermes（另一个 AI 网关）和 Telegram Bot 作为远程交互入口。
+本项目定位为企业级 AI Runtime。当前仓库已经交付的主体仍是 Gateway 基础层：统一管理多个 AI Provider，为 Claude Code 和 Codex CLI 提供路由、故障转移和用量追踪，并通过 Hermes 和 Telegram 扩展执行入口。
+
+Gateway 不是最终产品边界，而是 Runtime 的 Provider 与 Execution 基础。后续 Memory、Knowledge、Skill、Workflow、Tool、Learning 和 Capability 会在统一 Runtime 上下文、策略与事件体系内演进，不能继续分散到各入口独立实现。
+
+当前实现与目标定位的关系：
+
+```text
+现有 Provider Gateway
+  -> 统一执行 Runtime
+  -> 受治理学习 Runtime
+  -> 组织能力平台
+```
 
 ### 1.1 本轮 P0 稳态重构状态
 
@@ -19,6 +32,7 @@ AI Gateway (`ai-gateway`) 是一个本地 AI Provider 网关，统一管理多�
 | 已完成 | 配置 schema validation | 新增 `src/core/config/schema.ts`；Provider 配置会校验对象形态、非空 name/baseUrl/apiKey；Telegram config 和 Hermes 导入 bundle 复用 schema helper |
 | 已完成 | 共享工具与测试 | 重复的 `isRecord()` 已抽到 `src/core/utils/is-record.ts`；已补 JSON store 并发、CLI fallback、Telegram fallback、Hermes provider 解析、Prompt middleware、注册表、熔断、proxy metrics、token budget 等回归测试 |
 | 已完成 | 代理可观测性 | OpenAI usage proxy 已暴露 `getMetrics()`，统计 request/success/failure/noUsage/usageRecord、总耗时、平均耗时、上游状态码分布；fallback/usage 事件保留结构化日志 |
+| 已完成 | Provider 协议自适应 | 流式请求优先使用原生 Responses；仅当上游明确不支持 Responses 时才转换到 Chat Completions；Cloudflare `52x` 和网络连接失败不会触发协议来回切换 |
 | 已完成 | Bot Memory Phase 1 | Telegram 已接入中央记忆库 `~/.ai-gateway/memory.sqlite`，支持 global/bot scope、画像/人设生成、Prompt 前缀注入、CRUD 命令、短期记忆过期清理和每日备份 |
 | 部分完成 | 插件化解耦 | CLI 命令注册表、runner 引擎注册表、Telegram engine/handler registry、integration registry、Prompt middleware、生命周期钩子已落地；类型联合和子命令参数解析仍偏静态 |
 
@@ -191,6 +205,8 @@ flowchart LR
 | Telegram 会话 | SQLite (`better-sqlite3`) | 需要查询、索引、并发安全 |
 | 工具执行 | `child_process.spawn` | 需要完整 TTY 继承（CLI 模式）或 JSON stream 捕获（headless） |
 | 用量追踪 | 本地 HTTP 代理 (`openai-usage-proxy`) | 透明拦截 Codex 请求，无需修改工具本身 |
+| 目标传输代理 | 将现有 OpenAI Usage Proxy 原位演进为单一 Runtime Transport Proxy；UsageObserver 与 MemoryExtension 共用 listener/upstream | 保留已实现 usage/compatibility 能力，避免双代理、环境变量回环、重复解析和两套协议适配器漂移 |
+| 成熟能力复用 | 自研 Runtime/Evidence/Policy/Capability 控制面；抽取、混合检索、向量、时序图、checkpoint、队列、序列挖掘、策略求值、密码学和 telemetry 走可替换 adapter | 保留产品差异化，避免重复建设成熟方案已解决的通用问题 |
 | Hermes 集成 | YAML 配置同步 + launchd 重启 | 适配 Hermes 原生配置格式 |
 | 模型路由 | 优先级 + 健康检查 + 兼容性过滤 + 运行时 fallback | 选择阶段和执行失败后都能尝试下一个可用 provider |
 | Bot Memory | 中央 SQLite (`~/.ai-gateway/memory.sqlite`) + scope 逻辑隔离 | 用户画像跨 bot 共享，Bot 人设和领域知识仅当前 bot 可见 |
@@ -198,7 +214,49 @@ flowchart LR
 | 引擎初始化 | Bot 通过引擎执行 `/init` | Bot 不直接写 CLAUDE.md/AGENTS.md，由引擎自身生成 |
 | 权限模式 | `default` / `acceptEdits` / `bypassPermissions` | 按用户信任级别控制引擎操作权限 |
 
-### 2.4 核心类型体系
+### 2.4 AI Runtime 智能学习闭环目标架构（规划）
+
+当前 Bot Memory Phase 1 仍是中央 SQLite + prompt 注入。本节描述后续按 `memory-system-spec.md` 实施的目标边界，不表示相关能力已经交付。
+
+```mermaid
+flowchart LR
+  Run["Runtime Execution"] --> Event["RuntimeEvent / Episode"]
+  Event --> Signal["LearningSignal"]
+  Signal --> Governor["Learning Governor<br/>目标 / 不确定性 / 预算 / 策略"]
+  Governor --> Decision{"LearningDecision"}
+  Decision -->|"无长期价值"| None["No Artifact"]
+  Decision -->|"事实/目标/约束/失败"| Candidate["Memory Candidate"]
+  Decision -->|"重复成功流程"| Skill["Skill Candidate"]
+  Decision -->|"证据不足且高影响"| Resolve["补查 / 验证 / 最小提问"]
+  Candidate --> Eval["Evidence + Evaluation + Shadow"]
+  Skill --> Eval
+  Eval --> Policy["Policy / Human Authority"]
+  Policy --> Active["Active Knowledge / Skill / Capability"]
+  Active --> Gain["Capability Gain"]
+  Gain --> Governor
+  Active --> Consolidate["自动压缩 / 巩固 / 冷热迁移"]
+  Consolidate --> Active
+```
+
+目标体验是自动记忆、自动沉淀、自动学习和自动压缩，但自动化不等于自动扩权：模型只提出候选；Learning Governor 负责确定性动作选择；Policy Kernel 和人类权限决定激活、共享和不可逆行为。系统以任务成功、纠正减少、有效复用、成本、陈旧错误和安全回归衡量能力收益，不以记忆数量或召回次数代表“变聪明”。
+
+自动压缩只替换可重建投影。Claim/Evidence、来源权限、用户 pin、审计和 purge 派生链保持完整；低价值内容优先降温、失效或归档，物理删除仍由 TTL、保留策略和用户/组织权限控制。
+
+目标方案采用 Build/Adopt/Adapt：自研 canonical Runtime 契约、Claim/Evidence 真相源、origin authority、Learning Governor、Capability Security、scope/purpose policy、审计与 purge；复用 Mem0 的 ADD-only 候选和多信号检索、Graphiti/Zep 的 Episode provenance 与双时态图、Letta 的 versioned/shared Memory Block、LangGraph 的 Checkpointer/Store 分离，以及 OPA/Cedar/OpenTelemetry 等成熟基础能力。外部组件只能返回候选、Policy evidence 或可重建投影，不能直接激活记忆、改变 scope、授予权限或成为权威外键。
+
+本地 profile 维持 SQLite + FTS5/trigram + sqlite-vec + reference RRF 的低运维 baseline；team/enterprise 可以替换为 pgvector/Qdrant、成熟队列、OPA/Cedar、OTLP 和 Graphiti-compatible graph backend。替换 backend 不改变 MemoryService、内部 id、Claim/Evidence、用户控制和 purge 语义；可选组件故障只降级对应能力，不得跨 scope 或把数据发送到未批准 Provider。
+
+项目已经存在 OpenAI Usage Proxy，并承担 Responses→Chat 兼容转换、usage/cost、records、metrics 和 Codex/Telegram 接入。最佳演进不是在它前后再启动 Memory Proxy，而是将其原位增强为单一 Runtime Transport Proxy：每次 execution 只有一个 listener、upstream route 和 base URL 覆写；现有 `startOpenAiUsageProxy()` 保持兼容 facade；Usage 变为“不改传输 payload、但唯一写计量状态”的 Observer，Memory 变为可独立关闭的 Extension。
+
+这里不是把旧模块整体改名，而是按职责拆分所有权：listener、路由、关键请求解析、Responses/Chat/Provider 兼容转换和字节转发属于 Transport 核心；usage 归一化、cost、records、metrics 和 `usage.json` 只允许 `UsageObserver` 写；`MemoryExtension` 只能提出白名单内的记忆 patch 并消费脱敏 canonical event，不能再做协议转换、估算账单或维护第二份 usage。旧 facade 最终只是 Transport 路由状态与唯一 UsageObserver 状态的兼容视图，不保留旧 server、重复 counter 或独立持久化链。
+
+同一 canonical event source 分别投递到有界 Usage 队列和 Memory 队列。事件至少包含 execution、logical request、actual upstream attempt、可用时的 provider event id 和单调序号；usage 按“实际上游 attempt”幂等写入，兼容重试、CLI 重试和 worker replay 不得重复计费。每个 attempt 只有一个终态；存在 usage 时最多计量一次，成功但无 usage 时沿用 `noUsage`，不能捏造 cost。Memory 队列满或 worker 崩溃只能让 Memory 收窄，不能丢失 Usage；Usage 自身异常必须显式标记 degraded，并通过只含 allowlist 计量 metadata/hash 的有界 TTL journal 或完成响应对账恢复，不能写 raw 响应，也不能继续宣称 parity/healthy。
+
+统一数据平面使用唯一 TransformCoordinator：先由关键 Transport 路径把请求解析成 canonical AST，再应用受限 Memory patch，最后执行已批准的 Responses/Chat/Provider compatibility transform。最小 forwarder 负责立即流式转发；非关键 response parser、UsageObserver 与 MemoryExtension 使用隔离 worker 和独立有界 channel。Memory worker 崩溃不影响当前 stream 或 Usage，Usage worker 异常显式 degraded 并恢复/对账；forwarder 整体崩溃则当前请求明确失败并由 supervisor 恢复下一请求，不能虚假承诺当前连接透明续传。
+
+原始 header、完整 system/instructions、reasoning、tool arguments/output 只属于 ephemeral transport capture；持久化只允许递归脱敏后的 envelope、hash 和 TTL 加密 content ref。Transport 的 `stopped / usage_only / extensions` 与 Memory 的 `disabled / passthrough / shadow_capture / read_only / full` 独立建模，Memory 降级不关闭 Usage。协议未知、route 回环、cache/cost 回退或解析失败时收窄 Memory，不把不完整 exchange 自动沉淀为 active memory。
+
+### 2.5 核心类型体系
 
 ```typescript
 // === Core 全局类型 ===
@@ -554,12 +612,16 @@ try {
 |------|------|----------|----------|
 | 已完成 | 配置并发安全 | `json-store.ts` 已新增 `withJsonFileLock()`、`updateJsonFile()`；公共写入走文件锁 + atomic rename；providers/cache/usage/session/integration/telegram config/pricing/hermes state 等更新路径已迁移 | 未把所有配置迁移到 SQLite；当前仍保持 JSON 文件方案 |
 | 已完成 | CLI 运行时 provider fallback | `ai use` 已改为候选列表执行；子进程非 0 退出时尝试下一个 provider；CLI 不存在、用户取消、无候选不 fallback；fallback 事件写结构化日志 | 无 |
-| 已完成 | Telegram 运行时 provider fallback | `executePrompt()` 已按当前 engine 获取候选 provider；失败后尝试下一个；fallback 成功不修改默认 provider/model；fallback 成功时清空跨 provider resume，依靠 recent conversation 续上下文 | 无 |
-| 已完成 | Provider 健康检查 retry/backoff + 熔断 | `checkProvider()`、`runDeepCheck()`、模型 probe 已对临时错误做 retry/backoff；日志记录 attempts/duration/retryErrors；深度 callable 检查使用有限并发；运行时失败会累计 health score 并在连续失败后打开 circuit breaker | 熔断阈值目前是固定常量，后续可配置化 |
-| 已完成 | `openai-usage-proxy.ts` 大文件拆分 | 原文件变为 facade；已拆为 `openai-usage-server.ts`、`openai-usage-http.ts`、`openai-usage-responses.ts`、`openai-usage-recording.ts`、`openai-usage-types.ts`；proxy 暴露 `getMetrics()` 统计请求、失败、usage/noUsage、耗时和上游状态码 | 可后续把 metrics 持久化或接入 dashboard |
+| 已完成 | Telegram 运行时 provider fallback | `executePrompt()` 已按当前 engine 获取候选 provider；候选确定后 Engine 精确执行该 provider/model，不再二次隐藏路由；失败后只尝试模型目录明确兼容的下一个 provider；fallback 成功不修改默认 provider/model，并清空跨 provider resume | 无 |
+| 已完成 | Provider 健康检查 retry/backoff + 熔断 | `checkProvider()`、`runDeepCheck()`、模型 probe 已对临时错误做 retry/backoff；日志记录 attempts/duration/retryErrors；运行时失败会累计 health score 并在连续失败后打开 circuit breaker；冷却结束后进入 half-open 探测，不会被残留 `status=error` 永久禁用 | 熔断阈值目前是固定常量，后续可配置化 |
+| 已完成 | `openai-usage-proxy.ts` 大文件拆分 | 原文件变为 facade；已拆为 `openai-usage-server.ts`、`openai-usage-http.ts`、`openai-usage-responses.ts`、`openai-usage-recording.ts`、`openai-usage-types.ts`；proxy 暴露 `getMetrics()` 统计请求、失败、usage/noUsage、耗时和上游状态码 | 接入 Memory 前必须先在现有 facade 下演进为单一 Runtime Transport Proxy；禁止新增第二 HTTP 代理 |
+| 已完成 | Responses/Chat 协议自适应 | 流式请求优先原生 Responses；仅当上游明确不支持 Responses 时转换到 Chat Completions；Cloudflare `52x` 等瞬时错误直接交给 Provider fallback，不再误判为协议错误或来回切换 | 可后续把协议能力缓存为 provider/model compatibility profile，减少首次探测 |
+| 已完成 | Codex 上游连接隔离 | 每次 Codex execution 使用独立 Undici dispatcher，并关闭上游 keep-alive 复用；Codex 自身每次重连都会建立新连接；代理不再转发来访的 `content-length`，由 HTTP 客户端按最终 Buffer 计算；代理层不额外重试请求 | 相比复用连接会增加少量 TLS 建连开销，优先保证长流式请求稳定性 |
+| 已完成 | Codex 首包超时边界 | 上游 45 秒未返回响应头即结束该次请求；同一 execution 连续两次首包超时后，剩余 Codex 重连立即短路，使 Telegram 能进入下一个 Provider fallback；不会由代理重复模型请求 | 当前 45 秒和两次阈值为内部常量，后续可按 Provider compatibility profile 配置 |
+| 已完成 | Telegram 回复网络重试 | 思考状态编辑、最终回复和附件发送遇到网络断开、连接超时或 HTTP 5xx 时执行有限退避重试；HTML 格式等确定性错误不重试；回复重试不会重新调用模型 | 可后续统一接入 Telegram API 指标和告警 |
 | 已完成 | `hermes-service.ts` 大文件拆分 | 原文件变为 facade；已拆为 core/yaml/local-files/import-export/provider-sync 等模块，外部导出保持兼容 | 还可以继续把 sync/repair 编排再拆得更细，但 P0 小步重构目标已完成 |
 | 已完成 | 共享 `isRecord()` | 已新增 `src/core/utils/is-record.ts`，替换 usage/pricing、runner、Hermes、Telegram config/engine 等重复定义 | 其它通用小工具可后续按需抽取 |
-| 已完成 | 回归覆盖 | 已新增 JSON store 并发更新、CLI fallback、Telegram fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、Provider 熔断、proxy metrics、schema validation、token budget、progress streaming 等测试；当前 `npm test` 为 94 项通过 | 可继续补更多异常路径和持久化 metrics 测试 |
+| 已完成 | 回归覆盖 | 已新增 JSON store 并发更新、CLI fallback、Telegram fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、Provider 熔断/half-open、proxy metrics、schema validation、token budget、progress streaming、Responses 原生转发、Cloudflare `524`、Codex 上游连接/首包超时隔离、Telegram 网络重试与双输出错误保留等测试；当前 `npm test` 为 113 项通过 | 可继续补更多异常路径和持久化 metrics 测试 |
 
 **P1 - 中优先级**
 
@@ -568,6 +630,12 @@ try {
    - 已完成：`OpenAiUsageProxy.getMetrics()` 提供请求量、成功/失败量、usage/noUsage、总耗时、平均耗时和上游状态码分布
    - 已完成：usage/no-usage、Responses fallback/translation 继续写结构化日志
    - 后续可选：metrics 持久化、按 provider/model 维度聚合、接入 CLI `ai status` 或 dashboard
+
+5.1 **未完成：统一 Runtime Transport Proxy**
+   - 保留 `startOpenAiUsageProxy()`、Responses/Chat translation、records、metrics、usage.json 和现有调用方契约
+   - 先完成 usage-only parity，再引入隔离的 UsageObserver/MemoryExtension，整个 execution 只启动一个 listener
+   - 增加唯一 TransformCoordinator、route-loop 检测、Ephemeral/Sanitized envelope、worker 故障隔离和 prompt-cache/cost 闸门
+   - 在这些门槛通过前，MemoryExtension 只能 shadow，不得 full production
 
 6. **部分完成：命令解析缺少框架**
    - 已完成：`cli/index.ts` 顶层命令路由已改为 `src/cli/registry.ts` 注册表，不再使用 raw `switch`
