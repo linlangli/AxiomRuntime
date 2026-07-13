@@ -284,6 +284,87 @@ test("OpenAI usage proxy forwards JSON response and records priced usage", async
   });
 });
 
+test("OpenAI usage proxy isolates upstream connections across caller retries", async () => {
+  await withTempHome(async () => {
+    const upstreamConnections = [];
+    const upstream = await startTestServer(async (req, res) => {
+      upstreamConnections.push({
+        remotePort: req.socket.remotePort,
+        connection: req.headers.connection
+      });
+      await readRequestBody(req);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ model: "gpt-5.6-sol", usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+    });
+
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "api", baseUrl: upstream.url, apiKey: "secret", mode: "auto", level: 1, model: "gpt-5.6-sol" },
+      model: "gpt-5.6-sol",
+      tool: "telegram"
+    });
+
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await fetch(`${proxy.baseUrl}/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi" })
+        });
+        assert.equal(response.status, 200);
+        await response.text();
+      }
+
+      assert.equal(upstreamConnections.length, 2);
+      assert.notEqual(upstreamConnections[0].remotePort, upstreamConnections[1].remotePort);
+      assert.deepEqual(upstreamConnections.map((entry) => entry.connection), ["close", "close"]);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("OpenAI usage proxy bounds repeated upstream headers timeouts", async () => {
+  await withTempHome(async () => {
+    let upstreamRequests = 0;
+    const upstream = await startTestServer(async (req) => {
+      upstreamRequests += 1;
+      await readRequestBody(req);
+      // Intentionally leave the response headers pending.
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "slow", baseUrl: upstream.url, apiKey: "secret", mode: "auto", level: 1, model: "gpt-5.6-sol" },
+      model: "gpt-5.6-sol",
+      tool: "telegram",
+      upstreamHeadersTimeoutMs: 25
+    });
+
+    try {
+      const attemptDurations = [];
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const startedAt = Date.now();
+        const response = await fetch(`${proxy.baseUrl}/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: true })
+        });
+        assert.equal(response.status, 504);
+        assert.match(await response.text(), /timed out|timeout/i);
+        attemptDurations.push(Date.now() - startedAt);
+      }
+
+      assert.equal(upstreamRequests, 2);
+      assert.ok(attemptDurations[2] < 250);
+      assert.equal(proxy.getMetrics().failureCount, 3);
+      assert.equal(proxy.getMetrics().upstreamStatusCounts.headers_timeout, 2);
+      assert.equal(proxy.getMetrics().upstreamStatusCounts.headers_timeout_short_circuit, 1);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
 test("OpenAI usage proxy records one usage event from SSE response", async () => {
   await withTempHome(async (tempDir) => {
     const upstream = await startTestServer(async (_req, res) => {
@@ -329,12 +410,19 @@ test("OpenAI usage proxy records one usage event from SSE response", async () =>
   });
 });
 
-test("OpenAI usage proxy translates Responses stream to chat completions", async () => {
+test("OpenAI usage proxy falls back to chat completions when Responses is unsupported", async () => {
   await withTempHome(async (tempDir) => {
     const requests = [];
     const upstream = await startTestServer(async (req, res) => {
       const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
       requests.push({ url: req.url, body });
+
+      if (req.url === "/v1/responses") {
+        res.statusCode = 404;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ error: { message: "此模型不支持 responses 协议" } }));
+        return;
+      }
 
       assert.equal(req.url, "/v1/chat/completions");
       assert.equal(req.headers.authorization, "Bearer secret");
@@ -390,12 +478,190 @@ test("OpenAI usage proxy translates Responses stream to chat completions", async
       assert.equal(response.status, 200);
       assert.match(text, /response\.output_text\.delta/);
       assert.match(text, /OK/);
-      assert.deepEqual(requests.map((request) => request.url), ["/v1/chat/completions"]);
+      assert.deepEqual(requests.map((request) => request.url), ["/v1/responses", "/v1/chat/completions"]);
       assert.equal(proxy.getRecords().length, 1);
       assert.equal(proxy.getRecords()[0].usage.totalTokens, 15);
 
       const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
       assert.equal(usage.events[0].totalTokens, 15);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("OpenAI usage proxy streams native Responses without chat translation", async () => {
+  await withTempHome(async () => {
+    const requests = [];
+    const upstream = await startTestServer(async (req, res) => {
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      requests.push({ url: req.url, body });
+
+      assert.equal(req.url, "/v1/responses");
+      assert.equal(req.headers.authorization, "Bearer secret");
+      assert.equal(body.model, "gpt-5.6-sol");
+      assert.equal(body.stream, true);
+      res.setHeader("content-type", "text/event-stream");
+      res.write("data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.6-sol\",\"usage\":{\"input_tokens\":12,\"output_tokens\":4,\"total_tokens\":16}}}\n\n");
+      res.write("data: [DONE]\n\n");
+      res.end();
+    });
+
+    const proxy = await startOpenAiUsageProxy({
+      provider: {
+        name: "responses-api",
+        baseUrl: upstream.url,
+        apiKey: "secret",
+        mode: "auto",
+        level: 1,
+        model: "gpt-5.6-sol"
+      },
+      model: "gpt-5.6-sol",
+      tool: "telegram"
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-5.6-sol",
+          input: "hello",
+          stream: true
+        })
+      });
+      const text = await response.text();
+      assert.equal(response.status, 200);
+      assert.match(text, /response\.completed/);
+      assert.deepEqual(requests.map((request) => request.url), ["/v1/responses"]);
+      assert.equal(proxy.getRecords().length, 1);
+      assert.equal(proxy.getRecords()[0].usage.totalTokens, 16);
+      assert.equal(proxy.getMetrics().successCount, 1);
+      assert.equal(proxy.getMetrics().failureCount, 0);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("OpenAI usage proxy passes through native Responses no-channel errors without chat fallback", async () => {
+  await withTempHome(async () => {
+    const requests = [];
+    const upstream = await startTestServer(async (req, res) => {
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      requests.push({ url: req.url, body });
+      res.statusCode = 503;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        error: { code: "model_not_found", message: "No available channel for model gpt-5.6-sol", type: "new_api_error" }
+      }));
+    });
+
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "cq", baseUrl: upstream.url, apiKey: "secret", mode: "auto", level: 1, model: "gpt-5.6-sol" },
+      model: "gpt-5.6-sol",
+      tool: "telegram"
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: true })
+      });
+      const text = await response.text();
+      assert.equal(response.status, 503);
+      assert.match(text, /No available channel/);
+      // Transient no-channel error must not waste a chat attempt.
+      assert.deepEqual(requests.map((request) => request.url), ["/v1/responses"]);
+      assert.equal(proxy.getMetrics().failureCount, 1);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("OpenAI usage proxy passes through Cloudflare 524 without chat fallback", async () => {
+  await withTempHome(async () => {
+    const requests = [];
+    const upstream = await startTestServer(async (req, res) => {
+      requests.push(req.url);
+      await readRequestBody(req);
+      res.statusCode = 524;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: { message: "bad response status code 524" } }));
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "timeout", baseUrl: upstream.url, apiKey: "secret", mode: "auto", level: 1, model: "gpt-5.6-sol" },
+      model: "gpt-5.6-sol",
+      tool: "telegram"
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: true })
+      });
+      assert.equal(response.status, 524);
+      assert.match(await response.text(), /524/);
+      assert.deepEqual(requests, ["/v1/responses"]);
+      assert.equal(proxy.getMetrics().failureCount, 1);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("OpenAI usage proxy falls back to chat when Responses error is wrapped in HTTP 200", async () => {
+  await withTempHome(async () => {
+    const requests = [];
+    const upstream = await startTestServer(async (req, res) => {
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      requests.push({ url: req.url, body });
+
+      if (req.url === "/v1/responses") {
+        // Domestic new-api gateways wrap the real error in HTTP 200.
+        res.statusCode = 200;
+        res.setHeader("content-type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({
+          error: { message: "status_code=400, 此模型不支持 responses 协议 (request id: 01KXD4HHTQXN)" }
+        }));
+        return;
+      }
+
+      assert.equal(req.url, "/v1/chat/completions");
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        id: "chatcmpl-ok",
+        model: "gpt-5.6-sol",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "OK" } }],
+        usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 }
+      }));
+    });
+
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "cq", baseUrl: upstream.url, apiKey: "secret", mode: "auto", level: 1, model: "gpt-5.6-sol" },
+      model: "gpt-5.6-sol",
+      tool: "telegram"
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: true })
+      });
+      const text = await response.text();
+      assert.equal(response.status, 200);
+      assert.match(text, /response\.output_text\.delta/);
+      assert.match(text, /OK/);
+      assert.deepEqual(requests.map((request) => request.url), ["/v1/responses", "/v1/chat/completions"]);
+      assert.equal(proxy.getRecords()[0].usage.totalTokens, 10);
     } finally {
       await proxy.close();
       await upstream.close();

@@ -56,6 +56,15 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
     await showConfigPanel(ctx, deps, session);
   });
 
+  bot.command("model", async (ctx) => {
+    const session = deps.sessionManager.getOrCreate(ctx.chat.id);
+    if (session.setupStep === "ready") {
+      await showReadyProviderPicker(ctx, deps, { reselect: true });
+      return;
+    }
+    await showSetupProviderPicker(ctx, deps, { reselect: true });
+  });
+
   bot.command("usage", async (ctx) => {
     await showUsagePanel(ctx, deps);
   });

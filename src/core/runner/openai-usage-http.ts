@@ -32,20 +32,19 @@ export function buildUpstreamUrl(upstreamBaseUrl: string, incomingUrl: string): 
   return upstream.toString();
 }
 
-export function buildUpstreamHeaders(headers: IncomingHttpHeaders, apiKey: string, body: Buffer): Headers {
-  const next = new Headers();
+export function buildUpstreamHeaders(headers: IncomingHttpHeaders, apiKey: string): Record<string, string> {
+  const next: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     const normalized = key.toLowerCase();
     if (HOP_BY_HOP_HEADERS.has(normalized) || normalized === "host" || normalized === "content-length") continue;
     if (Array.isArray(value)) {
-      next.set(key, value.join(", "));
+      next[key] = value.join(", ");
     } else if (typeof value === "string") {
-      next.set(key, value);
+      next[key] = value;
     }
   }
-  next.set("authorization", `Bearer ${apiKey}`);
-  next.set("accept-encoding", "identity");
-  if (body.length) next.set("content-length", String(body.length));
+  next.authorization = `Bearer ${apiKey}`;
+  next["accept-encoding"] = "identity";
   return next;
 }
 

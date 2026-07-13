@@ -1,5 +1,6 @@
 import type { Context } from "grammy";
 import type { ProgressUpdate } from "../engine/types.js";
+import { withTelegramNetworkRetry } from "../network-retry.js";
 import { Formatter } from "./formatter.js";
 
 export type ProgressReporterOptions = {
@@ -59,7 +60,9 @@ export class ProgressReporter {
     this.pending = undefined;
     if (!this.messageId) return false;
     try {
-      await this.api.editMessageText(this.chatId, this.messageId, html, { parse_mode: "HTML" });
+      await withTelegramNetworkRetry(() =>
+        this.api.editMessageText(this.chatId, this.messageId!, html, { parse_mode: "HTML" })
+      );
       this.finalized = true;
       return true;
     } catch (error) {
@@ -67,7 +70,9 @@ export class ProgressReporter {
     }
 
     try {
-      await this.api.editMessageText(this.chatId, this.messageId, fallbackText || "(empty)");
+      await withTelegramNetworkRetry(() =>
+        this.api.editMessageText(this.chatId, this.messageId!, fallbackText || "(empty)")
+      );
       this.finalized = true;
       return true;
     } catch (error) {
@@ -87,10 +92,14 @@ export class ProgressReporter {
     });
     try {
       if (!this.messageId) {
-        const message = await this.api.sendMessage(this.chatId, text, { parse_mode: "HTML" });
+        const message = await withTelegramNetworkRetry(() =>
+          this.api.sendMessage(this.chatId, text, { parse_mode: "HTML" })
+        );
         this.messageId = readMessageId(message);
       } else {
-        await this.api.editMessageText(this.chatId, this.messageId, text, { parse_mode: "HTML" });
+        await withTelegramNetworkRetry(() =>
+          this.api.editMessageText(this.chatId, this.messageId!, text, { parse_mode: "HTML" })
+        );
       }
       this.lastSignature = signature;
     } catch (error) {

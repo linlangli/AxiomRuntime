@@ -31,4 +31,5 @@ export type StartOpenAiUsageProxyInput = {
   model: string;
   tool: RunToolType;
   onUsage?: (record: OpenAiUsageProxyRecord) => void | Promise<void>;
+  upstreamHeadersTimeoutMs?: number;
 };

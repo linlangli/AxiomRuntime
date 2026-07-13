@@ -50,6 +50,7 @@ import { spawnCapture } from "../dist/telegram/engine/process-utils.js";
 import { resolveWorkingCommand } from "../dist/telegram/engine/engine-utils.js";
 import { TelegramHandlerRegistry } from "../dist/telegram/handler-registry.js";
 import { TelegramTaskLifecycleRegistry } from "../dist/telegram/lifecycle-registry.js";
+import { isRetryableTelegramNetworkError, withTelegramNetworkRetry } from "../dist/telegram/network-retry.js";
 import { deleteRecentChatMessages, registerCommands, shouldHandleStartCommand } from "../dist/telegram/handlers/command.js";
 import { registerDocumentHandler } from "../dist/telegram/handlers/document.js";
 import {
@@ -850,7 +851,7 @@ test("progress formatter and tool parser render structured status", () => {
   });
   assert.equal(parseToolName("Bash").kind, "builtin");
   assert.equal(parseToolName("npm test -- --watch=false", { kind: "command" }).kind, "command");
-  assert.equal(Formatter.progress({ phase: "thinking" }), "🧠 思考中…");
+  assert.equal(Formatter.progress({ phase: "thinking" }), "⏱️ 思考中…");
   assert.match(Formatter.progress({
     phase: "tool_calling",
     tool: "mcp__codegraph__codegraph_context"
@@ -975,6 +976,20 @@ test("progress reporter can replace status message with final text", async () =>
   assert.deepEqual(calls[0].slice(0, 2), ["send", 123]);
   assert.match(String(calls[0][2]), /思考中/);
   assert.deepEqual(calls[1], ["edit", 123, 91, "<b>done</b>", "HTML"]);
+});
+
+test("telegram network retry recovers transient delivery failures", async () => {
+  let attempts = 0;
+  const result = await withTelegramNetworkRetry(async () => {
+    attempts += 1;
+    if (attempts < 3) throw new Error("Network request for 'sendMessage' failed!");
+    return "sent";
+  }, { delaysMs: [0, 0] });
+
+  assert.equal(result, "sent");
+  assert.equal(attempts, 3);
+  assert.equal(isRetryableTelegramNetworkError(new Error("unexpected status 502")), true);
+  assert.equal(isRetryableTelegramNetworkError(new Error("Bad Request: can't parse entities")), false);
 });
 
 test("workdir setup keyboards use compact labels and absolute path buttons", () => {
@@ -1823,6 +1838,81 @@ test("fresh clears telegram window without resetting engine context", async () =
   });
 });
 
+test("model command opens telegram provider picker without starting CLI", async () => {
+  await withTempHome(async (tempDir) => {
+    const projectDir = path.join(tempDir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    await writeProviders([
+      {
+        name: "codex-provider",
+        baseUrl: "https://api.test/v1",
+        apiKey: "key",
+        mode: "auto",
+        level: 1,
+        model: "gpt-5.5"
+      }
+    ]);
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: projectDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      provider: "codex-provider",
+      model: "gpt-5.5",
+      dbPath: path.join(tempDir, "telegram.sqlite")
+    };
+    const store = new SessionStore(config.dbPath);
+    const manager = new SessionManager(store, config);
+    const session = manager.getOrCreate(123);
+    manager.update(session.id, { setupStep: "ready" });
+    let executeCalls = 0;
+    const fakeEngine = {
+      name: "codex",
+      execute: async () => {
+        executeCalls += 1;
+        return { response: "unexpected" };
+      },
+      abort: () => undefined
+    };
+    const commands = new Map();
+    registerCommands({
+      command: (name, callback) => commands.set(name, callback),
+      api: { setMyCommands: async () => true }
+    }, {
+      sessionManager: manager,
+      claudeEngine: { ...fakeEngine, name: "claude" },
+      codexEngine: fakeEngine,
+      engines: {
+        claude: { ...fakeEngine, name: "claude" },
+        codex: fakeEngine
+      },
+      approvalManager: {
+        request: async () => true,
+        resolveAll: () => undefined
+      },
+      config
+    });
+
+    const replies = [];
+    await commands.get("model")({
+      chat: { id: 123 },
+      reply: async (text, extra) => {
+        replies.push({ text, extra });
+      }
+    });
+
+    assert.equal(executeCalls, 0);
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].text, "🤖 重新选择你要使用的大模型吧");
+    assert.equal(replies[0].extra.reply_markup.inline_keyboard[0][0].text, "codex-provider");
+    store.close();
+  });
+});
+
 test("fresh deletion scans backward and falls back to single deletes", async () => {
   const bulkCalls = [];
   const singleCalls = [];
@@ -1899,6 +1989,15 @@ test("codex failure formatter hides benign diagnostics", () => {
   assert.match(message, /模型流式响应连续断开/);
   assert.match(message, /51talk-codex \/ gpt-5\.5/);
   assert.doesNotMatch(message, /remote_installed_plugin_sync|Reading additional input/);
+});
+
+test("codex failure formatter preserves upstream status after benign stderr", () => {
+  const formatted = formatCodexFailure([
+    "Reading additional input from stdin...",
+    "status_code=524, bad response status code 524"
+  ].join("\n"), "provider", "gpt-5.6-sol");
+  assert.doesNotMatch(formatted, /Reading additional input/);
+  assert.match(formatted, /status_code=524/);
 });
 
 test("claude args include verbose stream-json output", () => {

@@ -1,7 +1,10 @@
+import { fetch, type Dispatcher } from "undici";
+
 export type ResponsesChatFallbackInput = {
   upstreamBaseUrl: string;
   requestBody: Buffer;
   apiKey: string;
+  dispatcher?: Dispatcher;
 };
 
 export type ResponsesChatFallbackResult = {
@@ -29,16 +32,70 @@ type ChatToolCall = {
   };
 };
 
-export function shouldTranslateResponsesStreamToChat(incomingUrl: string, requestBody: Buffer): boolean {
+export function isResponsesStreamRequest(incomingUrl: string, requestBody: Buffer): boolean {
   const local = new URL(incomingUrl, "http://127.0.0.1");
   if (local.pathname !== "/responses" && local.pathname !== "/v1/responses") return false;
   const body = parseJsonObject(requestBody);
   return body?.stream === true;
 }
 
-export function shouldFallbackResponsesToChat(incomingUrl: string, requestBody: Buffer, response: Response): boolean {
-  if (response.ok) return false;
-  return shouldTranslateResponsesStreamToChat(incomingUrl, requestBody);
+export type NativeResponsesOutcome = {
+  status: number;
+  contentType: string;
+  bodyText: string;
+};
+
+/**
+ * Decide whether a failed native `/responses` attempt should be retried by
+ * translating the request through chat completions. Only "the upstream does not
+ * speak the Responses protocol" cases fall back; transient/no-channel failures
+ * are passed through so provider rotation handles them instead of wasting a
+ * chat attempt that would fail the same way.
+ */
+export function shouldFallbackResponsesToChat(outcome: NativeResponsesOutcome): boolean {
+  const effectiveStatus = resolveEffectiveStatus(outcome);
+  if (effectiveStatus >= 200 && effectiveStatus < 300 && isEventStream(outcome.contentType)) {
+    return false;
+  }
+  if (isTransientStatus(effectiveStatus)) return false;
+  if (mentionsResponsesUnsupported(outcome.bodyText)) return true;
+  // Classic "this route/endpoint does not exist" from chat-only gateways.
+  return effectiveStatus === 400 || effectiveStatus === 404 || effectiveStatus === 405 || effectiveStatus === 501;
+}
+
+function resolveEffectiveStatus(outcome: NativeResponsesOutcome): number {
+  // Many domestic new-api gateways wrap the real error in an HTTP 200 body,
+  // e.g. `{"error":{"message":"... status_code=400 ..."}}`. Trust the wrapped
+  // status when the transport status looks successful but the body is an error.
+  if (outcome.status >= 200 && outcome.status < 300 && !isEventStream(outcome.contentType)) {
+    const wrapped = extractWrappedStatus(outcome.bodyText);
+    if (wrapped !== undefined) return wrapped;
+  }
+  return outcome.status;
+}
+
+function extractWrappedStatus(bodyText: string): number | undefined {
+  const compact = bodyText.replace(/\s+/g, " ");
+  const match = compact.match(/status[_-]?code["']?\s*[:=]\s*["']?(\d{3})/i);
+  return match ? Number(match[1]) : undefined;
+}
+
+function mentionsResponsesUnsupported(bodyText: string): boolean {
+  const message = bodyText.replace(/\s+/g, " ");
+  const rejection = "(?:不支持|不支援|does not support|doesn't support|not supported|unsupported|invalid|no such)";
+  const protocol = "(?:responses|/v1/responses|response api|responses api)";
+  return new RegExp(`${rejection}.{0,160}${protocol}`, "i").test(message)
+    || new RegExp(`${protocol}.{0,160}${rejection}`, "i").test(message);
+}
+
+function isEventStream(contentType: string): boolean {
+  return contentType.toLowerCase().includes("text/event-stream");
+}
+
+function isTransientStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429
+    || status === 500 || status === 502 || status === 503 || status === 504
+    || (status >= 520 && status <= 527) || status === 530;
 }
 
 export async function buildChatCompletionsResponsesSse(input: ResponsesChatFallbackInput): Promise<ResponsesChatFallbackResult> {
@@ -59,7 +116,8 @@ export async function buildChatCompletionsResponsesSse(input: ResponsesChatFallb
       "content-type": "application/json",
       accept: "application/json"
     },
-    body: JSON.stringify(buildChatCompletionsRequest(responsesRequest))
+    body: JSON.stringify(buildChatCompletionsRequest(responsesRequest)),
+    dispatcher: input.dispatcher
   });
 
   const text = await chatResponse.text();

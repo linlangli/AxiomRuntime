@@ -13,6 +13,7 @@ import { emitTelegramTaskCompleted, emitTelegramTaskFailed } from "../lifecycle-
 import type { SessionManager, TelegramSession } from "../session/manager.js";
 import type { MemoryService } from "../memory/memory-service.js";
 import { writeTelegramLog } from "../log.js";
+import { withTelegramNetworkRetry } from "../network-retry.js";
 import { handleMemoryManageInput, handleRememberInput } from "./memory.js";
 import { completeAgentProfile, remindSetup, setWorkdir, showReadyCard } from "./setup.js";
 import { handleUsagePriceInput } from "./usage.js";
@@ -347,15 +348,19 @@ async function sendResult(
   const attachmentNotice = "Output is attached as a file.";
   const formattedNotice = Formatter.taskCompleted(engine, { ...result, response: attachmentNotice }, 800);
   if (!(await reporter?.replaceWithHtml(formattedNotice, attachmentNotice))) {
-    await ctx.reply(formattedNotice, { parse_mode: "HTML" });
+    await withTelegramNetworkRetry(() => ctx.reply(formattedNotice, { parse_mode: "HTML" }));
   }
-  await ctx.replyWithDocument(new InputFile(Buffer.from(result.response || "(empty)", "utf8"), "ai-gateway-output.md"), {
-    caption: "Full output"
-  });
+  await withTelegramNetworkRetry(() =>
+    ctx.replyWithDocument(new InputFile(Buffer.from(result.response || "(empty)", "utf8"), "ai-gateway-output.md"), {
+      caption: "Full output"
+    })
+  );
   if (result.diff) {
-    await ctx.replyWithDocument(new InputFile(Buffer.from(result.diff, "utf8"), "changes.diff"), {
-      caption: "Diff"
-    });
+    await withTelegramNetworkRetry(() =>
+      ctx.replyWithDocument(new InputFile(Buffer.from(result.diff!, "utf8"), "changes.diff"), {
+        caption: "Diff"
+      })
+    );
   }
 }
 
@@ -364,14 +369,14 @@ async function sendFailure(ctx: Context, reporter: ProgressReporter, message: st
   if (await reporter.replaceWithHtml(html, `Failed\n\n${truncateText(message, 1500)}`)) {
     return;
   }
-  await ctx.reply(html, { parse_mode: "HTML" });
+  await withTelegramNetworkRetry(() => ctx.reply(html, { parse_mode: "HTML" }));
 }
 
 async function replyHtmlWithPlainFallback(ctx: Context, html: string, fallbackText: string): Promise<void> {
   try {
-    await ctx.reply(html, { parse_mode: "HTML" });
+    await withTelegramNetworkRetry(() => ctx.reply(html, { parse_mode: "HTML" }));
   } catch {
-    await ctx.reply(fallbackText || "(empty)");
+    await withTelegramNetworkRetry(() => ctx.reply(fallbackText || "(empty)"));
   }
 }
 

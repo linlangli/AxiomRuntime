@@ -72,7 +72,7 @@ export class CodexEngine implements Engine {
       }
       if (result.code !== 0) {
         throw new Error(formatCodexFailure(
-          result.stderr || result.stdout || `Codex exited with code ${result.code}`,
+          [result.stderr, result.stdout].filter((value) => value.trim()).join("\n") || `Codex exited with code ${result.code}`,
           runtime.provider.name,
           runtime.model
         ));
