@@ -10,10 +10,12 @@ North star: every interaction should make the Runtime more capable, reliable, an
 
 Read these documents before making architectural or product changes:
 
-1. `docs/PROJECT_CONSTITUTION.md` - immutable product direction and decision principles.
-2. `docs/AI_RUNTIME_ARCHITECTURE.md` - target architecture and module boundaries.
-3. `docs/SPEC.md` - normative product behavior and acceptance criteria.
-4. `docs/CONVENTIONS.md` - engineering and documentation rules.
+1. `docs/AI_RUNTIME_ARCHITECTURE.md` - target architecture and module boundaries (English canon).
+2. `docs/CONVENTIONS.md` - engineering and documentation rules (English canon).
+3. `docs/00-overview.md` - product identity, the three hard invariants, and the migrated project-constitution summary (see its appendices).
+4. `doc_2.0` layer (root docs under `docs/` plus per-module docs under `docs/modules/`) - normative product behavior, capabilities, acceptance criteria (`enforcement-decisions.md`, R1–R36 / Q1–Q6), roadmap, and per-module design.
+
+The former `docs/SPEC.md`, `docs/PROJECT_CONSTITUTION.md`, `docs/ARCHITECTURE.md`, `docs/USAGE.md`, `docs/memory-system-spec.md`, and `docs/telegram-bot-spec.md` have been migrated into the `doc_2.0` layer (now flattened into `docs/` and `docs/modules/`); consult `docs/README.md` for the index.
 
 ## Architecture Rules
 
@@ -37,40 +39,37 @@ AI-facing and maintainer-facing normative documents are written in English. User
 English normative documents:
 
 - `AGENTS.md`
-- `docs/PROJECT_CONSTITUTION.md`
 - `docs/AI_RUNTIME_ARCHITECTURE.md`
-- `docs/SPEC.md`
 - `docs/CONVENTIONS.md`
+
+Chinese-English hybrid normative layer (`doc_2.0`, living in `docs/` and `docs/modules/`): prose in Chinese; all identifiers (type/port/field names, paths, rule ids R1–R36 / Q1–Q6, config keys, enum values) stay in canonical English, never translated. This layer holds the migrated product spec, constitution summary, memory/learning design, transport protocol, Telegram surface design, acceptance criteria, and roadmap. Index: `docs/README.md`.
 
 Chinese user and review documents:
 
 - `README.md`
 - `docs/README.md`
-- `docs/USAGE.md`
+- `docs/usage.md`
 - `docs/USAGE.html`
-- `docs/ARCHITECTURE.md`
-- `docs/memory-system-spec.md`
-- `docs/telegram-bot-spec.md`
 
-Chinese design documents preserve detailed product and review context. When they conflict with an English normative document, do not silently choose one: update both documents in the same change or surface the conflict.
+When the `doc_2.0` layer conflicts with an English canon document (`AI_RUNTIME_ARCHITECTURE.md` / `CONVENTIONS.md`), do not silently choose one: update both in the same change or surface the conflict. Identifiers in the `doc_2.0` layer must match code exactly.
 
 ## Required Documentation Updates
 
-- The English normative layer is living documentation. Every development task must assess and update it before completion; documentation sync is part of the definition of done, not a later cleanup task.
-- Product direction or acceptance behavior: update `docs/SPEC.md` and the relevant Chinese user document.
-- Architecture or ownership boundary: update `docs/AI_RUNTIME_ARCHITECTURE.md` and, when user-visible, `docs/ARCHITECTURE.md`.
-- CLI or configuration behavior: update `docs/USAGE.md` and `docs/USAGE.html`.
+- The normative layer is living documentation. Every development task must assess and update it before completion; documentation sync is part of the definition of done, not a later cleanup task.
+- Product direction or acceptance behavior: update `docs/enforcement-decisions.md` (R/Q clauses) and the relevant `docs/modules/` module document.
+- Architecture or ownership boundary: update `docs/AI_RUNTIME_ARCHITECTURE.md` and the affected `docs/modules/` module document.
+- CLI or configuration behavior: update `docs/usage.md` and `docs/USAGE.html`.
 - A new invariant or development rule: update `docs/CONVENTIONS.md`.
-- A constitutional change: requires explicit human approval and an update to `docs/PROJECT_CONSTITUTION.md`.
+- A change to product mission, north star, or the three hard invariants: requires explicit human approval and an update to the constitution appendix in `docs/00-overview.md`.
 
 Required maintenance cadence:
 
-- Per task: review `SPEC.md`, `AI_RUNTIME_ARCHITECTURE.md`, and `CONVENTIONS.md`; update every affected document in the same change.
-- Per milestone or release: audit the full English normative layer against current code, migrations, feature flags, tests, and known limitations.
+- Per task: review `docs/AI_RUNTIME_ARCHITECTURE.md`, `docs/CONVENTIONS.md`, and the affected `doc_2.0` documents (`docs/*.md` and `docs/modules/*.md`); update every affected document in the same change.
+- Per milestone or release: audit the full normative layer against current code, migrations, feature flags, tests, and known limitations.
 - After a major incident or architectural reversal: record the new invariant, failure mode, and migration consequence immediately.
 - Never leave knowingly stale normative text. If implementation and documentation cannot be reconciled in the current task, mark the gap explicitly with status, owner, and exit condition.
 
-`PROJECT_CONSTITUTION.md` is intentionally stable and changes only through explicit human direction. The other English normative documents are living sources of truth and must evolve with implementation.
+The constitution summary (mission, north star, hard invariants) in `docs/00-overview.md` is intentionally stable and changes only through explicit human direction. The other normative documents are living sources of truth and must evolve with implementation.
 
 ## CodeGraph
 

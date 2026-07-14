@@ -527,8 +527,8 @@
               <tr data-search="provider edit rename baseUrl apiKey level model mode">
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider edit</code><br /><code class="cmd">ai provider edit 51talk</code></td>
-                <td>修改 name、baseUrl、apiKey、mode、level、model。</td>
-                <td>修改后自动同步 Hermes。</td>
+                <td>修改 name、baseUrl、凭证、mode、level、model。</td>
+                <td>凭证写入 SecretStore，配置只保存 apiKeyRef；编辑时不回显原值。修改后自动同步 Hermes。</td>
               </tr>
               <tr data-search="provider delete remove fallback hermes">
                 <td><span class="group-label">Provider</span></td>
@@ -713,21 +713,23 @@ ai use hermes robot-name</pre>
 ai hermes import-local --overwrite
 ai hermes export
 ai hermes export robot-name
-ai hermes import ./hermes-robot.json</pre>
+ai hermes export --include-secrets --recipient key-id
+ai hermes import ./hermes-robot.json
+ai hermes import ./hermes-secret-bundle.json --allow-secret-import</pre>
                 <ul>
-                  <li><code>export</code> 默认导出所有机器人完整复刻包，包含机器人配置、Telegram 绑定、tasks schedule、关联 provider 配置、API Key 和模型缓存；导出的文件需要私密保存。传入机器人名称时只导出单个机器人。</li>
-                  <li><code>import</code> 导入完整复刻包时会写入关联 provider，并立即同步本机 Hermes 配置、重启 gateway。</li>
-                  <li>旧版不含 provider 的导出文件仍可导入，但目标机器需要已有同名 provider。</li>
+                  <li><code>export</code> 默认导出 secret-free 复刻包，包含机器人配置、Telegram 绑定、tasks schedule、provider 引用和可移植模型元数据，不包含 API Key。传入机器人名称时只导出单个机器人。</li>
+                  <li>迁移凭证使用 <code>ai hermes export --include-secrets --recipient &lt;key-id&gt;</code>，经确认后生成接收方绑定且有有效期的加密 bundle；导入时必须显式增加 <code>--allow-secret-import</code>，凭证直接写入 SecretStore。</li>
+                  <li><code>import</code> 默认只处理 secret-free bundle；缺失凭证时在目标机器重新配置。旧版可能含明文 secret 的文件会触发安全告警和预览，未经显式允许不会导入 secret。</li>
                   <li><code>import-local</code> 扫描 <code>~/.hermes/config.yaml</code>、<code>channel_directory.json</code> 和 <code>cron/jobs.json</code>。</li>
-                  <li>本机 Hermes provider 会先导入 AI Gateway provider 配置，再统一由 <code>ai provider</code> 管理。</li>
+                  <li>本机 Hermes provider 会导入 AI Runtime provider 配置，密钥进入 SecretStore，普通配置只保存 <code>apiKeyRef</code>。</li>
                   <li>已导入后即使把 <code>hermes-default</code> 改名，再执行 <code>import-local</code> 也会按 Telegram chatId 或 task id 识别为同一个机器人，不会重复新增。</li>
-                  <li>导入后会立即同步 <code>~/.hermes/config.yaml</code> 并重启 Hermes gateway；不需要单独执行 sync。</li>
+                  <li>导入后会同步隔离的 Hermes 配置并重启 gateway；密钥由 SecretStore 在进程启动时注入，不写入全局 <code>~/.hermes/config.yaml</code>。</li>
                   <li>同步会替换旧的 <code>providers</code> / <code>custom_providers</code> 配置块，并清理重复块，避免 <code>/model</code> 可选但执行时报 <code>Unknown provider</code>。</li>
                   <li>如果 Hermes 网关点击 <code>/model</code> 选项时没有读取 <code>providers</code> 配置，同步会自动打兼容补丁。</li>
                   <li>同步/自愈也会补 Hermes 请求兼容逻辑：如果历史对话里出现空工具名，会在发送给 OpenAI 兼容接口前清理，避免 <code>Invalid input[*].name</code> 这类 400 错误。</li>
                   <li>Telegram <code>/model</code> 选择 AI Gateway provider/model 后，会保存为本机 Hermes 默认配置；下次执行 <code>ai hermes status/list</code> 会自动同步回 <code>hermes.json</code>。</li>
                   <li>Telegram <code>/model</code> 只展示 AI Gateway 管理且验证可调用的 provider/model。</li>
-                  <li>同步时会清空 Hermes 原生 provider 凭证入口，避免 MoA、Copilot、openai-codex 等原生 provider 混入列表。</li>
+                  <li>隔离运行时不会加载 Hermes 原生 provider 凭证入口，避免 MoA、Copilot、openai-codex 等 provider 混入列表；不会覆盖用户的全局凭证文件。</li>
                 </ul>
               </div>
             </details>
@@ -832,7 +834,7 @@ ai session clear</pre>
 ~/.ai-gateway/memory.json
 ~/.ai-gateway/model-pricing.json
 ~/.ai-gateway/hermes.json</pre>
-                <p><code>providers.json</code> 保存聊天 provider；<code>memory.json</code> 保存记忆检索 embedding 模型；<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格；<code>hermes.json</code> 保存 Hermes 机器人，不保存 API Key 到机器人配置。</p>
+                <p><code>providers.json</code> 保存聊天 provider 与 <code>apiKeyRef</code>；<code>memory.json</code> 保存记忆检索 embedding 模型与 secret ref；实际凭证进入 SecretStore。<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格；<code>hermes.json</code> 保存 Hermes 机器人，不保存 API Key。</p>
               </div>
             </details>
             <details>

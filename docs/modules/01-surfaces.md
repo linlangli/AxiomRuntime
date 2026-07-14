@@ -1,234 +1,241 @@
-# AI Runtime Telegram 入口设计说明
+# ① Surfaces 接入面
 
-> 文档受众：用户、产品与中文架构评审者。本文件记录 Telegram 入口的完整中文交互与实现设计；英文 `AI_RUNTIME_ARCHITECTURE.md` 和 `SPEC.md` 定义权威 Runtime 边界。
+> 遵循 doc_2.0 统一模块模板。语言中英混合，标识符英文原样。术语见 [../glossary.md](../glossary.md)。
 
-Telegram Bot 是 AI Runtime 的远程交互 Surface，不拥有 Provider、Memory、Learning、Skill、权限或执行策略。可复用能力必须下沉到 Runtime Core，Telegram 只负责身份适配、消息交互、进度展示和用户确认。
+## 1. 定位（一句话）
 
-## 概述
+把用户或系统的意图翻译成稳定的 `RuntimeRequest`——CLI / Telegram / Web / API / Scheduler 都是同层的可替换适配器。
 
-在现有 `ai-gateway` 仓库中新增 Telegram Bot 模块，通过 Telegram 远程控制 Claude Code 和 Codex CLI 的全部能力。Bot 作为 `ai` CLI 的子命令管理（启动、停止、配置），共享仓库的配置体系和日志系统。
+## 2. 单一职责边界（高内聚）
 
-## 设计原则
+**拥有**：入口协议解析、意图 → `RuntimeRequest` 构造、面向用户的呈现与交互态、面级限流。
 
-1. **仓库内集成** — Bot 代码在 `src/telegram/` 下，与现有 `src/core/`、`src/cli/` 平级
-2. **CLI 管理** — 通过 `ai telegram start|stop|status|config` 控制 Bot 生命周期
-3. **能力完整** — 100% 覆盖 Claude Code 和 Codex CLI 的工具调用、权限模式、会话管理
-4. **交互映射** — 所有 CLI 交互（权限确认、模式切换）映射为 Telegram inline button
-5. **美观输出** — 格式化消息模板，支持代码块、diff、进度指示、折叠长输出
+**禁止拥有**：
+- **禁止**做 provider / model 选择（属 ③）。
+- **禁止**持有 memory 策略或 skill 晋升（属 ⑥/⑦）。
+- **禁止**做 tool 授权（属 ④ 执行期检查）。
+- **禁止**跨 surface 复用私有状态；共享策略**必须**上移 ② Orchestration。
 
-## 技术栈
+## 3. 内部构件与各自单一职责
 
-- **现有**: Node.js 20+, TypeScript ESM，Claude Code/Codex/Hermes 作为外部本机 CLI
-- **新增依赖**:
-  - `grammy` — Telegram Bot 框架（轻量、TS 原生）
-  - `better-sqlite3` — Bot 会话持久化
+| 构件 | 单一职责 |
+|---|---|
+| `cli` | 命令解析、终端呈现 |
+| `telegram` | Bot 更新处理、`ProgressReporter` 中间态、会话并发 `runExclusive()` |
+| `server` / API | HTTP/gRPC 入口，鉴权在边缘 |
+| `web` | 控制与治理面 |
+| `scheduler` | 定时/事件触发的系统意图 |
 
----
+## 4. 对外/消费端口（可插拔点）
 
-## 项目结构变更
+- 消费：Orchestration facade（唯一入口），只传 `RuntimeRequest` / 收 `RuntimeEvent` 投影。
+- 新增一个 surface = 新增一个适配器实现，**禁**改动下层契约（对应 §9 验收）。
 
-```
-ai-gateway/
-├── src/
-│   ├── cli/
-│   │   ├── index.ts              # 新增 "telegram" case
-│   │   └── commands/
-│   │       └── telegram.ts       # ai telegram start|stop|status|config
-│   ├── core/                     # 现有核心逻辑（不动）
-│   └── telegram/                 # 【新增】Telegram Bot 模块
-│       ├── index.ts              # Bot 入口（可独立进程运行）
-│       ├── bot.ts                # Grammy 实例 + middleware 注册
-│       ├── config.ts             # Bot 配置（token、白名单等）
-│       ├── engine/
-│       │   ├── types.ts          # 引擎公共接口
-│       │   ├── claude-engine.ts  # Claude Code CLI 子进程封装
-│       │   └── codex-engine.ts   # Codex CLI 子进程封装
-│       ├── handlers/
-│       │   ├── message.ts        # 文本消息 → 引擎调度
-│       │   ├── callback.ts       # Inline button 回调处理
-│       │   ├── command.ts        # Bot 命令 (/start /help /mode 等)
-│       │   └── document.ts       # 文件上传处理
-│       ├── interaction/
-│       │   ├── approval.ts       # 权限审批队列 + Telegram button
-│       │   ├── formatter.ts      # 输出格式化（代码块、diff、进度）
-│       │   └── keyboards.ts      # Inline keyboard 构建器
-│       ├── session/
-│       │   ├── manager.ts        # 会话生命周期（创建、恢复、销毁）
-│       │   └── store.ts          # SQLite 持久化
-│       └── templates/
-│           └── messages.ts       # 美观消息模板
-├── test/
-│   └── telegram/                 # Bot 测试
-│       ├── claude-engine.test.ts
-│       ├── codex-engine.test.ts
-│       └── approval.test.ts
-└── package.json                  # 新增 grammy 等依赖
-```
+## 5. 依赖（低耦合）
+
+只 import `L0 Contracts` + Orchestration facade 接口。**禁止** import capabilities / kernel / memory 的具体实现。
+
+## 6. 数据所有权
+
+Surfaces **无持久数据所有权**。会话真相属 ② Orchestration 的 Working Memory；用量/记忆真相属 ⑤/⑥。面级仅可持本地 UI 态与瞬时缓存。
+
+## 7. 降级 / kill switch
+
+单个 surface 故障**必须**隔离，**禁**波及其他 surface 或下层。面级限流触发时返回明确降级信号，**禁**静默丢弃系统意图（scheduler 尤甚）。
+
+## 8. 产品化就绪度
+
+⚠️ 一般**不单独成产品**——surface 是 Runtime 的消费端。可作为"参考客户端/SDK 示例"随核心产品分发。判据见 [../extraction-readiness.md](../extraction-readiness.md)。
+
+## 9. 现状映射
+
+`src/cli/`（18 文件）、`src/telegram/`（37 文件）已存在，保持为 adapter；`telegram/session|memory|interaction` 中的可复用策略**应当**上移 ② Orchestration。`server/`、`web/`、`scheduler/` 待建。
+
+## 10. 验收标准
+
+- 新 surface 可调用 Runtime 能力而**不复制**任何领域策略。
+- 关闭某 surface，其余 surface 与下层行为不变。
+- surface 层代码中**不存在** provider 选择、memory 策略、tool 授权逻辑。
+
+## 11. 相关文档
+
+- 整体架构：[../00-overview.md](../00-overview.md)｜编排层：[02-orchestration.md](02-orchestration.md)
+- 权威边界（英文）：[../AI_RUNTIME_ARCHITECTURE.md](../AI_RUNTIME_ARCHITECTURE.md) §2 Surface Layer
 
 ---
 
-## CLI 集成（`src/cli/commands/telegram.ts`）
+# 附：Telegram 接入面详细规范
 
-Bot 通过 `ai telegram` 子命令管理，作为后台进程运行。
+> **Appendix Status: SUPPORTING SPEC** — 补充 Telegram Surface 行为，不得把业务策略下沉到 Surface。
 
-### 命令设计
+> 从旧 `telegram-bot-spec.md` 迁入。Telegram 是 ① 的一个具体 surface 适配器。标识符英文原样。
+
+## A. 设计原则
+
+1. **仓库内集成**——Bot 代码在 `src/telegram/`，与 `src/core/`、`src/cli/` 平级。
+2. **CLI 管理**——`ai telegram start|stop|status|config` 控制生命周期。
+3. **能力完整**——100% 覆盖 Claude Code 与 Codex CLI 的工具调用、权限模式、会话管理。
+4. **交互映射**——所有 CLI 交互（权限确认、模式切换）映射为 Telegram inline button。
+5. **美观输出**——格式化模板，支持代码块、diff、进度指示、折叠长输出。
+
+技术栈：`grammy`（TS 原生 Bot 框架）+ `better-sqlite3`（会话持久化）；Claude Code/Codex/Hermes 作为外部本机 CLI。
+
+## B. 统一引擎接口（`telegram/engine/types.ts`）
+
+两个引擎共享统一接口，方便切换——这是 surface 不做 provider 选择、只经稳定接口执行的体现：
+
+```typescript
+export interface Engine {
+  name: string;
+  execute(params: EngineExecuteParams): Promise<ExecutionResult>;
+  abort(chatId: number): void;
+}
+
+export interface EngineExecuteParams {
+  chatId: number; prompt: string; cwd: string;
+  resume?: string; permissionMode?: string; allowedTools?: string[];
+  onPermission: PermissionHandler;              // 权限请求 → Telegram inline button
+  onProgress?: (u: ProgressUpdate) => void;     // 进度事件 → 状态消息
+  signal?: AbortSignal;
+}
+
+export interface PermissionRequest {
+  id: string; tool: string; description: string;
+  command?: string; filePath?: string; params: Record<string, unknown>;
+}
+export type PermissionHandler = (req: PermissionRequest) => Promise<boolean>;
+
+export interface ProgressUpdate {
+  phase: 'thinking' | 'tool_calling' | 'writing' | 'done';
+  message?: string; tool?: string;
+}
+
+export interface ExecutionResult {
+  sessionId?: string; response: string;
+  toolCalls?: ToolCallResult[]; filesChanged?: string[];
+  diff?: string; cost?: number; duration?: number;
+}
+```
+
+## C. CLI 生命周期命令
 
 ```bash
-ai telegram start          # 启动 Bot（后台 daemon）
-ai telegram stop           # 停止 Bot
-ai telegram status         # 查看 Bot 运行状态
-ai telegram config         # 交互式配置（token、白名单等）
-ai telegram config set <key> <value>   # 直接设置配置项
-ai telegram logs           # 查看 Bot 日志（最近 50 行）
-ai telegram logs -f        # 实时跟踪日志
+ai telegram start          # 启动 Bot（后台 daemon，fork 子进程）
+ai telegram stop           # 停止
+ai telegram status         # 运行状态
+ai telegram config         # 交互式配置（token、白名单）
+ai telegram config set <key> <value>
+ai telegram logs [-f]      # 日志（最近 50 行 / 实时跟踪）
 ```
 
-### 实现方式
+Setup 引导：`/start → model(Provider/Model) → workdir(+/init) → agent_profile(画像) → ready`。同一 chat 任务经 `SessionManager.runExclusive()` 串行执行，避免并发写同一 session。
+
+## D. 安全设计（surface 边缘鉴权）
+
+**鉴权**：白名单制——只有 `allowedUserIds` 列表内的 Telegram user ID 可用；token 存 `~/.ai-gateway/telegram.json`（权限 600）；无远程配置，只能经本机 `ai telegram config` 改。
+
+**危险操作强制确认**：即使 `bypassPermissions`/`full-auto` 模式，以下仍发 inline button 确认（surface 层兜底，与 ⑧ Policy 的 `require confirmation` 呼应）：
 
 ```typescript
-// src/cli/commands/telegram.ts
-import { fork } from 'node:child_process';
-import { resolve } from 'node:path';
-import { getPaths } from '../../core/config/paths.js';
-
-export async function runTelegramCommand(args: string[]): Promise<void> {
-  const [subcommand, ...rest] = args;
-
-  switch (subcommand) {
-    case 'start':
-      await startBot();
-      break;
-    case 'stop':
-      await stopBot();
-      break;
-    case 'status':
-      await showStatus();
-      break;
-    case 'config':
-      await configBot(rest);
-      break;
-    case 'logs':
-      await showLogs(rest);
-      break;
-    default:
-      console.log('Usage: ai telegram <start|stop|status|config|logs>');
-  }
-}
-
-async function startBot(): Promise<void> {
-  const pidFile = getPidFilePath();
-  if (await isRunning(pidFile)) {
-    console.log('✅ Bot 已在运行中');
-    return;
-  }
-
-  // Fork 子进程运行 Bot
-  const child = fork(
-    resolve(import.meta.dirname, '../../telegram/index.js'),
-    [],
-    { detached: true, stdio: 'ignore' }
-  );
-  child.unref();
-
-  // 写入 PID 文件
-  await writePid(pidFile, child.pid!);
-  console.log(`🤖 Telegram Bot 已启动 (PID: ${child.pid})`);
-}
-
-async function stopBot(): Promise<void> {
-  const pidFile = getPidFilePath();
-  const pid = await readPid(pidFile);
-  if (!pid) {
-    console.log('⚠️ Bot 未在运行');
-    return;
-  }
-  process.kill(pid, 'SIGTERM');
-  await removePid(pidFile);
-  console.log('⏹️ Bot 已停止');
-}
-```
-
-### 配置存储
-
-Bot 配置复用现有 `json-store.ts` 机制，存储在 `~/.ai-gateway/telegram.json`：
-
-```json
-{
-  "token": "123456:ABC-DEF...",
-  "allowedUserIds": [123456789],
-  "defaultEngine": "claude",
-  "defaultCwd": "/Users/user/projects",
-  "defaultPermissionMode": "bypassPermissions",
-  "sessionTimeoutHours": 24,
-  "maxOutputLength": 4000
-}
+const ALWAYS_CONFIRM_PATTERNS = [
+  /rm\s+(-rf?|--recursive)/, /git\s+push\s+.*--force/,
+  /git\s+reset\s+--hard/, /DROP\s+(TABLE|DATABASE)/i,
+  /sudo\s+/, /chmod\s+777/, />\s*\/dev\//,
+];
 ```
 
 ---
 
-## 核心模块设计
+# 附：CLI 接入面命令（从 SPEC.md 迁入）
 
-### 1. 引擎接口 (`telegram/engine/types.ts`)
+> **Appendix Status: SUPPORTING SPEC** — 命令材料服从正文 Surface 边界与 `usage.md` 当前用户契约。
 
-两个引擎共享统一接口，方便切换。
+> CLI 是 ① 的另一个 surface 适配器。命令名英文原样。
+
+## E. 命令清单
+
+`ai`（无参进交互模式）｜`ai help`（打开 `docs/USAGE.html`）。直接命令：
+
+```bash
+ai use claude | ai use codex
+ai use claude 51talk claude-opus-4-6      # tool + provider + model
+ai add 51talk https://example.com sk-xxx  # 添加 provider
+ai provider edit | list
+ai status | log | context | doctor | last | web
+ai session [list|clear]
+ai report
+ai hermes [status|use <robot>|add|list|edit|clear|delete
+           |import <file>|import-local|export [<robot>]]
+```
+
+## F. surface 职责边界（呼应本文 §2）
+
+CLI 只负责：解析命令 → 构造意图 → 呈现结果。provider 选择委托 ③（见 [03-capabilities.md](03-capabilities.md) 附 D–F），执行委托 ④，用量呈现读 ⑤ 的 `usage.json`。`ai status`/`ai doctor` 是 surface 对 ③ 健康态的只读投影，**不**在 CLI 层实现路由逻辑。
+
+---
+
+# 附：用户体验与权限确认策略（从 memory-system-spec 迁入）
+
+> **Appendix Status: SUPPORTING SPEC** — UX 只能呈现 Policy/Kernel 决策，不能自行授权。
+
+> 记忆自动化的用户体验与确认策略经由 ① surface 呈现；确认判定由 ⑧ Policy 产出、执行期由 ⑨ 落实。auth/purge 相关确认见 [03-capabilities.md](03-capabilities.md) 附 与 [09-security.md](09-security.md) 附。标识符与命令英文原样。
+
+## G. 用户体验
+
+新的默认体验：
+
+- 用户不需要输入任何记忆命令也能获得自动记忆。
+- 聊天过程中自然表达偏好、身份、项目约定，系统自动提炼。
+- 用户启用自动写入且对应 Phase 门槛通过后，系统静默保存 category policy 允许的低风险明确记忆；未达门槛时保持 candidate/pending。
+- 成功流程自动形成 Skill candidate，失败自动形成带适用条件的教训；用户不需要手工要求"沉淀"。
+- 系统在后台自动去重、压缩、更新 Profile 和冷热迁移，不让记忆数量持续挤占上下文；压缩不会让原始证据或纠错能力消失。
+- 对低置信度且高目标影响的信息，系统优先补查或验证，只在一个答案能显著减少风险时提出一个简短确认问题。
+- 统一审计页展示"为什么记住、来自哪里、何时被使用、是否产生帮助、经过哪次压缩或提升"，但普通对话不展示内部评分和冗长学习日志。
+- 用户可以查看、显式固定、纠正、撤销、删除、彻底清除、导出记忆，并按 source/bot/project 临时关闭读或写。
+
+记忆管理通过统一设置/审计界面提供；CLI 同时保留可脚本化的 `ai memory list|pin|correct|forget|purge|export|policy`。Telegram 不要求用户记命令，但设置页必须提供等价按钮。旧命令只有在等价能力上线并完成一次兼容版本告警后才能移除。
+
+首次启用自动写入时展示一次简短告知，并允许选择 `全部启用 / 只读不写 / 仅项目记忆 / 关闭`。身份绑定到新来源时再次展示共享范围；默认不把 `audience=personal` 的记忆注入 `audience=work` 项目。
+
+## H. 权限与确认策略
+
+| 行为 | 默认策略 |
+|------|----------|
+| 保存普通偏好 | 自动保存 |
+| 更新用户画像 | 自动更新草稿，周期性合并 |
+| 更新 bot 画像 | 当前 bot 内自动更新 |
+| 保存项目事实 | 自动保存到 project scope |
+| 保存 skill | 任务成功后自动生成 candidate；按风险完成 replay/sandbox/shadow/确认后才可 active |
+| 保存敏感信息 | 拒绝进入 memory |
+| 创建 auth profile | 必须用户主动登录 |
+| 使用已登录 session 读取页面 | 允许 |
+| 使用已登录 session 执行敏感写操作 | 必须确认 |
+| 删除大量记忆 | 必须确认 |
+| `purge` 正文、向量、episode、审计可逆 payload 和备份 | 二次确认，完成后输出不可恢复报告 |
+| 临时 `--incognito` | 禁止读写和 episode 正文，不需要确认 |
+
+---
+
+# 附：Telegram 核心模块实现设计（从 telegram-bot-spec 迁入）
+
+> **Appendix Status: SUPPORTING SPEC** — 详细实现建议需经 canonical contract 归一化后编码。
+
+> 从旧 `telegram-bot-spec.md` 的「核心模块设计」迁入。这些是 Telegram surface 适配器的实现级设计，代码原样保留。统一引擎接口本身见本文 **附 B**，此处仅补充各模块实现细节。
+
+## I. 引擎接口补充（`telegram/engine/types.ts`）
+
+`Engine` / `EngineExecuteParams` / `PermissionRequest` / `PermissionHandler` / `ProgressUpdate` / `ExecutionResult` 已见本文 **附 B「统一引擎接口」**，两个引擎共享该统一接口、方便切换，此处不再重复。附 B 未含的 `ToolCallResult`（以及 `PermissionRequest` 的字段注释：`command` 为 Bash 命令、`filePath` 为文件路径）补充如下：
 
 ```typescript
-export interface ExecutionResult {
-  sessionId?: string;
-  response: string;
-  toolCalls?: ToolCallResult[];
-  filesChanged?: string[];
-  diff?: string;
-  cost?: number;
-  duration?: number;
-}
-
 export interface ToolCallResult {
   tool: string;
   input: Record<string, unknown>;
   output: string;
   status: 'success' | 'error';
 }
-
-export interface PermissionRequest {
-  id: string;
-  tool: string;
-  description: string;
-  command?: string;        // Bash 命令（如果是 Bash 工具）
-  filePath?: string;       // 文件路径（如果是文件工具）
-  params: Record<string, unknown>;
-}
-
-export type PermissionHandler = (req: PermissionRequest) => Promise<boolean>;
-
-export interface EngineExecuteParams {
-  chatId: number;
-  prompt: string;
-  cwd: string;
-  resume?: string;
-  permissionMode?: string;
-  allowedTools?: string[];
-  onPermission: PermissionHandler;
-  onProgress?: (update: ProgressUpdate) => void;
-  signal?: AbortSignal;
-}
-
-export interface ProgressUpdate {
-  phase: 'thinking' | 'tool_calling' | 'writing' | 'done';
-  message?: string;
-  tool?: string;
-}
-
-export interface Engine {
-  name: string;
-  execute(params: EngineExecuteParams): Promise<ExecutionResult>;
-  abort(chatId: number): void;
-}
 ```
 
----
-
-### 2. Claude Code Engine (`telegram/engine/claude-engine.ts`)
+## J. Claude Code Engine（`telegram/engine/claude-engine.ts`）
 
 通过外部 `claude` CLI 子进程执行。AI Gateway 负责解析本机 CLI、生成临时 settings 注入 provider 环境变量、捕获 `stream-json` 输出，并把 Telegram 侧的权限模式映射为 Claude Code 启动参数。
 
@@ -252,7 +259,7 @@ export class ClaudeEngine implements Engine {
       env: {
         ...process.env,
         CLAUDE_CODE_HEADLESS: '1',
-        ANTHROPIC_API_KEY: params.provider.apiKey,
+        ANTHROPIC_API_KEY: await secretStore.get(params.provider.apiKeyRef),
         ANTHROPIC_BASE_URL: params.provider.baseUrl,
       },
     });
@@ -281,9 +288,7 @@ export class ClaudeEngine implements Engine {
 - ✅ 自定义 allowedTools
 - ✅ maxTurns 控制
 
----
-
-### 3. Codex Engine (`telegram/engine/codex-engine.ts`)
+## K. Codex Engine（`telegram/engine/codex-engine.ts`）
 
 Codex 通过子进程调用，完整支持三种审批模式。
 
@@ -403,9 +408,7 @@ export class CodexEngine implements Engine {
 - ✅ 流式事件解析
 - ✅ 执行中断
 
----
-
-### 4. 权限审批交互 (`telegram/interaction/approval.ts`)
+## L. 权限审批交互（`telegram/interaction/approval.ts`）
 
 CLI 的每一个权限 prompt 映射为 Telegram inline button，阻塞等待用户响应。
 
@@ -532,9 +535,7 @@ function truncate(s: string, max: number): string {
 }
 ```
 
----
-
-### 5. 消息模板 (`telegram/templates/messages.ts`)
+## M. 消息模板（`telegram/templates/messages.ts`）
 
 美观、信息密度高、适配 Telegram HTML。
 
@@ -732,9 +733,7 @@ export const Msg = {
 };
 ```
 
----
-
-### 6. 会话管理 (`telegram/session/manager.ts`)
+## N. 会话管理（`telegram/session/manager.ts`）
 
 每个 Telegram user/chat 对应独立的 AI 会话。
 
@@ -792,9 +791,7 @@ export class SessionManager {
 }
 ```
 
----
-
-### 7. Bot 主体 (`telegram/bot.ts`)
+## O. Bot 主体（`telegram/bot.ts`）
 
 ```typescript
 import { Bot, session } from 'grammy';
@@ -846,9 +843,7 @@ export async function createBot() {
 }
 ```
 
----
-
-### 8. 消息处理流程 (`telegram/handlers/message.ts`)
+## P. 消息处理流程（`telegram/handlers/message.ts`）
 
 ```typescript
 import type { Context, Bot } from 'grammy';
@@ -985,9 +980,7 @@ async function sendResult(ctx: Context, result: ExecutionResult): Promise<void> 
 }
 ```
 
----
-
-### 9. Callback 处理 (`telegram/handlers/callback.ts`)
+## Q. Callback 处理（`telegram/handlers/callback.ts`）
 
 处理所有 inline button 点击。
 
@@ -1056,9 +1049,7 @@ export function registerCallbackHandler(bot: Bot, deps: {
 }
 ```
 
----
-
-### 10. Bot 命令 (`telegram/handlers/command.ts`)
+## R. Bot 命令（`telegram/handlers/command.ts`）
 
 ```typescript
 import { InlineKeyboard, type Bot } from 'grammy';
@@ -1209,33 +1200,240 @@ export function registerCommands(bot: Bot, deps: {
 
 ---
 
-## 安全设计
+# 附：Progress Streaming 进度流式设计（从 ARCHITECTURE §3.5 迁入）
 
-### 鉴权
+> **Appendix Status: SUPPORTING SPEC** — 进度事件必须映射到 closed `RuntimeEvent`/Surface presentation contract。
 
-- **白名单制**：只有 `allowedUserIds` 列表中的 Telegram user ID 才能使用
-- **配置加密**：token 存储在本地 `~/.ai-gateway/telegram.json`，文件权限 600
-- **无远程配置**：所有配置只能通过本机 `ai telegram config` 修改
+> 从 `ARCHITECTURE.md` §3.5 迁入。进度流式是 Telegram surface 展示层的实现设计，属 ① 的交互态。
+>
+> **状态：已实现。** 引擎已有的进度事件已接到 Telegram：长任务执行期间会编辑同一条状态消息展示阶段/工具；任务完成后，短结果会直接把这条状态消息编辑成最终回复，避免“删除状态消息再新发结果”的割裂感。
 
-### 危险操作强制确认
+## S. 现状：进度流式已接通
 
-即使在 `bypassPermissions` / `full-auto` 模式下，以下操作仍发 inline button 确认：
+底层管道本来就是流式的，本轮已补齐 Telegram 展示层：
+
+- **引擎到 CLI 一层本就是流式**：ClaudeEngine 用 `--output-format stream-json --verbose`；CodexEngine 用 `codex exec --json` + `wire_api=responses`。
+- **子进程 stdout 边跑边收**：`spawnCapture({ onStdout })` 实时把 chunk 交给 `handleClaudeProgress()` / `handleCodexProgress()`，已能解析出 `tool_calling` / `writing` 等 `ProgressUpdate`（见 `engine/types.ts` 的 `ProgressUpdate`）。
+- **message.ts 已接线**：`executePromptLocked()` 构造 `ProgressReporter`，把 `onProgress` 透传给 `engine.execute()`；成功或失败时优先用最终内容覆盖状态消息，只有无法覆盖时才由 `finally` 清理。
+- **最终文本一次性解析**：进程整体结束后 `parseClaudeOutput()` / `parseCodexOutput()` 从完整 stdout 取 `result` / `last_message`，再由 `sendResult()` 优先编辑已有状态消息；没有状态消息、内容过长或编辑失败时回退到 `ctx.reply` / 附件。
+- 用户端现在同时保留每 4 秒一次的 `startTypingStatus()` 输入指示，以及 `ProgressReporter` 维护的一条可编辑状态消息。
+
+结论：进度阶段现在会通过一条可编辑状态消息展示；最终答案仍保持非 token 级流式，避免 Telegram edit 限流和中间工具日志刷屏。
+
+## T. 设计目标与取舍
+
+| 方案 | 是否采用 | 理由 |
+|------|----------|------|
+| 进度流式（编辑一条状态消息展示阶段/工具） | ✅ 采用 | 复用现成 `onProgress` 管道，低风险；长任务里用户能看到「在思考 / 在跑命令 / 在整理回复」 |
+| Token 级流式（逐字吐最终答案） | ❌ 不采用 | Telegram `editMessageText` 对同一 chat 有硬限流（约 1 次/秒，超限 429）；且 Codex/Claude 是 agent，用户真正要的是结尾 `last_message`，中间是工具日志，逐字吐意义有限 |
+
+**核心原则**：编辑**同一条**状态消息（不是每次进度都新发消息），节流更新；任务结束时短结果直接覆盖这条消息，长结果继续走文件附件，保留 HTML 降级、diff 附件等行为。
+
+## U. 改动点总览
+
+| 文件 | 改动 | 说明 |
+|------|------|------|
+| `telegram/engine/types.ts` | 扩展 `ProgressUpdate` | 增加 `toolKind?` / `mcpServer?` 等字段（见 §Y）；`toolCount` 由 reporter 内部统计 |
+| `telegram/interaction/tool-name.ts` | **新增** | 共享 helper `parseToolName()`：解析 `mcp__` 前缀、归一 `toolKind`（见 §Y） |
+| `telegram/interaction/progress-reporter.ts` | **新增** | 节流状态消息更新器（发送/编辑/清理一条状态消息），核心组件 |
+| `telegram/interaction/formatter.ts` | 新增 `Formatter.progress()` | 把 `ProgressUpdate` 渲染为状态文案（emoji + 阶段 + 工具名，不展示耗时） |
+| `telegram/handlers/message.ts` | 接线 | `executePromptLocked()` 构造 `ProgressReporter`，透传 `onProgress`，最终结果优先覆盖状态消息 |
+| `telegram/engine/claude-engine.ts` | **不改** | MCP 前缀 `mcp__` 在 `tool_use.name` 里，由 `parseToolName()` 解析，引擎无需改动 |
+| `telegram/engine/codex-engine.ts` | 小改 `handleCodexProgress` | Codex 无 `mcp__` 前缀，`toolKind` 需按事件 type 判定后写入 `ProgressUpdate` |
+
+## V. ProgressReporter 组件设计
+
+新增 `telegram/interaction/progress-reporter.ts`，职责单一：把高频 `ProgressUpdate` 合并成低频的状态消息编辑。
 
 ```typescript
-const ALWAYS_CONFIRM_PATTERNS = [
-  /rm\s+(-rf?|--recursive)/,
-  /git\s+push\s+.*--force/,
-  /git\s+reset\s+--hard/,
-  /DROP\s+(TABLE|DATABASE)/i,
-  /sudo\s+/,
-  /chmod\s+777/,
-  />\s*\/dev\//,
-];
+export type ProgressReporterOptions = {
+  throttleMs?: number;   // 默认 1500，两次 editMessageText 的最小间隔
+  silent?: boolean;      // silentSuccess 场景全程 no-op
+};
+
+export class ProgressReporter {
+  private messageId?: number;     // 状态消息 id；首个 update 时惰性 sendMessage
+  private lastSignature = "";     // 上次状态签名，去重用（忽略单纯秒数变化）
+  private pending?: ProgressUpdate;// 节流窗口内最后一次 update，窗口到点后 flush
+  private startedAt = Date.now();
+  private toolCount = 0;
+
+  constructor(api: Pick<Context["api"], "sendMessage" | "editMessageText" | "deleteMessage">, chatId: number, options?: ProgressReporterOptions);
+
+  // onProgress 回调入口：记录 pending，按 throttle 决定立即 flush 还是等定时器
+  update(u: ProgressUpdate): Promise<void>;
+
+  // 任务结束但没有被最终结果覆盖时调用：删除状态消息、清定时器
+  async finalize(): Promise<void>;
+
+  // 任务成功/失败时优先调用：把状态消息原地编辑成最终内容
+  async replaceWithHtml(html: string, fallbackText: string): Promise<boolean>;
+}
 ```
 
----
+**节流与去重规则**：
+- 窗口内多次 `update()` 只保留最后一个，窗口到点 flush 一次；`done` 阶段不展示，由 `finalize()` 清理。
+- flush 前用 `Formatter.progress()` 渲染文本，若阶段/工具/消息签名未变则跳过编辑（避免无谓 API 调用和「message is not modified」错误）。
+- 首次有内容时 `sendMessage` 建状态消息并记住 `messageId`；之后一律 `editMessageText`。
+- 所有 Telegram API 调用 best-effort：`try/catch` 吞掉错误（含 429），**绝不影响主任务执行**。
 
-## 依赖变更 (package.json)
+## W. message.ts 接线
+
+在 `executePromptLocked()` 中用 `ProgressReporter` 替换/补充现有的 `startTypingStatus()`：
+
+```typescript
+const reporter = new ProgressReporter(ctx.api, chatId, {
+  silent: options.silentSuccess === true,  // /init 等静默任务全程 no-op
+});
+const stopTypingStatus = startTypingStatus(ctx, chatId); // 保留：typing 与状态消息可并存
+
+try {
+  // ... provider 候选循环内：
+  result = await engine.execute({
+    chatId,
+    prompt: promptWithContext,
+    // ... 其余参数不变
+    onPermission: async (req) => { /* 不变 */ },
+    onProgress: (u) => reporter.update(u),   // ← 新增：唯一的接线点
+  });
+  // ...
+  if (!options.silentSuccess) {
+    await sendResult(ctx, session.engine, result, deps.config.maxOutputLength, reporter);
+  }
+} catch (error) {
+  // ... 失败时也优先 reporter.replaceWithHtml()，失败再 ctx.reply()
+} finally {
+  await reporter.finalize();                 // 幂等：成功路径已替换则 no-op；未替换才删除状态
+  stopTypingStatus();
+}
+```
+
+**要点**：
+- `onProgress` 是唯一接线点，引擎无需改动。
+- `replaceWithHtml()` / `finalize()` 必须幂等：成功替换后 `finally` 不再删除；未替换时 `finally` 负责清理残留状态。
+- provider fallback 时**复用同一个 reporter**，可选地在切换时 `update` 一帧「↻ 正在切换 provider…」。
+- 与 `SessionManager.runExclusive()` 天然兼容：同一 chat 串行执行，任意时刻只有一个 reporter 活跃。
+
+## X. 状态文案（Formatter.progress）
+
+| phase | 状态文案示例 |
+|-------|-------------|
+| `thinking` | `⏱️ 思考中…`（🧠 保留给记忆态，避免冲突） |
+| `tool_calling` | `🔧 正在运行 Bash（第 3 个操作）` |
+| `writing` | `✍️ 正在整理回复…` |
+| `done` | 不再展示（由 `finalize()` 清理） |
+
+- 状态消息不展示耗时，避免出现 `（2s）` 这类跳秒信息；若阶段/工具/消息签名未变则不触发编辑（避免无意义刷新）。
+- 工具名与 MCP 识别见 §Y；`toolCount` 由 reporter 侧对 `tool_calling` 事件累加得到。
+
+## Y. 工具名解析（含 MCP 识别）
+
+新增共享 helper `telegram/interaction/tool-name.ts`，把原始工具标识归一为结构化字段，供 `Formatter.progress()` 渲染。`ProgressUpdate` 扩展：
+
+- `toolKind?: "builtin" | "mcp" | "command"`
+- `mcpServer?: string`（仅 MCP 调用有值）
+
+**解析规则（两引擎差异）**：
+
+- **Claude**：`tool_use.name` 若以 `mcp__` 开头，按约定 `mcp__<server>__<tool>` 拆分 → `toolKind="mcp"`、`mcpServer=<server>`、展示名取 `<tool>`（如 `mcp__codegraph__codegraph_context` → server=`codegraph`, tool=`codegraph_context`）；否则 `toolKind="builtin"`，名字原样（`Bash`/`Edit`/`Read`…）。**解析全在 `parseToolName()` 内完成，`claude-engine.ts` 不改。**
+- **Codex**：事件里没有 `mcp__` 前缀，需在 `handleCodexProgress` 按事件 type 判定：`exec`/`command` → `"command"`；MCP 调用事件 → `"mcp"`（server/tool 从事件字段取）；其余 → `"builtin"`。判定结果写入 `ProgressUpdate.toolKind`。
+
+**Formatter.progress() 按 toolKind 渲染**：
+
+| toolKind | 展示示例 |
+|----------|---------|
+| `mcp` | `🔌 调用 MCP · codegraph / codegraph_context（第 3 个操作）` |
+| `command` | `⌨️ 执行命令 · npm test` |
+| `builtin`（编辑类 Write/Edit） | `✏️ 编辑文件 · a.ts` |
+| `builtin`（其它） | `🔧 运行 Bash（第 2 个操作）` |
+
+- server 名 / tool 名 / 命令各做长度截断（建议 ≤ 24 字符），避免状态消息过长。
+- 未知 kind 或解析失败兜底为 `🔧 运行 <原始名>`，**绝不因出现新工具类型而崩溃**。
+
+## Z. 最终替换策略与边界情况
+
+`ProgressReporter` 的收尾分两类：
+
+- **成功替换**：`replaceWithHtml()` 把已有状态消息直接编辑成最终回复；HTML 解析失败时再用纯文本 fallback 编辑一次。成功后 reporter 标记为 finalized，`finally` 不再删除。
+- **清理残留**：如果没有状态消息、编辑失败、静默任务或需要中止清理，`finalize()` 仍可删除状态消息。删除失败（用户已删、超时）吞错即可。
+
+边界情况处理：
+
+| 情况 | 处理 |
+|------|------|
+| 任务极快（< throttle 窗口，进度消息还没发出） | `replaceWithHtml()` 会取消 pending 进度并返回 false，用户只看到最终结果，不会在结果后补闪状态消息 |
+| `editMessageText` 返回 429 | 吞错并适度拉长 `throttleMs`（退避），不阻塞、不重试风暴 |
+| `editMessageText` 报 "message is not modified" | 去重逻辑应已避免；万一触发，吞错 |
+| 状态消息被用户手动删除 | 后续 edit 报错，吞错；下次 update 可惰性重建或放弃 |
+| `silent: true`（如 `/init`） | `update()` / `finalize()` 全程 no-op，不产生任何状态消息 |
+| 短最终结果 | 优先编辑原状态消息为最终回复 |
+| 长最终结果 / 附件 | 原状态消息优先编辑为附件提示，再发送完整输出文件和 diff 文件 |
+| 任务失败 | 优先编辑原状态消息为失败内容；编辑失败再单独发送失败消息 |
+| 任务中止 / 静默失败 | `finally` 中 `finalize()` 保证状态消息被清理 |
+
+## AA. 测试与实施要求
+
+**单元测试**（`node:test`，mock `ctx.api`）：
+- 高频 `update()` 在节流窗口内被合并为有限次 `editMessageText` 调用。
+- 相同渲染文本不重复编辑（去重）。
+- `silent: true` 时 `sendMessage` / `editMessageText` / `deleteMessage` 零调用。
+- 成功路径下短结果会编辑原状态消息，且 `finalize()` 不再删除。
+- 失败或编辑失败路径下 `finalize()` 仍被调用且状态消息被清理。
+- `editMessageText` 抛错时不冒泡到主流程（主任务结果不受影响）。
+- `parseToolName()`：`mcp__codegraph__codegraph_context` → kind=`mcp`/server=`codegraph`/tool=`codegraph_context`；`Bash` → kind=`builtin`；超长名被截断；未知输入走兜底不抛错。
+
+**手动验证**：长任务（多工具调用）能看到状态滚动更新；结果出现时同一条消息原地变成最终回复；短任务无残留状态消息。
+
+**实施原则**：
+- 已新增 `progress-reporter.ts` + `tool-name.ts` + `Formatter.progress()` + message.ts 接线；Claude 引擎解析零改动，Codex 仅补充 progress metadata。
+- reporter 不存在或 `silent` 时，行为与当前代码等价（零功能回退）。
+- 最终结果发送逻辑保留 `sendResult` 的附件/HTML 降级/diff 能力，并新增“有状态消息时原地替换”的优先路径。
+
+# 附：Telegram 工程落地（结构/依赖/优先级/测试）（从 telegram-bot-spec 迁入）
+
+> **Appendix Status: CURRENT SNAPSHOT** — 记录 legacy 工程拆分；目标依赖方向以模块正文为准。
+
+## A. 项目结构变更
+
+```
+ai-gateway/
+├── src/
+│   ├── cli/
+│   │   ├── index.ts              # 新增 "telegram" case
+│   │   └── commands/
+│   │       └── telegram.ts       # ai telegram start|stop|status|config
+│   ├── core/                     # 现有核心逻辑（不动）
+│   └── telegram/                 # 【新增】Telegram Bot 模块
+│       ├── index.ts              # Bot 入口（可独立进程运行）
+│       ├── bot.ts                # Grammy 实例 + middleware 注册
+│       ├── config.ts             # Bot 配置（token、白名单等）
+│       ├── engine/
+│       │   ├── types.ts          # 引擎公共接口
+│       │   ├── claude-engine.ts  # Claude Code CLI 子进程封装
+│       │   └── codex-engine.ts   # Codex CLI 子进程封装
+│       ├── handlers/
+│       │   ├── message.ts        # 文本消息 → 引擎调度
+│       │   ├── callback.ts       # Inline button 回调处理
+│       │   ├── command.ts        # Bot 命令 (/start /help /mode 等)
+│       │   └── document.ts       # 文件上传处理
+│       ├── interaction/
+│       │   ├── approval.ts       # 权限审批队列 + Telegram button
+│       │   ├── formatter.ts      # 输出格式化（代码块、diff、进度）
+│       │   └── keyboards.ts      # Inline keyboard 构建器
+│       ├── session/
+│       │   ├── manager.ts        # 会话生命周期（创建、恢复、销毁）
+│       │   └── store.ts          # SQLite 持久化
+│       └── templates/
+│           └── messages.ts       # 美观消息模板
+├── test/
+│   └── telegram/                 # Bot 测试
+│       ├── claude-engine.test.ts
+│       ├── codex-engine.test.ts
+│       └── approval.test.ts
+└── package.json                  # 新增 grammy 等依赖
+```
+
+## B. 依赖变更
 
 在现有 package.json 中新增：
 
@@ -1251,9 +1449,7 @@ const ALWAYS_CONFIRM_PATTERNS = [
 }
 ```
 
----
-
-## CLI 入口变更
+## C. CLI 入口变更
 
 在 `src/cli/index.ts` 的 switch 中新增：
 
@@ -1263,9 +1459,7 @@ case "telegram":
   break;
 ```
 
----
-
-## 实现优先级
+## D. 实现优先级
 
 ### Phase 1 — 核心链路 (MVP)
 
@@ -1304,9 +1498,7 @@ case "telegram":
 - Telegram 回复重试只重发消息，不会重新执行已经完成的 Claude Code 或 Codex 请求。
 - HTML 格式错误、参数错误等确定性失败不做网络重试。
 
----
-
-## 关键注意事项
+## E. 关键注意事项
 
 ### Claude Code CLI
 
@@ -1337,9 +1529,7 @@ case "telegram":
 - SIGTERM 优雅关闭（finish pending, cleanup）
 - 崩溃时通过 `ai telegram status` 检测并重启
 
----
-
-## 测试策略
+## F. 测试策略
 
 ```bash
 # 构建

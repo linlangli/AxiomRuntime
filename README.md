@@ -11,11 +11,12 @@ Runtime 才是产品。Memory、Agent 和 LLM 都是可以替换和组合的能�
 ## 文档导航
 
 - [中文文档总览](./docs/README.md)
-- [中文使用指南](./docs/USAGE.md)
+- [doc_2.0 文档层总览](./docs/README.md)
+- [中文使用指南](./docs/usage.md)
 - [HTML 命令手册](./docs/USAGE.html)
-- [中文技术架构说明](./docs/ARCHITECTURE.md)
+- [整体架构与当前实现快照](./docs/00-overview.md)
 
-AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/PROJECT_CONSTITUTION.md`、`docs/AI_RUNTIME_ARCHITECTURE.md`、`docs/SPEC.md` 和 `docs/CONVENTIONS.md`。
+AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/AI_RUNTIME_ARCHITECTURE.md` 和 `docs/CONVENTIONS.md`；产品规范、宪法摘要、记忆/学习与 Telegram 设计等构成 `doc_2.0` 文档层（现已展开在 `docs/` 与 `docs/modules/` 下，索引见 `docs/README.md`）。
 
 ## 当前边界
 
@@ -132,5 +133,5 @@ Telegram Bot 集成说明：
 
 更多命令用法见：
 
-- [docs/USAGE.md](./docs/USAGE.md)
+- [docs/usage.md](./docs/usage.md)
 - [docs/USAGE.html](./docs/USAGE.html)

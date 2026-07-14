@@ -1,6 +1,6 @@
 # AI Runtime Target Architecture
 
-> Audience: AI agents and maintainers. This is the normative target architecture. `ARCHITECTURE.md` is the Chinese current-state and review document.
+> Audience: AI agents and maintainers. This is the normative target architecture. The Chinese layered overview and current-state implementation snapshot live in `00-overview.md`.
 
 ## 1. Architectural Objective
 
@@ -80,12 +80,16 @@ Promotion must preserve provenance, evidence, version, scope, policy decision, e
 
 The target core contracts are:
 
+- `PrincipalRef`: canonical tenant-bound user, service, agent, team, or organization identity.
+- `ScopeRef`: canonical tenant, owner, resource, audience, and purpose boundary; legacy raw scope strings are storage aliases only.
 - `ExecutionContext`: identity, organization, project, session, source, provider constraints, policy, and trace.
 - `RuntimeRequest`: intent plus typed inputs and requested capabilities.
 - `RuntimeEvent`: append-only structured lifecycle evidence.
 - `CapabilityDescriptor`: identity, version, contract, permissions, dependencies, and activation state.
 - `CapabilityInvocation`: typed capability call with idempotency and policy context.
 - `PolicyDecision`: allow, deny, require confirmation, or constrain.
+- `OrganizationPolicySnapshot`: immutable organization/environment policy, quota, residency, retention, and capability constraints bound to an execution.
+- `OrganizationResource`, `EnvironmentResource`, `RoleBinding`, `PolicyBundleRevision`, `ApprovalRequest`, `QuotaPolicy`, `LegalHold`, and `AdminMutation`: revisioned enterprise resources and governed administrative writes.
 - `LearningCandidate`: proposed knowledge, skill, workflow, or capability with evidence.
 - `EvaluationResult`: deterministic and model-assisted quality evidence.
 - `LearningObjective`: versioned capability outcome, scope, metrics, hard safety regressions, and minimum evidence.
@@ -105,8 +109,16 @@ The target core contracts are:
 - `WorkflowCheckpointBackend`: thread-scoped execution checkpoint contract, separate from cross-execution Memory truth.
 - `PolicyEngine`: deterministic, side-effect-free policy evaluation contract.
 - `EvaluationHarness`: versioned benchmark and domain evaluation contract whose results are evidence rather than activation authority.
+- `ToolPort`: one typed action with explicit side-effect, idempotency, cancellation, result reconciliation, and optional compensation.
+- `WorkflowExecutorPort`: checkpointed, signalable, resumable, and compensating state-machine execution.
+- `AgentAdapterPort`: bounded external agent execution with resumable events; every proposed tool action returns to the Kernel for authorization.
+- `IdentityDirectoryPort`: canonical identity and membership lookup behind local or OIDC/SAML/SCIM adapters; it never grants a Runtime capability.
+- `AuditQueryPort`: access-controlled audit search and signed export over immutable Runtime events.
+- `MeteringExportPort`: idempotent FinOps export from the sole UsageObserver ledger, never a second usage or cost record.
 
 Contracts must be provider agnostic and serializable where cross-process execution is required.
+
+`RuntimeEvent.eventType` and `RuntimeError.code` are closed, versioned catalogs defined in `contracts.md`. Provider errors, free-form event names, raw SDK payloads, and unregistered diagnostic fields cannot cross module or persistence boundaries. Tool, Workflow, Agent, Transport, Usage, Memory, Learning, Policy, Security, and Admin operations each emit one terminal event per invocation; reconciliation appends a correcting event and never rewrites history.
 
 ### Governed Learning Loop
 
@@ -223,6 +235,29 @@ Every plugin must declare an id, semantic version, API compatibility, permission
 - Raw transport capture cannot enter durable stores. Persistable execution evidence must pass recursive redaction and a strict allowlist schema.
 - Prompt injection changes are evaluated for cache-hit ratio, effective input cost, time to first token, and task quality before activation.
 
+### Enterprise Control Plane
+
+The enterprise control plane governs organizations and environments; it is not another execution data plane. Web, API, and CLI administration surfaces call the same stable Runtime contracts and cannot bypass Policy, Security, or Audit boundaries.
+
+It owns these product-level workflows:
+
+- tenant and organization lifecycle, environment separation, delegated administration, and role assignment;
+- OIDC or SAML federation and SCIM provisioning through replaceable identity adapters;
+- versioned policy draft, validation, approval, staged rollout, rollback, and effective-policy inspection;
+- capability and plugin discovery, risk review, approval, activation, draining, disablement, and removal;
+- quota, budget, usage attribution, chargeback/showback, and metering export;
+- data residency, retention, legal hold, export, purge, and evidence of completion;
+- searchable, access-controlled audit and signed audit export;
+- backup, restore, disaster-recovery exercises, and declared SLO, RTO, and RPO per deployment profile.
+
+Authoritative boundaries remain separated: the identity directory owns identity and membership facts; Policy owns versioned rules and decisions; Security owns credential and isolation enforcement; UsageObserver owns usage/cost records; Memory owns Claim/Evidence semantics; Storage supplies persistence mechanisms; the control plane only orchestrates their governed lifecycle through L0 contracts.
+
+Every administrative mutation must carry `PrincipalRef`, `ScopeRef`, policy version, idempotency key, reason, approval evidence when required, and trace context. Changes use validate-before-publish and immutable revision history. Rollout is environment-scoped and supports canary percentages or explicit target sets; rollback creates a new revision rather than rewriting history. Break-glass access is time-bound, reason-bound, separately audited, and cannot bypass tenant isolation, legal hold, or secret handling rules.
+
+Enterprise readiness requires tested failure semantics, not only UI availability. Identity-provider outage preserves existing bounded sessions but fails closed for new privileged grants; audit-sink outage blocks high-impact administrative writes or durably buffers only sanitized signed events within a declared recovery bound; metering-export outage never loses the UsageObserver ledger; residency or legal-hold uncertainty blocks affected deletion or movement until policy can decide deterministically.
+
+Quantitative availability, latency, durable-operation, capacity, RTO, and RPO gates are defined in `service-level-objectives.md`. A hard tenant, secret, audit-loss, duplicate-charge, or unsafe-execution regression fails the release regardless of aggregate error budget.
+
 ## 7. Mapping From the Current Repository
 
 | Current area | Runtime role | Direction |
@@ -244,7 +279,7 @@ Every plugin must declare an id, semantic version, API compatibility, permission
 4. Formalize tool execution, permissions, idempotency, and workflow contracts.
 5. Introduce capability descriptors and plugin lifecycle management.
 6. Add organization and tenant scope, policy administration, and shared capability promotion.
-7. Build web, desktop, and enterprise APIs on the same core contracts.
+7. Build the enterprise control plane and its web/API administration surfaces on the same core contracts; add desktop as another surface, not a new authority boundary.
 
 Each step must remain usable and backward compatible or provide an explicit migration path.
 
@@ -266,5 +301,7 @@ Each step must remain usable and backward compatible or provide an explicit migr
 - External extractor, vector, graph, block, checkpoint, policy, and evaluation providers cannot directly mutate authoritative activation, scope, permission, or deletion state.
 - The local profile remains usable without managed services, and each optional provider has an independently tested fallback or explicit capability-level disablement.
 - An organization can trace which interaction produced a capability and roll it back.
+- An organization can federate identity, delegate bounded administration, publish and roll back policy, enforce quotas/residency/retention/legal hold, export audit and metering data, and complete backup/restore exercises without changing execution semantics.
+- Control-plane failure cannot create a second usage ledger, bypass policy, widen scope, lose an accepted audit event, or silently violate declared SLO/RTO/RPO.
 - Disabling a plugin or advanced learning feature returns the Runtime to a stable baseline.
 - Security, tenant scope, and permission behavior remain deterministic when models change.
