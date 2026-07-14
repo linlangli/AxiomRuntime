@@ -46,6 +46,23 @@ Memory 不是独立产品，而是 AI Runtime 的学习与知识子系统。本�
 - 所有执行入口统一经过 memory hook。
 - 敏感登录态由独立 `auth session` 服务管理，不属于普通 prompt memory。
 
+> **规格与实现的边界（重要，勿误读）**
+>
+> 本文档描述的是 Runtime 记忆子系统的**终局架构（Phase 13）**。当前代码只落地到 Telegram Memory Phase 1，二者存在数量级落差。引用本文任何组件前，请先按下表核对实现状态，避免误以为账本、Governor、Transport Proxy 已存在：
+>
+> | 规格组件 | 代码现状 | 位置 |
+> |---|---|---|
+> | 单表 `memories` | 已实现 | `src/telegram/memory/memory-store.ts` |
+> | `memory_units` 治理头 + Claim/Evidence 账本 | 未实现 | 无 |
+> | scope 分级 | 仅 `global` / `bot` 两级（终局为 5 级） | `src/telegram/memory/types.ts` |
+> | 多源召回 + RRF 融合 + 向量检索 | 未实现，当前为关键词打分 `scoreMemory` | `memory-service.ts` |
+> | Learning Governor / confidence 状态机 / 自动抽取 | 未实现，记忆全靠显式 `remember()` | 无 |
+> | Runtime Transport Proxy 单一数据平面 | 未实现 | `src/core/transport-proxy/` 目录不存在 |
+> | 版本化 migrations | 未实现，`create table if not exists` 直建 | 无 migrations 目录 |
+> | 凭证加密 | 未启用，credential 类直接抛错 | `memory-service.ts` |
+>
+> 文中章节凡属终局能力，均建议在标题旁标注 `[规划中]` 或 `[终局]`，`[已实现]` 仅指上表已落地项。
+
 ---
 
 ## 非目标
@@ -206,6 +223,71 @@ Profile 只替换 backend，不改变 `MemoryService`、Claim/Evidence、PolicyD
 ---
 
 ## 总体架构
+
+### 分层总架构图（俯瞰）
+
+下图是终局架构的六层俯瞰，每个节点的中文职责见图后说明。它与后面的"执行流程图"互补：这张看**分层与治理**，下一张看**请求时序**。
+
+```mermaid
+flowchart TB
+  subgraph SURF["① 接入面 Surfaces"]
+    TG["Telegram Bot"]
+    AIUSE["ai use CLI"]
+  end
+  subgraph PROXY["② 统一传输代理 Runtime Transport Proxy"]
+    FACADE["Transport Facade<br/>单一数据平面"]
+    USAGE["UsageObserver"]
+    MEMEXT["MemoryExtension"]
+  end
+  subgraph HOOKS["③ Hook 编排层"]
+    PRE["Pre-Read<br/>检索注入·300ms·fail-open"]
+    POST["Post-Run<br/>异步抽取·durable job"]
+    DISTILL["Periodic Distill<br/>蒸馏治理"]
+  end
+  subgraph COG["④ 认知与检索"]
+    PLANNER["Query Planner"]
+    RECALL["多源召回<br/>FTS/vector/entity/graph"]
+    FUSION["RRF 融合 + Authority/Taint 过滤"]
+    COMPILER["Context Compiler<br/>Token 预算 1600"]
+    GOVERNOR["Learning Governor<br/>确定性学习决策"]
+  end
+  subgraph DATA["⑤ 数据与账本"]
+    UNITS["memory_units 治理头"]
+    LEDGER["Claim/Evidence 账本<br/>ADD-only 不可变"]
+    PROFILE["双层画像 Snapshot<br/>编译产物·非真相源"]
+    VEC["向量/FTS/图 索引"]
+  end
+  subgraph GOV["⑥ 治理 Governance"]
+    POLICY["Policy Engine (OPA/Cedar)"]
+    HUMAN["人类授权 promote/rollback"]
+  end
+  TG & AIUSE --> FACADE
+  FACADE --> USAGE & MEMEXT
+  MEMEXT --> PRE
+  PRE --> PLANNER --> RECALL --> FUSION --> COMPILER --> FACADE
+  FACADE --> POST --> GOVERNOR --> LEDGER --> UNITS --> PROFILE
+  RECALL -.读取.-> VEC & UNITS & PROFILE
+  DISTILL --> LEDGER
+  GOVERNOR --> POLICY --> HUMAN -.授权激活.-> LEDGER
+```
+
+**节点中文职责：**
+
+- **① 接入面**：Telegram / `ai use` 两个入口共用同一数据平面，不各自维护记忆逻辑。
+- **② Transport Facade**：唯一请求/响应通道；禁止双代理链与 usage 双写。现有 OpenAI Usage Proxy 应拆为 Facade + Transport 核心 + Observer。
+- **② MemoryExtension**：记忆作为传输层扩展挂载，保证所有流量可被观测与注入。
+- **③ Pre-Read**：发请求前检索注入，300ms 硬截止，超时放行不阻塞主链路（fail-open）。
+- **③ Post-Run**：响应后异步抽取候选，写 durable job；身份相关失败 fail-closed（宁可不记也不记错人）。
+- **③ Periodic Distill**：周期性蒸馏、巩固、遗忘，维护账本健康。
+- **④ Query Planner → 多源召回**：把 prompt 编译成检索计划，并行走 FTS/向量/实体/最近/时序/图/情节/技能。
+- **④ RRF 融合 + 过滤**：`rrf = Σ sourceWeight/(60+rank)` 融合，再按 Authority/Taint 过滤挡投毒。
+- **④ Context Compiler**：1600 token 预算内按 policy/profile/skills 分配，预留 20% 给主 prompt。
+- **④ Learning Governor**：确定性状态机决定候选 create/verify/ask/consolidate/promote/rollback；模型只提候选，不自行激活。
+- **⑤ memory_units + Claim/Evidence 账本**：治理头统一生命周期；事实拆成可变 Claim + 不可变 Evidence，ADD-only，可追溯可回滚。
+- **⑤ 双层画像 Snapshot**：从 active Claim 编译的版本化产物，非真相源；真相源永远是账本。
+- **⑥ Policy Engine + 人类授权**：策略引擎 + 人类保留对安全、晋升、不可逆动作的最终授权。
+
+### 执行流程图（请求时序）
 
 ```mermaid
 flowchart TD
@@ -2233,6 +2315,107 @@ candidate
 
 风险分级：只读 Skill 可在 replay + shadow 后 active；本地可回滚写操作需 sandbox；部署/发送/外部写入即使 active 也逐步确认；转账和生产数据破坏类 Skill 永不获得无人确认自动执行权限。
 
+### Skill Mining、参数化与自愈
+
+R22/R29 规定了 Skill「如何被安全验证和执行」，但没有规定「如何从经验自主产出一个好 Skill、失败后如何自己变好」。本节补齐这条自主链的确定性算法：感知相似 → 泛化成参数 → 对齐防幻觉 → 失败自愈。模型只负责在受限步骤提出候选，聚类阈值、参数判定、对齐通过和降级/自愈决策全部由确定性规则和 `LearningGovernor` 裁决，不由模型自评触发。
+
+**① 相似度与聚类（mining 入口）**
+
+`ProcedureMiner` 只消费 `result_status='success'` 且 `outcome_evidence_json` 非空的 episode（R16 表）。先按归一化 `intent_key` 分桶，再在桶内对动作序列做序列挖掘（复用成熟 PrefixSpan，R35，禁止手写）：
+
+```typescript
+type EpisodeSignature = {
+  intentKey: string;                 // Phase 7 distiller 归一化意图
+  toolSequence: string[];            // steps_json 的 tool 有序序列（不含 args）
+  toolMultiset: Record<string, number>;
+  envConstraints: EnvironmentConstraint[];
+};
+// 两条 episode 相似当且仅当：intentKey 相同
+//   且 归一化 tool 序列编辑距离 ≤ maxSeqDistance（默认 1）
+//   且 环境指纹兼容（见子块 ⑤）
+```
+
+成为 Skill candidate 的硬门槛：同一序列模式 `support ≥ minSupport`（默认 3）、跨 `≥ distinctExecutions` 次独立 execution（默认 3，禁止同一 execution 内重复计数）、且 `outcome_evidence` 可验证。低于门槛留在 candidate 池观察，不 mine。`args_hmac`、secret 派生字段和 capability 只用于判等，永不进入序列特征或 IR。
+
+**② anti-unification 参数化**
+
+在簇内对齐的动作序列上做反统一（anti-unification）决定哪些字面量升成 `TypedSlot`、哪些保留常量：
+
+```text
+对齐位置的参数：
+  跨 ≥2 条 episode 取值不同        → 升为 TypedSlot（变量）
+  所有 episode 取值恒定            → 保留为 argsTemplate 常量
+  源自 secret/capability/args_hmac → 永不升 slot，运行时重新获取
+```
+
+`TypedSlot.type` 从观测值推断（string/number/path/enum/...）；`enum` 仅在取值集合有限且 `≤ maxEnumCardinality`（默认 8）时使用，否则退回自由类型，避免把一次经验的偶然取值固化成枚举。参数化结果连同 `evidenceEpisodeIds` 一起交给 LLM 生成 IR，模型不得新增未在对齐结果中出现的 slot。
+
+**③ trace alignment 判定标准（防幻觉门）**
+
+R22 要求 `episode trace alignment`，本子块定义其通过标准——这是拦住 LLM 幻觉出 episode 里不存在步骤的关键。IR 的每个 `tool`/`branch` 步骤必须能映射回至少一条 source episode 的实际动作：
+
+```typescript
+type AlignmentReport = {
+  skillVersionId: string;
+  stepCoverage: number;         // 有 episode 支撑的步骤 / IR 步骤总数
+  unsupportedSteps: string[];   // 无任何 episode 支撑的步骤（幻觉）
+  orderConsistent: boolean;     // IR 步骤序与观测动作序一致
+  slotDomainViolations: string[];
+};
+```
+
+通过条件（全部满足，缺一即 fail，禁止靠 confidence 绕过）：`stepCoverage = 1.0`、`unsupportedSteps` 为空、`orderConsistent = true`、每个 `tool` 步骤名精确匹配观测 tool、`argsTemplate` 常量部分与观测一致、slot 取值落在推断类型域内。`assert/confirm/checkpoint/rollback` 是治理步骤，不要求 episode 支撑但要通过 static risk analysis。`AlignmentReport` 落 `skill_versions.alignment_json` 作为后续 sandbox/shadow 的前置证据。
+
+**④ `needs_revalidation` 后的自愈闭环（自主链最要命的一环）**
+
+R22 只规定环境/工具/Claim 变化时降为 `needs_revalidation`，本子块规定「之后如何自己变好」，避免只降级、不自愈：
+
+```typescript
+type SkillHealth = {
+  skillId: string; activeVersion: number;
+  recentFollowed: number; recentDeviated: number;
+  postconditionPassRate: number;      // 仅统计 followed 的执行
+  envDriftDetected: boolean;
+  remineFailures: number;             // 连续自愈失败计数
+};
+```
+
+触发自愈后，`LearningGovernor` 用「进入 `needs_revalidation` 之后」新产生的成功 episode 重走 ①–③ + sandbox/shadow，生成新版本候选（ADD-only，旧版本保留可回滚）：新版本通过则 supersede 旧版本、`remineFailures` 归零；失败则 `remineFailures += 1`。`remineFailures ≥ maxRemineFailures`（默认 2）时标记 `deprecated`，并把该版本及其 evidence episode **移出 mining 候选池**——坏经验不得污染后续挖掘。`envDriftDetected` 作为独立触发轴，不与失败率混算。自愈全程只提候选，active 仍走对应风险等级的 replay/sandbox/shadow/确认。
+
+**⑤ environment fingerprint 匹配语义**
+
+Skill IR 的 `environmentFingerprint` 决定检索期能否复用；匹配规则必须确定，避免精确匹配几乎不复用、模糊匹配用错环境两个极端：
+
+```typescript
+type EnvironmentConstraint = {
+  key: string;                  // 如 tool:git.major、platform.os、runtime.node.major
+  matcher: "exact" | "semver_range" | "oneof" | "present";
+  value: string | string[];
+  critical: boolean;            // 关键约束不满足即不可用
+};
+```
+
+注入前逐条求值：全部满足才按风险等级执行；仅非关键约束不满足时降级为 advisory 文本（只展示不自动执行）；任一 `critical` 约束不满足则该版本不可用并触发子块 ④ 重验证，**禁止盲目回退到旧 active 版本**。`critical` 至少覆盖 Skill 直接调用工具的 major version 和目标平台；matcher 语义固定，不允许"大概相似"的隐式匹配。
+
+**⑥ Skill 因果贡献度量**
+
+R29 要求「被实际遵循且后置成功才提升」，R30 给了通用 counterfactual。本子块给 procedural memory 专属的确定性归因，防止"被检索"被误计为"有用"：
+
+- `followed` 判定：本次 execution 的实际动作序与 Skill IR 对齐覆盖率 `≥ followThreshold`（默认 0.8），否则记 `deviated`，不计入正贡献。
+- `success` 归因：`followed` 且 postcondition assertion 全通过、且无用户纠正，才写 `action_contribution` 正信号。
+- `retrieved 但未 followed`、或 followed 但任务失败，分别进入 `deviated`/`harm` 通道，用于自愈和降热，不提升 utility。
+- 反事实（注入 vs 不注入该 Skill 的任务成功对比）在 R30 每日预算内异步采样，只更新 utility，不写事实 confidence。
+
+**⑦ Skill 冷启动 seed**
+
+被动 mining 门槛是"重复成功"（子块 ①），新用户/新项目会长期没有 Skill。补三条 bootstrap 入口，均进入同一验证流水线、不降低风险门槛：
+
+1. **示范型**：用户显式确认的一次成功执行可作为 `demonstration seed` 直接进入参数化 + 验证（Phase 10 示范型来源），无需满足 `minSupport`。
+2. **显式导入**：用户/项目提供的 Skill 草案作为 candidate 进入 schema validation → alignment（对已有 episode 或用户确认的 golden trace）→ replay/sandbox。
+3. **跨 scope 迁移**：已验证的 project/team Skill 下放到 user scope 时，携带归一化模式和评测，但必须在本地环境重新求值 `environmentFingerprint`（子块 ⑤），private Evidence 不随迁移（R 组织知识迁移）。
+
+任何 seed 来源都不豁免对应风险等级的 replay/sandbox/shadow 与高危确认。
+
 ### 分级 Memory Utility 与反事实采样
 
 Utility 不再压成单一模型判断，拆成：`retrieval_utility/answer_contribution/action_contribution/harm_score/token_cost/correction_rate`。
@@ -2301,6 +2484,84 @@ Parametric Promotion 按可逆性分级：
 仿真输出至少包括 memory growth、duplicate rate、contradiction rate、profile drift、authority laundering、stale-memory error、unsupported personalization、Skill degradation、purge completeness、task success 和 token cost。所有 learned ranking、Policy 变更、Skill 自动 active、复制协议和 parametric promotion 均必须通过对应仿真门槛。
 
 ---
+
+## 质量与运维强制决策（Q1–Q6）
+
+> 定位判据：凡增强"可治理/可追溯/可回滚/可晋升"的能力优先采纳；纯拼召回花活或功能堆砌延后。以下 Q 决策与 R1–R35 同级，属可追踪设计契约，落地需附验收证据。
+
+### Q1 召回源渐进启用与贡献度埋点
+
+**缺陷**：8 路并行召回在 300ms fail-open 下多路静默超时，且无法判断哪路真正有用，RRF 权重全靠猜。
+
+**决策**：
+- 首个里程碑只启用 **FTS + vector + recency** 三路；entity/graph/temporal/episode/skill 默认关闭，由 feature flag 逐路开。
+- 每次检索必须记录 `source_contribution`：每路的命中数、最终进入注入的条数、单路耗时。写入 `memory.retrieval` 结构化日志（贯穿 traceId）。
+- 新增一路的准入门槛：在黄金集上该路 **独立贡献注入项占比 ≥ 5%** 且 p95 延迟不挤占其他路预算，否则不得默认启用。
+- RRF 权重不得硬编码为经验值；初始等权，后续由 Q2 的存活信号回归得到。
+
+**验收**：`source_contribution` 可在仿真 Harness 输出中按路拆分；关闭任意可选路不影响主链路正确性（仅召回率变化）。
+
+### Q2 Learned Ranking 信号采集（先埋点，后学习）
+
+**缺陷**：方案讲 learning by default，却不学检索排序，排序公式是静态 baseline。
+
+**决策**：
+- 定义注入项存活信号 `injection_outcome`：该注入项是否 ① 被后续回合引用/pin、② 关联到正向结果（无人工纠错、任务成功）、③ 被用户 forget/correct（负信号）。
+- Post-Run 阶段把 `injection_outcome` 落账，与 claimId + retrieval sourcePath 关联，形成可回归的训练样本。
+- 排序演进分两阶段：**阶段一**沿用 baseline 公式（confidence × recency × sourceWeight）；**阶段二**在样本量达门槛后，用离线回归学习权重，且必须过仿真 Harness 的 task success 门槛才可上线。
+- learned ranking 属"自动生效能力"，受 Learning Governor 与人类授权约束，不得静默替换 baseline。
+
+**验收**：能导出 `(claim, sourcePath, outcome)` 训练集；阶段二上线前后在黄金集上的检索精度与 task success 对比留痕。
+
+### Q3 Embedding 版本化与渐进重嵌入
+
+**缺陷**：换 embedding 模型会使全部历史向量失效、相似度分数漂移；"provider agnostic" 在向量层被打破。
+
+**决策**：
+- `memory_embeddings` 每条向量必须带 `embedding_model`（名称+版本）、`dim`、`created_at` 三列；相似度检索只在**同一 model 版本内**比较。
+- 切换模型走**渐进重嵌入**：新模型作为新版本并行写入，后台 durable job 逐批回填历史 claim，回填期检索按版本分桶、结果经 RRF 合并；回填完成后再切默认版本。
+- 严禁跨模型直接比较原始分数；跨版本融合只允许经 RRF（基于 rank 而非绝对分）。
+- 无 embedding provider 时系统必须能仅靠 FTS+recency 正常降级（呼应现有 embedding 探测已先行）。
+
+**验收**：仿真中执行一次模型切换，回填期与回填后检索精度不低于切换前基线；不存在跨版本裸分比较的代码路径。
+
+### Q4 冷启动价值：显式导入优先于被动抽取
+
+**缺陷**：保守 confidence 门槛（external 封顶 0.4 → pending 不注入）使早期记忆长期不生效，用户看不到价值，杀采纳。
+
+**决策**：
+- 冷启动价值主要来自 **setup 阶段的显式画像/知识导入**（已有 profile/persona 写入），而非等待被动抽取累积。企业可容忍慢冷启动，但必须有显式 onboarding 入口。
+- 显式导入内容按 `user_stated` 处理（初始 confidence 0.8，可直接 active），与被动抽取/external 分级严格区分——**导入不等于降低投毒门槛**，来源仍记 provenance。
+- setup 支持批量结构化导入（团队规范、项目背景、既有偏好），并可标注 scope，一次性建立可注入的初始画像。
+- 首周体验以"必注入的画像/persona"为主，被动抽取的 pending 项在达到 R4 门槛前不喧宾夺主。
+
+**验收**：全新用户完成 setup 导入后，首轮对话即有可见的画像注入；被动抽取项在未过门槛前不进入注入。
+
+### Q5 "更强"的可证伪度量
+
+**缺陷**：宪法拒绝虚荣指标（feature/model/memory 数量），但未给替代度量，North Star "每次交互让 Runtime 更强" 变得不可证伪，学习闭环无法验收。
+
+**决策**：定义 Runtime Capability 的四项一等度量，全部随 traceId 可归因、可按 scope/bot 拆分：
+- **任务成功率**（task success）：随时间的趋势，而非单点值。
+- **人工纠错率**（correction rate）：用户 forget/correct/推翻注入的频次，应随学习下降。
+- **Skill 复用率**：已 promote 的 skill 被实际命中并产生正向结果的比例。
+- **黄金集检索精度**：固定 golden set 上的 recall/precision，防回归。
+
+"更强" 的操作定义 = **纠错率下降 且 任务成功率不降 且 检索精度不回归**。任何 learned ranking、Skill 自动 active、parametric promotion 的上线，都必须在这四项上给出前后对比证据，否则回滚。
+
+**验收**：四项度量进入仿真 Harness 输出与常态可观测面板；任一自动生效能力缺少四项对比证据即不得 promote。
+
+### Q6 记忆与传输解耦：可完全关闭为一等模式
+
+**缺陷**：Transport Proxy 单一数据平面是中心瓶颈，与宪法 "High Decoupling" 存在张力；记忆扩展故障/延迟会波及核心服务路径。
+
+**决策**：
+- 沿用 LangGraph 的 serving/learning 分离思路：**读路**（Pre-Read 注入）在主链路内但受 300ms fail-open 约束；**写路/抽取/蒸馏**必须完全出带（durable job），不阻塞响应。
+- 记忆扩展必须支持 **完全关闭（memory-disabled）为一等运行模式**，而非仅 fail-open 降级：关闭时 Transport 仍是合法、完整的数据平面，usage 观测不受影响。
+- MemoryExtension 与 UsageObserver 互不依赖；任一扩展崩溃不得拖垮 Facade。禁止 Memory 写路与 usage 统计共享事务或互相阻塞。
+- 提供 `OMC_SKIP` 式 kill switch：单独停用记忆扩展，用于故障隔离与 A/B。
+
+**验收**：在 memory-disabled 模式下全链路请求成功、usage 统计准确；注入记忆扩展人为故障，主链路与 usage 不受影响。
 
 ## Auth Session Broker
 
@@ -3144,6 +3405,8 @@ type MemoryErrorCode =
 
 - `skills + skill_versions` + candidate→syntactically_valid→historically_replayable→sandbox_validated→shadow_validated→active→needs_revalidation→deprecated 生命周期
 - 归纳型（`ProcedureMiner` 复用成熟 PrefixSpan/序列挖掘实现）+ 示范型（用户确认）双来源；通用挖掘算法不得手写，输出仍是 ADD-only Skill candidate
+- mining 主链（R36）：intent_key 分桶 → 序列聚类（support≥3、跨≥3 execution）→ anti-unification 参数化 → trace alignment（stepCoverage=1.0）→ replay/sandbox/shadow；冷启动经示范/导入/跨 scope 迁移 seed，均不降低风险门槛
+- 失败自愈：`needs_revalidation` 后用新增成功 episode 自动重挖生成 ADD-only 新版本，连续失败 ≥2 次标 deprecated 并移出候选池，坏经验不污染后续挖掘（R36）
 - 生成结构化 Skill IR，执行 schema validation、trace alignment、static risk analysis、sandbox replay 和 shadow invocation
 - Skill 注入 + Post-Run 回流强化 + 蒸馏合并/参数化/版本取代；环境指纹变化时强制重验证
 - 高危护栏、external 不自动执行、跨 scope 提升需显式、全程 memory_events 留痕
@@ -3980,6 +4243,16 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - 更换 backend 必须通过 contract、authority boundary、scope isolation、purge、质量、延迟、成本和 replay parity；外部 benchmark 必须固定版本和预算，本项目不得引用无法复现的厂商宣传指标作为 release gate。
 - graph/vector/reranker/policy/eval 任一外部组件故障按能力独立降级，显式用户控制和权威账本继续可用；禁止为可用性把数据发送到未批准 provider 或跨租户 fallback。
 
+### R36 Skill Mining、参数化与自愈（Phase 10）
+
+- `ProcedureMiner` 只吃 success + 可验证 outcome 的 episode，按 `intent_key` 分桶后用成熟序列挖掘（PrefixSpan，R35，禁手写）聚类；成为 candidate 需 `support≥minSupport`（默认 3）且跨 `≥distinctExecutions` 次独立 execution，secret/`args_hmac`/capability 不进特征也不进 IR。
+- 参数化用 anti-unification：跨 ≥2 条 episode 变化的对齐位置升 `TypedSlot`，恒定值留常量，secret 派生字段永不升 slot；模型不得新增对齐结果之外的 slot。
+- trace alignment 通过标准是硬门：`stepCoverage=1.0`、无 unsupported step、步序一致、tool 名与 argsTemplate 常量精确匹配、slot 落域内；治理步骤（assert/confirm/checkpoint/rollback）过 static risk 分析即可，不得靠 confidence 绕过。
+- `needs_revalidation` 后必须自愈：用降级后新增的成功 episode 重走 mining+验证生成 ADD-only 新版本；连续失败 `≥maxRemineFailures`（默认 2）标 `deprecated` 并移出候选池，坏经验不污染后续挖掘；环境漂移是独立触发轴。
+- `environmentFingerprint` 匹配语义固定（exact/semver_range/oneof/present + critical 标志）；critical 不满足即不可用并触发重验，禁止盲目回退旧 active；非关键不满足降级为 advisory。
+- 贡献归因：对齐覆盖 `≥followThreshold`（默认 0.8）才算 followed，followed + postcondition 全过 + 无纠正才写正 `action_contribution`；retrieved 但未 followed 不计正贡献；反事实在 R30 预算内异步采样，只更新 utility 不改 confidence。
+- 冷启动 seed 三入口（示范确认 / 显式导入 / 跨 scope 迁移）均进同一验证流水线，不豁免对应风险等级的 replay/sandbox/shadow 与高危确认；跨 scope 迁移必须本地重求 environment fingerprint 且不携带 private Evidence。
+
 ## 关键结论
 
 1. 记忆系统是 AI Runtime 的学习与知识能力，不属于 Telegram、某个 Agent、某个模型或独立 Memory 产品。
@@ -3995,7 +4268,7 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 11. Auth Session Broker 是并行 track，其进度不阻塞记忆分层与检索增强。
 12. 检索评测 harness（R11）在 Phase 0 建立，先于 FTS/向量/时序/图谱/回流，之后每次检索改动都以它把关。
 13. 时序正确性（R12/R13）与证据强度（R4/R19）是正交两轴：前者管"何时成立"，后者管"哪些独立来源支持或反驳"，冲突消解同时用两者。
-14. Skill 是程序性记忆，由"情景层→蒸馏→Skill IR→回放/Shadow 验证"沉淀；高危步骤、external 来源和环境变化必须进入确认或重验证路径。
+14. Skill 是程序性记忆，由"情景层→蒸馏→Skill IR→回放/Shadow 验证"沉淀；沉淀主链是确定性算法（相似度聚类→anti-unification 参数化→trace alignment 防幻觉→失败自动重挖或 deprecate，坏经验不污染后续挖掘，R36），模型只提候选。高危步骤、external 来源和环境变化必须进入确认或重验证路径。
 15. 记忆是隐式自动的，必须可观测：链路日志（R17，`traceId` 贯穿、复用 `writeLog`、全程脱敏）和 Telegram 中间态（R18，复用 `ProgressReporter`、只显状态不泄内容）从一开始就随每个节点同步落地，不作事后补丁。
 16. 所有入口统一通过 spawn CLI + 单一 Runtime Transport Proxy 执行；现有 Usage Proxy 按职责拆分为稳定 facade、Transport 核心和唯一 UsageObserver，Memory Proxy 是同一数据平面内的 MemoryExtension。协议层实现 OpenAI Responses/Chat、Anthropic Messages、streaming state machine、tool assembler 和 fixture replay；禁止双代理链与 usage 双写。
 17. Post-Run 的“异步”必须是 SQLite durable job，不是进程内 Promise；operation id、lease、重试和 dead-letter 保证进程退出后仍可完成且不重复。
