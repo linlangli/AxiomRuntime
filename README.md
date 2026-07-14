@@ -26,6 +26,8 @@ AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/AI_RUNTIME_
 
 ## 安装开发依赖
 
+运行和开发需要 Node.js `22.19.0` 或更高版本。该下限与锁定依赖的运行时要求一致；Node.js 20 不受支持。
+
 ```bash
 npm install
 ```

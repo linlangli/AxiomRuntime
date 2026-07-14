@@ -56,6 +56,7 @@ Principles:
 - Every concept has exactly one Chinese rendering, fixed in `docs/glossary.md`; normative verbs are fixed as 必须=must / 禁止=must not / 应当=should / 可=may.
 - Keep user-facing documentation in Chinese.
 - Keep project documents under `docs/`, except the root `README.md`.
+- Keep the minimum Node.js runtime synchronized across `package.json`, `package-lock.json`, `.gitlab-ci.yml`, and user documentation. CI must execute the declared minimum version, currently `22.19.0`, so newer local runtimes cannot hide dependency incompatibilities.
 - Prefer clean core APIs over CLI-specific logic.
 - Keep `providers.json` stable and human-editable.
 - Avoid adding fields to `providers.json` unless users need to edit them directly.

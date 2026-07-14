@@ -6,6 +6,12 @@
 
 本指南只描述当前已经可用的用户操作。项目定位和未来能力见 [文档总览](README.md)。
 
+## 运行环境
+
+- Node.js `22.19.0` 或更高版本；Node.js 20 不受支持。
+- 安装依赖前可运行 `node --version` 检查版本。
+- Claude Code、Codex 与 Hermes 是外部 CLI，按需独立安装。
+
 ## 进入交互模式
 
 ```bash
