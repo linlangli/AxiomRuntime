@@ -21,8 +21,9 @@
 |---|---|
 | provider/model adapter | 执行选定的 provider/model 调用 |
 | tool/MCP adapter | 工具与 MCP 集成 |
+| agent adapter | 启动 Claude Code/Codex/Hermes 等外部 Agent runtime，并把进程/SDK event 规范化为 `AgentRunEvent` |
 | workflow executor | 工作流执行适配 |
-| backend adapter | 实现检索/向量/图/队列/存储 Port |
+| backend adapter | 实现检索/向量/图/队列/存储/Observability Port |
 | evaluator/policy module | 评测器、策略模块插件 |
 
 ## 4. 对外/消费端口（可插拔点）
@@ -51,6 +52,8 @@
 
 `src/core/hermes/`、`src/core/integrations/` 已存在，**应当**移到 integration/workflow 契约后成为标准适配器。`plugins/` 目录待建。
 
+Claude Code/Codex 的具体 CLI 封装目标态属于本层：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 实现 `AgentAdapterPort`。它们拥有二进制发现、启动参数、临时 vendor 配置、进程生命周期、stream event parsing、session cursor 和 vendor error mapping；不拥有 Agent capability 激活、provider/model 选择、tool permission、retry policy、Memory、Usage 或 Learning。Telegram `Engine` wrapper 是 ① 的兼容 facade，不是另一个 Agent Adapter 权威入口。
+
 ## 10. 验收标准
 
 - 成熟能力 provider 可替换而**不改**公共契约、权威 id、scope/authority 决策、audit/purge 可达、显式用户控制。
@@ -59,7 +62,9 @@
 - `ToolPort/WorkflowExecutorPort/AgentAdapterPort` 至少各有 local reference adapter 与一个替换 adapter，通过相同 schema/error/cancel/idempotency/recovery fixture。
 - Workflow/Agent provider 的 checkpoint、event cursor、SDK error 与 provider run id 只在 adapter 内部存在，对外转换为 Runtime canonical state/event/error。
 - Adapter 声称 cancel/compensation/resume 时必须有故障注入证明；不支持时 descriptor 明确声明，Registry/Policy 禁止把它用于要求该能力的 workflow。
+- Claude Code/Codex adapter fixture 覆盖 CLI version fingerprint、spawn failure、event sequence/dedup、tool proposal、confirmation round-trip、resume/cancel、unknown terminal、provider route 固定和 secret/reasoning 不落盘；无法拦截的 native tool mode 必须在 descriptor 中显式降级。
 - 本地 profile 无托管服务仍可用；每个可选 provider 有独立测试的 fallback。
+- JSONL、OpenTelemetry 与企业 OTLP/APM Adapter 消费同一 `CapabilityObservation`；Adapter 可采样、聚合、脱敏和导出，但不得发明第二套 action、把 telemetry 变成审计真相或把 exporter 故障传播到 Runtime 主链。
 
 ## 11. 相关文档
 

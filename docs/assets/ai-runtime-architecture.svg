@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1500" viewBox="0 0 1800 1500" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1750" viewBox="0 0 1800 1750" role="img" aria-labelledby="title desc">
   <title id="title">企业级 AI Runtime 产品完整架构图</title>
-  <desc id="desc">展示用户与运营者、接入面、企业控制面、运行时执行主链、唯一传输代理、自动记忆学习闭环、可替换适配器和权威数据存储之间的关系。</desc>
+  <desc id="desc">展示用户与运营者、接入面、企业控制面、运行时执行主链、唯一传输代理、自动记忆学习闭环、Capability Observability、可替换适配器和权威数据存储之间的关系。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
@@ -35,9 +35,10 @@
   <text x="235" y="143" text-anchor="middle" class="node-title">业务使用者</text>
   <text x="235" y="168" text-anchor="middle" class="node-body">开发者 · 知识工作者 · Agent 使用者</text>
 
-  <rect x="510" y="115" width="760" height="72" rx="6" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
+  <rect x="510" y="108" width="760" height="86" rx="6" fill="#f1f5f9" stroke="#334155" stroke-width="1.5"/>
   <text x="890" y="143" text-anchor="middle" class="node-title">L0 Contracts 零依赖权威契约</text>
-  <text x="890" y="168" text-anchor="middle" class="node-body">PrincipalRef · ScopeRef · RuntimeEvent · PolicyDecision · CapabilityInvocation · OrganizationPolicySnapshot</text>
+  <text x="890" y="165" text-anchor="middle" class="node-body">PrincipalRef · ScopeRef · RuntimeEvent · PolicyDecision</text>
+  <text x="890" y="183" text-anchor="middle" class="node-body">CapabilityInvocation · CapabilityObservation · OrganizationPolicySnapshot</text>
 
   <rect x="1400" y="115" width="330" height="72" rx="6" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
   <text x="1565" y="143" text-anchor="middle" class="node-title">平台运营者</text>
@@ -69,9 +70,9 @@
   <text x="255" y="697" text-anchor="middle" class="node-body">排空 · 禁用 · 替换 · 移除</text>
 
   <rect x="75" y="735" width="360" height="82" rx="6" fill="#ecfdf5" stroke="#10b981"/>
-  <text x="255" y="761" text-anchor="middle" class="node-title">FinOps 与可靠性</text>
-  <text x="255" y="784" text-anchor="middle" class="node-body">配额 · 预算 · 归因 · SLO</text>
-  <text x="255" y="802" text-anchor="middle" class="node-body">备份 · 恢复 · RTO · RPO</text>
+  <text x="255" y="761" text-anchor="middle" class="node-title">FinOps、可观测性与可靠性</text>
+  <text x="255" y="784" text-anchor="middle" class="node-body">配额 · 预算 · Cost 归因 · SLO</text>
+  <text x="255" y="802" text-anchor="middle" class="node-body">采样 · 保留 · 告警 · RTO / RPO</text>
 
   <rect x="75" y="840" width="360" height="72" rx="6" fill="#ecfdf5" stroke="#10b981"/>
   <text x="255" y="866" text-anchor="middle" class="node-title">合规与审计</text>
@@ -92,7 +93,7 @@
 
   <rect x="535" y="510" width="700" height="76" rx="6" fill="#eff6ff" stroke="#3b82f6"/>
   <text x="885" y="537" text-anchor="middle" class="node-title">Capabilities + Registry 能力层</text>
-  <text x="885" y="560" text-anchor="middle" class="node-body">Provider 路由 · 模型 · 记忆 · 知识 · Skill · Workflow · Tool · 报告</text>
+  <text x="885" y="560" text-anchor="middle" class="node-body">Provider 路由 · Model · Agent · Memory · Skill · Workflow · Tool · 报告</text>
 
   <rect x="535" y="610" width="700" height="76" rx="6" fill="#eff6ff" stroke="#3b82f6"/>
   <text x="885" y="637" text-anchor="middle" class="node-title">Execution Kernel 执行内核</text>
@@ -154,50 +155,92 @@
   <rect x="1330" y="896" width="395" height="42" rx="6" fill="#ffedd5" stroke="#ea580c"/>
   <text x="1527" y="922" text-anchor="middle" class="node-title">CapabilityGain：质量提升且安全不回退</text>
 
+  <!-- Capability observability -->
+  <rect x="45" y="995" width="1710" height="220" rx="8" fill="#f4fbff" stroke="#0284c7" stroke-width="2"/>
+  <text x="70" y="1028" class="section-title">Capability Observability 统一可观测性平面</text>
+  <text x="70" y="1051" class="small">一次语义 emission，多路可替换投影；Post-Run / distill / evaluation 通过 ObservationLink 关联原 trace；不保存 prompt、正文、reasoning、secret 或 Tool 输入输出</text>
+
+  <rect x="75" y="1070" width="320" height="112" rx="6" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="235" y="1095" text-anchor="middle" class="node-title">统一 Capability 调用树</text>
+  <text x="235" y="1117" text-anchor="middle" class="node-body">resolve → invoke → result</text>
+  <text x="235" y="1136" text-anchor="middle" class="small">Memory：plan→route→filter→rank</text>
+  <text x="235" y="1154" text-anchor="middle" class="small">budget→compile→inject</text>
+  <text x="235" y="1172" text-anchor="middle" class="small">Skill：match→select→apply→step→outcome</text>
+
+  <rect x="425" y="1070" width="300" height="112" rx="6" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="575" y="1095" text-anchor="middle" class="node-title">ObservabilitySinkPort</text>
+  <text x="575" y="1118" text-anchor="middle" class="node-body">Schema 校验 · 脱敏 · 字段 / 数组上限</text>
+  <text x="575" y="1138" text-anchor="middle" class="node-body">normal / critical 有界队列 · reserved capacity</text>
+  <text x="575" y="1158" text-anchor="middle" class="node-body">本地 spool · 幂等回放 · drop metric</text>
+
+  <rect x="755" y="1070" width="310" height="112" rx="6" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="910" y="1095" text-anchor="middle" class="node-title">可替换 Projection Adapters</text>
+  <text x="910" y="1118" text-anchor="middle" class="node-body">JSONL · OpenTelemetry</text>
+  <text x="910" y="1138" text-anchor="middle" class="node-body">OTLP / APM · Metrics · Dashboard</text>
+  <text x="910" y="1158" text-anchor="middle" class="node-body">Observation Store：可采样、可过期、非权威</text>
+
+  <rect x="1095" y="1070" width="300" height="112" rx="6" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="1245" y="1095" text-anchor="middle" class="node-title">ObservabilityQueryPort</text>
+  <text x="1245" y="1118" text-anchor="middle" class="node-body">summary · explain · internal</text>
+  <text x="1245" y="1138" text-anchor="middle" class="node-body">tenant / scope / view Policy · 查询审计</text>
+  <text x="1245" y="1158" text-anchor="middle" class="node-body">complete · sampled · partial + 缺口原因</text>
+
+  <rect x="1425" y="1070" width="300" height="112" rx="6" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="1575" y="1095" text-anchor="middle" class="node-title">CLI / Web 统一查询体验</text>
+  <text x="1575" y="1118" text-anchor="middle" class="node-body">Timeline · Memory Recall · Skill Application</text>
+  <text x="1575" y="1138" text-anchor="middle" class="node-body">Capability Calls · Cost &amp; Latency · Errors</text>
+  <text x="1575" y="1158" text-anchor="middle" class="node-body">Cost 只读关联 UsageObserver 权威账本</text>
+
+  <path class="edge" d="M 395 1126 H 425"/>
+  <path class="edge" d="M 725 1126 H 755"/>
+  <path class="edge" d="M 1065 1126 H 1095"/>
+  <path class="edge" d="M 1395 1126 H 1425"/>
+  <text x="70" y="1202" class="small">权威分离：Observation 仅用于诊断与可重建指标；RuntimeEvent、Audit、Usage Ledger、Claim / Evidence、PolicyDecision 与 Skill lifecycle record 仍是事实来源。</text>
+
   <!-- Replaceable adapters -->
-  <rect x="45" y="995" width="1710" height="170" rx="8" fill="#faf8ff" stroke="#7c3aed" stroke-width="2"/>
-  <text x="70" y="1028" class="section-title">可替换 Adapters 与成熟能力</text>
-  <text x="70" y="1051" class="small">Runtime 自持权威语义；通用引擎通过稳定 Port 采纳或适配</text>
+  <rect x="45" y="1245" width="1710" height="170" rx="8" fill="#faf8ff" stroke="#7c3aed" stroke-width="2"/>
+  <text x="70" y="1278" class="section-title">可替换 Adapters 与成熟能力</text>
+  <text x="70" y="1301" class="small">Runtime 自持权威语义；通用引擎通过稳定 Port 采纳或适配</text>
 
-  <rect x="75" y="1070" width="390" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
-  <text x="270" y="1095" text-anchor="middle" class="node-title">模型 / Provider / Agent Adapter</text>
-  <text x="270" y="1118" text-anchor="middle" class="node-body">Claude · Codex · Hermes · Hosted Models</text>
+  <rect x="75" y="1320" width="390" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="270" y="1345" text-anchor="middle" class="node-title">Agent CLI / Model Provider Adapter</text>
+  <text x="270" y="1368" text-anchor="middle" class="node-body">Claude Code · Codex CLI · Hermes · Hosted Models</text>
 
-  <rect x="500" y="1070" width="390" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
-  <text x="695" y="1095" text-anchor="middle" class="node-title">Tool / MCP / 浏览器 Adapter</text>
-  <text x="695" y="1118" text-anchor="middle" class="node-body">企业系统 · SaaS · 本地工具</text>
+  <rect x="500" y="1320" width="390" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="695" y="1345" text-anchor="middle" class="node-title">Tool / MCP / 浏览器 Adapter</text>
+  <text x="695" y="1368" text-anchor="middle" class="node-body">企业系统 · SaaS · 本地工具</text>
 
-  <rect x="925" y="1070" width="390" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
-  <text x="1120" y="1095" text-anchor="middle" class="node-title">成熟智能能力 Provider</text>
-  <text x="1120" y="1118" text-anchor="middle" class="node-body">抽取 · 检索 · 向量 · 时序图 · 评估</text>
+  <rect x="925" y="1320" width="390" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="1120" y="1345" text-anchor="middle" class="node-title">成熟智能能力 Provider</text>
+  <text x="1120" y="1368" text-anchor="middle" class="node-body">抽取 · 检索 · 向量 · 时序图 · 评估</text>
 
-  <rect x="1350" y="1070" width="375" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
-  <text x="1537" y="1095" text-anchor="middle" class="node-title">企业系统 Adapter</text>
-  <text x="1537" y="1118" text-anchor="middle" class="node-body">OIDC/SAML · SCIM · OPA/Cedar · SIEM · FinOps</text>
+  <rect x="1350" y="1320" width="375" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="1537" y="1345" text-anchor="middle" class="node-title">企业系统 Adapter</text>
+  <text x="1537" y="1368" text-anchor="middle" class="node-body">OIDC/SAML · SCIM · OPA/Cedar · SIEM · FinOps · OTLP/APM</text>
 
   <!-- Data -->
-  <rect x="45" y="1205" width="1710" height="190" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="2"/>
-  <text x="70" y="1238" class="section-title">Runtime 数据与 Storage：权威数据和可重建投影</text>
+  <rect x="45" y="1435" width="1710" height="190" rx="8" fill="#f8fafc" stroke="#64748b" stroke-width="2"/>
+  <text x="70" y="1468" class="section-title">Runtime 数据与 Storage：权威数据和可重建投影</text>
 
-  <rect x="75" y="1260" width="390" height="92" rx="6" fill="#ffffff" stroke="#94a3b8"/>
-  <text x="270" y="1287" text-anchor="middle" class="node-title">配置与控制面版本</text>
-  <text x="270" y="1310" text-anchor="middle" class="node-body">组织 · Policy · Capability Registry</text>
-  <text x="270" y="1330" text-anchor="middle" class="node-body">不可变版本 · 审批证据</text>
+  <rect x="75" y="1490" width="390" height="92" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="270" y="1517" text-anchor="middle" class="node-title">配置与控制面版本</text>
+  <text x="270" y="1540" text-anchor="middle" class="node-body">组织 · Policy · Capability Registry</text>
+  <text x="270" y="1560" text-anchor="middle" class="node-body">不可变版本 · 审批证据</text>
 
-  <rect x="500" y="1260" width="390" height="92" rx="6" fill="#ffffff" stroke="#94a3b8"/>
-  <text x="695" y="1287" text-anchor="middle" class="node-title">权威账本</text>
-  <text x="695" y="1310" text-anchor="middle" class="node-body">用量账本 · 审计事件日志</text>
-  <text x="695" y="1330" text-anchor="middle" class="node-body">Claim / Evidence · Purge Tombstone</text>
+  <rect x="500" y="1490" width="390" height="92" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="695" y="1517" text-anchor="middle" class="node-title">权威账本</text>
+  <text x="695" y="1540" text-anchor="middle" class="node-body">用量账本 · 审计事件日志</text>
+  <text x="695" y="1560" text-anchor="middle" class="node-body">Claim / Evidence · Purge Tombstone</text>
 
-  <rect x="925" y="1260" width="390" height="92" rx="6" fill="#ffffff" stroke="#94a3b8"/>
-  <text x="1120" y="1287" text-anchor="middle" class="node-title">可恢复执行状态</text>
-  <text x="1120" y="1310" text-anchor="middle" class="node-body">检查点 · 持久任务 · 导出操作</text>
-  <text x="1120" y="1330" text-anchor="middle" class="node-body">幂等键 · 租约 · 重试 · 死信</text>
+  <rect x="925" y="1490" width="390" height="92" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="1120" y="1517" text-anchor="middle" class="node-title">可恢复执行状态</text>
+  <text x="1120" y="1540" text-anchor="middle" class="node-body">检查点 · 持久任务 · 导出操作</text>
+  <text x="1120" y="1560" text-anchor="middle" class="node-body">幂等键 · 租约 · 重试 · 死信</text>
 
-  <rect x="1350" y="1260" width="375" height="92" rx="6" fill="#ffffff" stroke="#94a3b8"/>
-  <text x="1537" y="1287" text-anchor="middle" class="node-title">存储机制与投影</text>
-  <text x="1537" y="1310" text-anchor="middle" class="node-body">SQL · FTS · Vector · Graph · ObjectStore</text>
-  <text x="1537" y="1330" text-anchor="middle" class="node-body">SecretStore · KMS/HSM · Telemetry</text>
+  <rect x="1350" y="1490" width="375" height="92" rx="6" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="1537" y="1517" text-anchor="middle" class="node-title">存储机制与投影</text>
+  <text x="1537" y="1540" text-anchor="middle" class="node-body">SQL · FTS · Vector · Graph · ObjectStore</text>
+  <text x="1537" y="1560" text-anchor="middle" class="node-body">SecretStore · KMS/HSM · Observation / Telemetry</text>
 
   <!-- Main execution arrows -->
   <path class="edge" d="M 400 151 H 480 V 350 H 535"/>
@@ -231,17 +274,24 @@
   <path class="edge-orange" d="M 1330 678 H 1280 V 548 H 1235"/>
   <path class="edge-orange" d="M 1330 844 H 1278 V 866 H 1235"/>
 
+  <!-- Observability relations -->
+  <path class="edge" d="M 885 964 V 980 H 235 V 1070"/>
+  <path class="edge-orange" d="M 1527 938 V 980 H 575 V 1070"/>
+  <path class="edge-green" d="M 435 876 H 480 V 980 H 1245 V 1070"/>
+  <path class="edge-dashed" d="M 700 907 V 972 H 1575 V 1070"/>
+  <text x="1180" y="968" class="small">UsageObserver 权威只读关联</text>
+
   <!-- Adapter and data arrows -->
-  <path class="edge" d="M 885 802 V 970 H 270 V 1070"/>
-  <path class="edge" d="M 885 686 V 970 H 695 V 1070"/>
-  <path class="edge-orange" d="M 1527 938 V 980 H 1120 V 1070"/>
-  <path class="edge-green" d="M 255 912 V 980 H 1537 V 1070"/>
-  <path class="edge" d="M 270 1136 V 1260"/>
-  <path class="edge" d="M 695 1136 V 1260"/>
-  <path class="edge" d="M 1120 1136 V 1260"/>
-  <path class="edge" d="M 1537 1136 V 1260"/>
+  <path class="edge" d="M 535 548 H 475 V 965 H 410 V 1228 H 270 V 1320"/>
+  <path class="edge" d="M 1235 648 H 1285 V 960 H 740 V 1232 H 695 V 1320"/>
+  <path class="edge-orange" d="M 1527 938 V 955 H 1080 V 1236 H 1120 V 1320"/>
+  <path class="edge-green" d="M 255 912 H 30 V 1228 H 1537 V 1320"/>
+  <path class="edge" d="M 270 1386 V 1490"/>
+  <path class="edge" d="M 695 1386 V 1490"/>
+  <path class="edge" d="M 1120 1386 V 1490"/>
+  <path class="edge" d="M 1537 1386 V 1490"/>
 
   <!-- Ownership callouts -->
-  <text x="60" y="1435" class="small">实线：运行或治理调用　　虚线：契约约束　　绿色：企业控制　　橙色：记忆与学习闭环</text>
-  <text x="60" y="1463" class="small">权威边界：UsageObserver 独占用量账本；Memory 独占 Claim/Evidence 语义；Policy 独占规则与决策；Storage 只提供机制；Adapter 不拥有 Runtime 权威。</text>
+  <text x="60" y="1675" class="small">实线：运行或治理调用　　虚线：契约约束 / 只读关联　　绿色：企业控制　　橙色：记忆与学习闭环</text>
+  <text x="60" y="1703" class="small">权威边界：UsageObserver 独占用量账本；Memory 独占 Claim/Evidence 语义；Policy 独占规则与决策；Observation 与 Adapter 不拥有 Runtime 权威。</text>
 </svg>

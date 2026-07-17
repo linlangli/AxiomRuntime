@@ -1,4 +1,5 @@
 import type { Context } from "grammy";
+import type { InlineKeyboardMarkup } from "grammy/types";
 import type { ProgressUpdate } from "../engine/types.js";
 import { withTelegramNetworkRetry } from "../network-retry.js";
 import { Formatter } from "./formatter.js";
@@ -6,9 +7,12 @@ import { Formatter } from "./formatter.js";
 export type ProgressReporterOptions = {
   silent?: boolean;
   throttleMs?: number;
+  isResume?: boolean;
 };
 
 type ProgressApi = Pick<Context["api"], "sendMessage" | "editMessageText" | "deleteMessage">;
+
+const MAX_TIMELINE_ENTRIES = 8;
 
 export class ProgressReporter {
   private messageId?: number;
@@ -19,6 +23,9 @@ export class ProgressReporter {
   private toolCount = 0;
   private throttleMs: number;
   private readonly silent: boolean;
+  private readonly isResume: boolean;
+  private timeline: string[] = [];
+  private startTime = Date.now();
 
   constructor(
     private readonly api: ProgressApi,
@@ -27,6 +34,7 @@ export class ProgressReporter {
   ) {
     this.silent = options.silent ?? false;
     this.throttleMs = options.throttleMs ?? 1500;
+    this.isResume = options.isResume ?? false;
   }
 
   async update(update: ProgressUpdate): Promise<void> {
@@ -54,14 +62,14 @@ export class ProgressReporter {
     }
   }
 
-  async replaceWithHtml(html: string, fallbackText: string): Promise<boolean> {
+  async replaceWithHtml(html: string, fallbackText: string, extra?: { reply_markup?: InlineKeyboardMarkup }): Promise<boolean> {
     if (this.silent || this.finalized) return false;
     this.clearPending();
     this.pending = undefined;
     if (!this.messageId) return false;
     try {
       await withTelegramNetworkRetry(() =>
-        this.api.editMessageText(this.chatId, this.messageId!, html, { parse_mode: "HTML" })
+        this.api.editMessageText(this.chatId, this.messageId!, html, { parse_mode: "HTML", ...extra })
       );
       this.finalized = true;
       return true;
@@ -71,7 +79,7 @@ export class ProgressReporter {
 
     try {
       await withTelegramNetworkRetry(() =>
-        this.api.editMessageText(this.chatId, this.messageId!, fallbackText || "(empty)")
+        this.api.editMessageText(this.chatId, this.messageId!, fallbackText || "(empty)", extra ? { ...extra } : undefined)
       );
       this.finalized = true;
       return true;
@@ -87,9 +95,11 @@ export class ProgressReporter {
     this.pending = undefined;
     const signature = buildProgressSignature(update, this.toolCount);
     if (signature === this.lastSignature) return;
-    const text = Formatter.progress(update, {
-      toolCount: this.toolCount
-    });
+
+    const entry = Formatter.progress(update, { toolCount: this.toolCount });
+    this.appendTimeline(entry);
+    const text = Formatter.progressTimeline(this.getDisplayEntries(), this.isResume);
+
     try {
       if (!this.messageId) {
         const message = await withTelegramNetworkRetry(() =>
@@ -105,6 +115,21 @@ export class ProgressReporter {
     } catch (error) {
       this.handleTelegramError(error);
     }
+  }
+
+  private appendTimeline(entry: string): void {
+    const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(1);
+    const last = this.timeline[this.timeline.length - 1];
+    if (last && stripElapsed(last) === stripElapsed(entry)) {
+      return;
+    }
+    this.timeline.push(`${entry} <i>${elapsed}s</i>`);
+  }
+
+  private getDisplayEntries(): string[] {
+    if (this.timeline.length <= MAX_TIMELINE_ENTRIES) return this.timeline;
+    const hidden = this.timeline.length - MAX_TIMELINE_ENTRIES;
+    return [`<i>… +${hidden} more</i>`, ...this.timeline.slice(-MAX_TIMELINE_ENTRIES)];
   }
 
   private handleTelegramError(error: unknown): void {
@@ -138,4 +163,8 @@ function readMessageId(value: unknown): number | undefined {
     return Number.isFinite(id) ? id : undefined;
   }
   return undefined;
+}
+
+function stripElapsed(entry: string): string {
+  return entry.replace(/ <i>[\d.]+s<\/i>$/, "");
 }

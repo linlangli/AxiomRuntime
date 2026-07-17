@@ -31,6 +31,7 @@ Availability 仅覆盖 Runtime 自有边界。第三方 provider 故障单独计
 | Memory L0 required cache | p95 ≤ 10ms | p95 ≤ 10ms | miss 转 L1 |
 | Memory L1 local retrieval | p95 ≤ 100ms，p99 ≤ 200ms | p95 ≤ 80ms，p99 ≤ 160ms | 返回当前安全结果 |
 | Memory L2 local semantic | p95 ≤ 300ms，p99 ≤ 500ms | p95 ≤ 250ms，p99 ≤ 450ms | route 独立降级，不阻塞主请求 |
+| Capability Observation 同步 enqueue | p95 ≤ 2ms，p99 ≤ 5ms | p95 ≤ 2ms，p99 ≤ 5ms | 丢 Observation + drop metric，不阻塞主链 |
 | Admin read | p95 ≤ 300ms，p99 ≤ 800ms | p95 ≤ 200ms，p99 ≤ 500ms | 显示 degraded，不展示 stale privileged state 为 current |
 | Admin mutation accept | p95 ≤ 500ms，p99 ≤ 1s | p95 ≤ 300ms，p99 ≤ 800ms | 返回 durable operation，不等待长任务完成 |
 
@@ -43,6 +44,7 @@ Model/provider latency 不纳入本地 Transport overhead，但必须分别展�
 | RuntimeEvent accepted → AuditSink durable | p95 ≤ 5s | p95 ≤ 2s | 已签名、可查询或进入有界 recovery journal |
 | Usage observed → ledger durable | p95 ≤ 5s | p95 ≤ 2s | 同 upstream attempt 最多一条 contribution |
 | Post-Run durable enqueue | p95 ≤ 50ms | p95 ≤ 30ms | job id 可查询，正文已脱敏/保护 |
+| Capability Observation accepted → query projection | p95 ≤ 10s | p95 ≤ 5s | trace 标记 partial/export lag；不影响权威执行终态 |
 | Policy canary publish | ≤ 5 分钟 | ≤ 2 分钟 | targets 可验证，effective revision 可查询 |
 | Policy rollback | ≤ 10 分钟 | ≤ 5 分钟 | 新 revision 生效，旧历史保留 |
 | Plugin drain | 由 invocation deadline 决定，默认 ≤ 30 分钟 | 默认 ≤ 15 分钟 | 无新 invocation，in-flight 有终态 |

@@ -43,8 +43,13 @@
 | 工具端口 | `ToolPort` | 一次类型化动作 |
 | 工作流执行端口 | `WorkflowExecutorPort` | checkpoint/signal/resume/compensation |
 | Agent 适配端口 | `AgentAdapterPort` | 受限外部 Agent execution |
+| Claude Code CLI 适配器 | `ClaudeCodeCliAgentAdapter` | 实现 `AgentAdapterPort`，只封装 Claude Code 进程与事件 |
+| Codex CLI 适配器 | `CodexCliAgentAdapter` | 实现 `AgentAdapterPort`，只封装 Codex CLI 进程与事件 |
 | 副作用等级 | `SideEffectClass` | none/read/reversible/external/irreversible |
 | 运行时错误 | `RuntimeError` | closed code + retry classification |
+| 能力观测记录 | `CapabilityObservation` | 可采样、非权威的调用链诊断 envelope |
+| 可观测写入端口 | `ObservabilitySinkPort` | 有界非阻塞 emission；后接 JSONL/OTel/OTLP |
+| 可观测查询端口 | `ObservabilityQueryPort` | Policy 控制的 summary/explain/internal trace 查询 |
 
 ## 3. 记忆与检索（勿译标识符）
 

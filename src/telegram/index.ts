@@ -1,12 +1,19 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
-import { getTelegramPidPath } from "../core/config/paths.js";
+import { getTelegramBotPidPath, getTelegramPidPath } from "../core/config/paths.js";
 import { createBot } from "./bot.js";
 import { writeTelegramLog } from "./log.js";
 
+const botName = process.env.AI_TELEGRAM_BOT_NAME || "";
+
+function resolvePidPath(): string {
+  return botName ? getTelegramBotPidPath(botName) : getTelegramPidPath();
+}
+
 async function main(): Promise<void> {
-  const runtime = await createBot();
-  await fs.writeFile(getTelegramPidPath(), `${process.pid}\n`, "utf8");
+  const runtime = await createBot(botName || undefined);
+  const pidPath = resolvePidPath();
+  await fs.writeFile(pidPath, `${process.pid}\n`, "utf8");
   await writeTelegramLog({
     action: "bot_start",
     message: `Telegram bot started with PID ${process.pid}`,
@@ -23,7 +30,7 @@ async function main(): Promise<void> {
     await runtime.bot.stop();
     runtime.store.close();
     try {
-      await fs.unlink(getTelegramPidPath());
+      await fs.unlink(resolvePidPath());
     } catch {
       // PID file may already be removed by CLI stop.
     }
@@ -52,7 +59,7 @@ main().catch(async (error) => {
   const message = error instanceof Error ? error.message : String(error);
   await writeTelegramLog({ level: "error", action: "bot_fatal", message });
   try {
-    await fs.unlink(getTelegramPidPath());
+    await fs.unlink(resolvePidPath());
   } catch {
     // Ignore cleanup failures during fatal startup errors.
   }

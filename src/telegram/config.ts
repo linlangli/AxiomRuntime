@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import { getTelegramConfigPath, getTelegramDbPath } from "../core/config/paths.js";
+import { getTelegramBotConfigPath, getTelegramBotDbPath, getTelegramBotDir, getTelegramConfigPath, getTelegramDbPath } from "../core/config/paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../core/config/json-store.js";
 import { readBoolean, readNumber, readOptionalString, readString } from "../core/config/schema.js";
 
@@ -201,4 +201,43 @@ async function chmodConfigFile(): Promise<void> {
 function maskToken(token: string): string {
   if (token.length <= 12) return "****";
   return `${token.slice(0, 6)}****${token.slice(-4)}`;
+}
+
+export async function loadBotConfig(name: string): Promise<TelegramConfig> {
+  const configPath = getTelegramBotConfigPath(name);
+  const defaults = getDefaultBotConfig(name);
+  const raw = await readJsonFile<unknown>(configPath, defaults);
+  return normalizeTelegramConfig(raw);
+}
+
+export async function saveBotConfig(name: string, config: TelegramConfig): Promise<TelegramConfig> {
+  const configPath = getTelegramBotConfigPath(name);
+  const dir = getTelegramBotDir();
+  await fs.mkdir(dir, { recursive: true });
+  const withDb = { ...config, dbPath: config.dbPath || getTelegramBotDbPath(name) };
+  const normalized = normalizeTelegramConfig(withDb);
+  if (normalized.dbPath === getTelegramDbPath()) {
+    normalized.dbPath = getTelegramBotDbPath(name);
+  }
+  await writeJsonFile(configPath, normalized);
+  try {
+    await fs.chmod(configPath, 0o600);
+  } catch {
+    // Best-effort on filesystems that may not support chmod.
+  }
+  return normalized;
+}
+
+function getDefaultBotConfig(name: string): TelegramConfig {
+  return {
+    token: "",
+    allowAllUsers: false,
+    allowedUserIds: [],
+    defaultEngine: "claude",
+    defaultCwd: os.homedir(),
+    defaultPermissionMode: "bypassPermissions",
+    sessionTimeoutHours: 24,
+    maxOutputLength: 4000,
+    dbPath: getTelegramBotDbPath(name)
+  };
 }

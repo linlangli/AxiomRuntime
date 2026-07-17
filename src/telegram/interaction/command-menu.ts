@@ -5,6 +5,7 @@ import type { Bot } from "grammy";
 import type { BotCommand } from "@grammyjs/types";
 import type { TelegramEngineName } from "../config.js";
 import { writeTelegramLog } from "../log.js";
+import type { CustomCommand } from "../session/types.js";
 
 export type TelegramCommandMapping = {
   command: string;
@@ -26,6 +27,7 @@ const BASE_COMMANDS: TelegramCommandMapping[] = [
   { command: "forget", description: "删除 Bot 记忆", prompt: "/forget" },
   { command: "memories", description: "查看 Bot 记忆", prompt: "/memories" },
   { command: "memory", description: "管理 Bot 记忆", prompt: "/memory" },
+  { command: "command", description: "注册自定义命令", prompt: "/__register_command" },
   { command: "help", description: "查看帮助", prompt: "/help" }
 ];
 
@@ -70,29 +72,35 @@ export function getBaseBotCommands(): BotCommand[] {
   return BASE_COMMANDS.map(toBotCommand);
 }
 
-export function getChatBotCommands(engine: TelegramEngineName): BotCommand[] {
-  return getCommandMappings(engine).map(toBotCommand).slice(0, MAX_TELEGRAM_COMMANDS);
+export function getChatBotCommands(engine: TelegramEngineName, customCommands: CustomCommand[] = []): BotCommand[] {
+  return getCommandMappings(engine, customCommands).map(toBotCommand).slice(0, MAX_TELEGRAM_COMMANDS);
 }
 
-export function getCommandMappings(engine: TelegramEngineName): TelegramCommandMapping[] {
+export function getCommandMappings(engine: TelegramEngineName, customCommands: CustomCommand[] = []): TelegramCommandMapping[] {
+  const custom: TelegramCommandMapping[] = customCommands.map((c) => ({
+    command: c.name,
+    description: c.description,
+    prompt: `/__custom_${c.name}`
+  }));
   return mergeCommandMappings([
     ...BASE_COMMANDS,
     ...BUILTIN_CLI_COMMANDS[engine],
-    ...readConfiguredCommands(engine)
+    ...readConfiguredCommands(engine),
+    ...custom
   ]);
 }
 
-export function resolveMappedCommand(engine: TelegramEngineName, command: string): TelegramCommandMapping | null {
+export function resolveMappedCommand(engine: TelegramEngineName, command: string, customCommands: CustomCommand[] = []): TelegramCommandMapping | null {
   const normalized = normalizeTelegramCommandName(command);
-  return getCommandMappings(engine).find((item) => item.command === normalized) ?? null;
+  return getCommandMappings(engine, customCommands).find((item) => item.command === normalized) ?? null;
 }
 
 export async function setDefaultCommandMenu(bot: Bot): Promise<void> {
   await bot.api.setMyCommands(getBaseBotCommands());
 }
 
-export async function setChatCommandMenu(bot: Bot, chatId: number, engine: TelegramEngineName): Promise<void> {
-  await bot.api.setMyCommands(getChatBotCommands(engine), {
+export async function setChatCommandMenu(bot: Bot, chatId: number, engine: TelegramEngineName, customCommands: CustomCommand[] = []): Promise<void> {
+  await bot.api.setMyCommands(getChatBotCommands(engine, customCommands), {
     scope: { type: "chat", chat_id: chatId }
   });
 }
@@ -115,9 +123,9 @@ export async function safeSetDefaultCommandMenu(bot: Bot): Promise<void> {
   }
 }
 
-export async function safeSetChatCommandMenu(bot: Bot, chatId: number, engine: TelegramEngineName): Promise<void> {
+export async function safeSetChatCommandMenu(bot: Bot, chatId: number, engine: TelegramEngineName, customCommands: CustomCommand[] = []): Promise<void> {
   try {
-    await setChatCommandMenu(bot, chatId, engine);
+    await setChatCommandMenu(bot, chatId, engine, customCommands);
   } catch (error) {
     await writeTelegramLog({
       level: "warn",

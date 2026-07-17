@@ -75,6 +75,8 @@
 - Workflow recovery：`best_effort_reverse/required_reverse` 逐步逆序补偿；required compensation 失败不得报告 rolled back
 - Agent：event sequence 单调、断线续读、重复 event 去重、maximumSteps/cost/deadline、cancel、confirmation、result terminal 唯一
 - Agent 权限：每个 `tool_request` 重新经 Kernel/Policy；Agent 更换 provider、扩大 scope、自签 capability 或绕过 confirmation 的 fixture 必须失败
+- Coding Agent 分层：Telegram/CLI/API 对同一 `claude-code-agent` 或 `codex-cli-agent` descriptor 产生一致的 provider pin、permission、budget、retry owner、Usage 与 terminal event；Telegram `Engine` facade 不得直接 spawn Tool 或绕过 Orchestration
+- CLI enforcement capability：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 按版本声明 tool interception、confirmation、resume、cancel 与 isolation 支持；未知版本或不可拦截模式必须触发 descriptor/Policy 收窄，且不得伪报逐 Tool 强制授权已生效
 - Adapter replacement：local 与至少一个替换 Tool/Workflow/Agent adapter 通过相同 contract/error/cancel/idempotency/recovery suite
 - Durable boundary：Agent reasoning、raw tool args/output、provider run payload 不进入 RuntimeEvent、checkpoint、audit、crash dump 或 fixture
 
@@ -146,10 +148,21 @@
 - Event catalog：每个 `RuntimeEventType + eventVersion` 有 valid/invalid fixture；自由 eventType、缺失 operationId/actor、错误 payload、unknown materializer version 均被拒绝或隔离
 - Terminal invariant：execution/capability/tool/agent/transport 每个 operation 恰有一个 terminal；Workflow 多 checkpoint 后仍只有一个 terminal；replay 不重复 materialize
 - Error catalog：每个 `RuntimeErrorCode` 的 `safeDetails` allowlist、retry classification、用户呈现和 audit redaction 有 fixture；raw provider body/stack/secret 无法进入 event
-- 链路日志：一次执行的 `memory.retrieve→rank→budget→inject→extract→candidate→conflict→write→feedback` 共用同一 `traceId`，`ai log --trace <id>` 能按序还原
-- 日志脱敏：`memory.*` 日志不含 memory 正文与 secret，`content` 只出现长度/hash
-- 守卫日志：非私聊命中 `memory.skip` 且 reason=`non_private`，不产生 retrieve/inject 日志（R7）
-- Telegram 中间态：私聊显示 `🧠 回忆中/已调用 N 条`，N 与 `memory.inject` 日志一致；非私聊不显示任何记忆态
+- Observation 调用链：一次执行的 `memory.plan→retrieve.route→filter→rank→budget→compile→inject` 与异步 `extract→candidate→conflict→write→feedback` 共用同一 `traceId`，`ai log --trace <id>` 能按序还原
+- Observation schema：每个 `CapabilityObservationAction` 有 valid/invalid fixture；未知 action、超限数组、未注册字段、非 JSON value 和缺失 terminal status 被拒绝或确定性截断
+- Capability tree：每个 resolved invocation 恰有 `capability.resolve→invoke→result`，Memory/Skill 专用 span 关联实际 Tool/Workflow/Agent/Model invocation，不产生第二个通用 terminal
+- Memory explain：固定 fixture 可还原 `plan→retrieve.route*→filter→rank→budget→compile→inject`；逐 route 的授权过滤、hit/error/cache/fallback/latency 与最终 injected ids 一致
+- Skill explain：固定 fixture 可还原 `match→select→apply→step*→outcome`；step 关联实际 invocation，confirmation/guardrail/deviation/postcondition 与执行证据一致，Agent 偏离不误记正向复用
+- 异步因果：Post-Run、distill、validate、evaluation 使用同 trace 的 `continued_by/evaluated_by` link，不增加同步请求 duration，也不因 job retry 复制 attribution
+- Query authorization：`summary/explain/internal` 三套 closed schema、tenant/scope/view/filter/cutoff-bound cursor、跨 scope deny、查询审计与过期 cursor；修改过滤器后复用 cursor 返回 `invalid_cursor`，普通用户不能看到 internal canonical id 或其他 principal/tenant trace
+- Sampling/completeness：error/degraded/policy deny/high-impact/write/lifecycle/debug trace 不被 sampling policy 丢弃；normal/critical queue、reserved capacity、spool replay 与 exhaustion 有故障注入；`complete` 仅用于 closed/caught-up/no-gap trace，sampling 为 `sampled`，open/drop/lag/retention/missing-parent/corruption 为 `partial`
+- Usage ownership：Cost & Latency fixture 按 operation/execution/invocation 关联，再由权威 RuntimeEvent 解析 upstream attempt；pending/unavailable/not-billable 可区分，Observation store 中 token/cost/ledger revision 复制数为 0
+- 指标基数：自动扫描 metric labels，拒绝 trace/execution/principal/project/memory/skill/invocation id；只允许注册的低基数 label
+- Sink 故障：queue full、JSONL 锁超时、OTLP timeout、exporter crash 时 drop metric 增长，Memory/Skill/Usage/response bytes/Policy/retry owner 与无 Observability baseline 一致
+- 开销：同步 `tryEmit` 在目标负载下 p95≤2ms、p99≤5ms；Observation 不进入 prompt、Context Compiler token budget 或 durable Memory job 正文
+- Observation 脱敏：`memory.*` payload 不含 memory 正文与 secret，`content` 只出现长度/hash
+- 守卫调用链：非私聊命中 `memory.skip` 且 reason=`non_private`，不产生 retrieve/inject Observation（R7）
+- Telegram 中间态：私聊显示 `🧠 回忆中/已调用 N 条`，N 与 `memory.inject` Observation 一致；非私聊不显示任何记忆态
 - Emoji 不冲突：引擎思考态为 `⏱️`，`🧠` 仅记忆、`🧩` 仅技能、`📝` 仅写入；三处文档与 `Formatter.progress` 一致
 - 技能态：命中 active skill 显示 `🧩 套用《名》`（同步）；蒸馏出 validated/active skill 显示 `🧩 沉淀《名》`（异步，candidate 不提示）；只显 name 不显 steps
 - 中间态不泄内容：进度消息不出现记忆/技能正文、步骤、id、分数；`📝`/`🧩 沉淀` 为异步追加，不阻塞回复（R2）

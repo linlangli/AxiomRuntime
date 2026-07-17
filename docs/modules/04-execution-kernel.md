@@ -40,6 +40,8 @@
 - cancel 从 Surface 传播至 Workflow/Agent/Tool 和 Transport；无法确认取消结果时不得写 `cancelled` 终态，必须写 `unknown/manual_recovery`。
 - retry 只能由明确 owner 执行。Transport、Workflow step、Tool adapter 与 Agent adapter 禁止对同一失败叠加隐藏重试。
 - compensation 是新 invocation，拥有自己的 policy、idempotency、deadline、event 与 failure；补偿失败禁止覆盖原始失败。
+- Claude Code/Codex CLI 作为外部 Agent 运行时，`agent-supervisor` 固定 Registry 已选 descriptor/adapter/provider/policy snapshot，消费可续读 `AgentRunEvent`，并把 native tool request 当作 proposal 返回 `ToolPort` 执行期再授权。Telegram confirmation 只能恢复对应 waiting invocation，不能直接调用 Adapter 或 Tool。
+- 若 Agent Adapter 无法证明逐工具拦截、cancel 或 resume 能力，Kernel 按 descriptor 的真实能力选择更严格 isolation、native permission mode、confirmation 或拒绝执行；禁止用 prompt 约束冒充强制控制。
 
 ## 5. 依赖（低耦合）
 
@@ -68,6 +70,7 @@
 - 重试/兼容重试**不产生**重复副作用或重复计费（配合 ⑤ 幂等键）。
 - crash 后从最后已提交 Workflow checkpoint 恢复，不重复已提交 Tool side effect；无法判定的步骤进入 manual recovery。
 - Agent 的每个 `tool_request` 重新经过 Kernel，Agent 自身不能扩大 permission/scope 或绕过 confirmation。
+- 同一 Claude Code/Codex Agent descriptor 从 Telegram、CLI 或 API Surface 发起时，Kernel 产生一致的 side-effect、confirmation、budget、cancel、retry-owner 与 terminal event 结果。
 - Runtime event catalog 中 start/terminal 一一配对；一个 invocation 只能有一个 terminal state，reconciliation 以新事件纠正而不改写历史。
 - 模型变化时，安全/scope/权限行为保持确定。
 

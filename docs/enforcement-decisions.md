@@ -23,7 +23,7 @@
 9. 企业 profile 在发布前必须完成 federated identity、delegated admin、policy/plugin rollout+rollback、quota/metering、residency/retention/legal hold、audit export、backup/restore 与 SLO/RTO/RPO 验收；Web 页面存在不等于闭环完成。
 10. Identity/Policy/Audit/Metering adapter 故障必须按权威边界降级：不确定的新扩权和高影响管理写入 fail-closed，accepted audit event 与 UsageObserver ledger 不得静默丢失或形成第二账本。
 11. `RuntimeEvent.eventType`、payload、`RuntimeError.code` 与 retry classification 必须来自 [contracts.md](contracts.md) closed catalog；自由字符串事件、供应商原始错误和未注册 `safeDetails` 禁止跨模块或持久化。
-12. Tool/Workflow/Agent 分别遵守 action/state-machine/adapter 边界；每个 Tool side effect 逐次授权，Workflow crash 从 committed checkpoint 恢复，Agent tool proposal 必须回到 Kernel 再授权。
+12. Tool/Workflow/Agent 分别遵守 action/state-machine/adapter 边界；每个 Tool side effect 逐次授权，Workflow crash 从 committed checkpoint 恢复，Agent tool proposal 必须回到 Kernel 再授权。Claude Code/Codex CLI 在 ③ 注册 `agent` Capability、在 ④ 受 `agent-supervisor` 治理、仅由 ⑩ `AgentAdapterPort` 实现封装；Telegram 只属于 ① Surface。delivery-local `Engine` facade 不得成为第二条 spawn、provider routing 或授权路径；CLI 无法证明的 tool interception/cancel/resume 能力必须在 descriptor 中声明并由 Policy 收窄。
 13. `team/enterprise` release 必须满足 [service-level-objectives.md](service-level-objectives.md) 的量化 SLO/RTO/RPO 与恢复演练；hard safety regression 不得用 error budget 抵消。
 
 规范边界：本文件是跨模块产品行为和安全/质量门槛的权威来源；它不得重新定义 `contracts.md` 的 canonical identifier、跨进程 schema，也不得改变 `AI_RUNTIME_ARCHITECTURE.md` 的 ownership。示例 Mermaid 图用于解释规范，但核心组件和安全边界不是可选项。发现跨层冲突时必须同步修正双方，禁止用“更具体条款”掩盖契约或架构分叉。
@@ -589,49 +589,115 @@ Skill 注入格式（附加在现有注入块内，`readonly`，受同一 policy
 
 结论：Skill 系统不需要新范式，它就是"情景(R16)→ 蒸馏(Phase7)→ 程序性记忆"这条链的产物；把 R11-R16 打好，Skill 自沉淀是水到渠成的第 10 阶段能力。
 
-### R17 记忆调用链路日志（可观测性，Phase 1 起持续）
+### R17 Memory / Skill / Capability 调用链可观测性（Phase 1 起持续）
 
 > 本条是**跨层可观测性契约**（[contracts.md §6](contracts.md#6-运行时可观测性契约跨层observability)）在 memory 层的落地：traceId 源自 `ExecutionContext.trace`，与 transport/learning 层共用同一 traceId，脱敏与后端非权威规则遵循该契约。
 
-问题：记忆系统是隐式自动的（注入了什么、为什么召回这条、抽取为何丢弃），出问题时无从复盘。R11 评测集验证"该召回什么"，R17 负责"线上实际召回/写入了什么"的可追溯。
+问题：记忆和 Skill 是隐式能力。仅知道“调用过 Memory”不足以解释为什么启用、各检索 route 返回什么、哪些候选被 scope/authority/time/budget 过滤、最终注入什么、Skill 是否被真正遵循、执行是否偏离，以及它是否改变了结果。R11 验证离线期望，R17 负责线上每次真实调用的可解释 trace。
 
-方案：复用现有 `writeLog`（`src/core/logs/log-service.ts`，JSONL）与 `LogEvent`，**新增 `LogCategory = "memory"`**，不另起日志系统。每次记忆操作以统一 `traceId` 串起全链路。
+方案：业务调用点只构造一次 [contracts.md §6](contracts.md#6-运行时可观测性契约跨层observability) 的 `CapabilityObservation` 并调用 `ObservabilitySinkPort.tryEmit()`。当前 `writeLog` JSONL 是 local projection adapter，OpenTelemetry/OTLP 是 trace/metric projection adapter；**禁止**为 JSONL、OTel 和 dashboard 分别重复埋点。Observation 非权威、可采样；`RuntimeEvent`、审计和 Claim/Evidence Ledger 仍是事实来源。
 
-```typescript
-// core/types.ts: LogCategory 追加 "memory"
-type MemoryTraceMeta = {
-  traceId: string;           // 一次执行的记忆链路 id（Pre-Read 生成，贯穿 Post-Run）
-  userId: string;            // canonical account（R1）
-  botId?: string; projectId?: string; engine: "claude" | "codex";
-  source: "telegram" | "cli" | "browser" | "scheduler";
-};
+#### Span 与异步因果结构
+
+```text
+runtime.execution
+├─ capability.resolve(memory)
+├─ memory.pre_read
+│  ├─ memory.plan
+│  ├─ memory.retrieve
+│  │  ├─ memory.retrieve.route(required)
+│  │  ├─ memory.retrieve.route(fts)
+│  │  ├─ memory.retrieve.route(vector)
+│  │  └─ memory.retrieve.route(graph/temporal/episode)
+│  ├─ memory.filter → memory.rank → memory.budget → memory.compile → memory.inject
+│  └─ skill.match → skill.select → skill.apply
+│     └─ skill.step → capability.invoke(tool/workflow/model) → capability.result
+└─ provider execution / response
+
+memory.post_run --continued_by link--> extract → candidate → conflict → write → feedback
+skill.distill   --continued_by link--> validate → lifecycle → evaluation/promotion
 ```
 
-必须落日志的关键节点（`action` 命名固定，`metadata` 带 `traceId` + 下列字段）：
+同步调用使用 parent/child span。Post-Run、distill、evaluation 等 durable job 继承原 `traceId`，创建新 root span 并用 `ObservationLink.relation=continued_by|evaluated_by` 指向来源 span；不得把数分钟后的异步任务伪装成仍在用户请求栈内。每个 Observation 同时带 `operationId`，有 execution 时带 `executionId`，有权威 lifecycle event 时写入 `runtimeEventIds`。
 
-| action | 触发点 | 关键 metadata |
-|--------|--------|---------------|
-| `memory.retrieve` | Retriever 完成 | 候选数、各来源命中数(required/fts/vector/recent)、耗时 ms |
-| `memory.rank` | 重排完成 | topN 的 `{id, score, 分项得分}` |
-| `memory.budget` | 预算裁剪后 | 注入条数、估算 token 数、被裁剪条数、命中 cap 的类别 |
-| `memory.inject` | 注入块生成 | 最终注入 `memoryIds`、skill ids、总 token 数 |
-| `memory.skip` | 命中守卫 | 原因（`non_private`(R7) / `memory_disabled` / `no_hit`） |
-| `memory.extract` | 抽取产出候选 | 候选数、初筛丢弃数、是否调用模型、`budget_throttled`(R2) |
-| `memory.candidate` | 每条候选定级 | `fact_key`、trust、confidence、判定(active/pending/drop)、reason |
-| `memory.conflict` | R13 消解 | superseded/merged/pending、新旧 id 与值摘要 |
-| `memory.write` | 落库 | 写入/更新 `memoryId`、status、scope、lifetime |
-| `memory.feedback` | R15 回流 | `memoryId`、outcome(cited/neutral/contradicted) |
-| `skill.apply` | 命中并注入 skill | `skillId`、name、confidence（对应 `skill_applied` 展示） |
-| `skill.distill` | 蒸馏产出/升级 skill | `skillId`、name、status 变迁、来源 episodes 数（对应 `skill_learned`） |
+#### 通用 Capability action schema
 
-硬规格：
+| action | 触发点 | 必填 payload（正文禁止） |
+|---|---|---|
+| `capability.resolve` | Registry 解析实现 | `requestedCapabilityId`、requested version/range、`registryRevision`、candidate count、reject reason counts、selected capability/version/adapter、`policyDecisionId` |
+| `capability.invoke` | Kernel 已授权、调用前 | `invocationId`、input hash/byte length、deadline、budget、`SideEffectClass`、confirmation state、retry owner |
+| `capability.result` | 调用终态 | `invocationId`、outcome、duration、output hash/byte length、error code、retry count、cancel/compensation state |
 
-- **`traceId` 贯穿**：Pre-Read 生成，注入结果、Post-Run 抽取、冲突、写库、回流共用同一个，`ai log` 可按 `traceId` 还原一次完整链路。
-- **绝不记敏感内容**：日志只记 `memoryId`/`fact_key`/分数/长度/原因，**不记 memory 正文、不记 secret**（对齐「安全边界」日志脱敏）；`content` 一律以长度或 hash 摘要代替。
-- **失败不阻断**：沿用 `writeLog` 的 best-effort 语义，日志异常绝不影响记忆主流程或用户回复。
-- CLI：现有 `ai log` 增加 `--category memory --trace <id>` 过滤，按 traceId 时序打印链路。
-- level 约定：正常流程 `info`，`memory.skip`/`budget_throttled` 用 `warn`，抽取/写库异常 `error`。
-- 单条 JSONL 事件上限 16KB，metadata 先过 allowlist serializer；日志文件 `0600`，达到 20MB 按锁轮转，保留 5 份。多进程 append/rotate 使用 `proper-lockfile`，拿锁超时则丢日志但不阻断主流程。
+`tool/workflow/agent/model/retrieval` 都必须使用这三个通用 action；专用 Memory/Skill action 是其内部解释，不替代 Kernel invocation event。一个 `invocationId` 恰有一个 `capability.result` Observation；丢失时 query view 标记 `partial`，不能伪报成功。
+
+#### Memory action schema
+
+| action | 触发点 | 必填 payload（数组均设上限） |
+|---|---|---|
+| `memory.plan` | Recall Planner 完成 | invoke reason、intent key hash、memory mode、policy snapshot、planned routes、query count、token/latency budget |
+| `memory.retrieve.route` | 每个 route 终态 | route、adapter id/version、query hash、authorization filter applied、hit count、timeout/cache/fallback、duration、error code |
+| `memory.filter` | scope/authority/taint/time/conflict 过滤后 | input/output count、`rejectedByReason`、policy decision id；禁止记录被拒正文 |
+| `memory.rank` | fusion/rerank 完成 | algorithm/version、top items（最多 20 个：memory id、category、rank、rounded total/component scores）、tie-break reason |
+| `memory.budget` | token/category cap 后 | before/after count、estimated tokens、trimmed by reason/category、cap hit、remaining budget |
+| `memory.compile` | Context Compiler 完成 | compiler version、block types、source count、output hash/length/tokens、cache hit、manifest id |
+| `memory.inject` | MemoryExtension 接受 patch | injection manifest id、memory ids、skill application ids、allowed paths、before/after hash、token count、result |
+| `memory.skip` | Memory 未进入或提前退出 | `non_private|incognito|memory_disabled|policy_denied|deadline|no_hit|backend_unavailable|budget_zero|protocol_unknown` |
+| `memory.extract` | Post-Run extractor 终态 | extractor adapter/version、input segment count/hash、model called、candidate/drop count、duration、budget state/error |
+| `memory.candidate` | candidate 定级 | candidate id、fact key hash、category、trust、confidence、decision、reason codes、evidence count/corroboration groups |
+| `memory.conflict` | 冲突消解 | old/new ids、relation、decision、reason codes、value hashes、temporal overlap；禁止值正文 |
+| `memory.write` | Ledger mutation 终态 | memory/claim/evidence ids、operation、status、scope kind、revision、idempotency replay、duration/error |
+| `memory.feedback` | outcome attribution | memory id、retrieved/injected/referenced/decisionChanged/outcomeChanged、utility dimensions、evidence source |
+| `memory.compress` | projection 编译/替换 | manifest id、source/output count、coverage、token before/after、QA result、rollback artifact ref |
+
+每个 retrieval route 单独成 span，避免“Memory 总耗时 200ms”却无法判断是 vector、graph 还是 reranker 慢。`authorization filter applied=false` 是 hard safety regression；该 route 结果不得进入 fusion，并立即发安全告警。
+
+#### Skill action schema
+
+| action | 触发点 | 必填 payload（步骤正文禁止） |
+|---|---|---|
+| `skill.match` | trigger matcher 完成 | intent/project/tool context hash、candidate count、top candidates（skill id/version、trigger kinds、score、scope/status）、rejected reason counts |
+| `skill.select` | Policy/预算/冲突过滤后 | selected ids、rejected ids+reason、token budget、risk classes、policy decision id |
+| `skill.apply` | Skill 注入或执行计划绑定 | `skillApplicationId`、skill id/version、source、guardrail/confirmation counts、injected token count、application mode (`advisory|guided|executable`) |
+| `skill.step` | 每个 Skill IR step 终态 | application id、step id/ordinal、declared capability id/version、actual invocation id、status、confirmation、precondition/invariant result、deviation reason、duration/error |
+| `skill.outcome` | 任务结束并完成归因 | application id、adherence ratio、completed/skipped/deviated steps、postcondition result、task outcome、referenced/decisionChanged/outcomeChanged、harm/correction signal |
+| `skill.distill` | mining/distill 终态 | candidate/skill id、miner/version、source execution/episode count、support ratio、parameter slots、dedup result、error |
+| `skill.validate` | 每个验证 gate | skill id/version、gate (`schema|alignment|risk|replay|sandbox|shadow`)、result、fixture/eval refs、duration、reason codes |
+| `skill.lifecycle` | 状态变化 | skill id/version、from/to status、decision id、actor kind、reason codes、rollback/superseded refs |
+
+`skill.apply` 不等于有效复用。只有 `skill.outcome.postconditionResult=passed`、任务成功、无 hard regression，且 `outcomeChanged=true` 或有明确用户/工具证据时，才计入正向 Skill 复用；Agent 偏离步骤但任务成功不得归功于 Skill。
+
+#### 查询与展示目标契约
+
+- `ai trace show <traceId> --view timeline|tree|memory|skill|capability`：按时间线或调用树展示，必须标记 `complete|sampled|partial`。
+- `ai memory explain --trace <traceId>`：展示 invoke reason、route latency/hits、过滤 reason counts、排名/预算、最终注入 id 与 attribution，不显示正文。
+- `ai skill explain --trace <traceId> [--application <id>]`：展示 match/select/apply、步骤调用、确认/护栏、偏离和 outcome attribution。
+- Web Observability 使用同一 `ObservabilityQueryPort`，固定视图为 Timeline、Memory Recall、Skill Application、Capability Calls、Cost & Latency、Errors；Web/CLI 禁止各自读取 JSONL 或实现字段解释。
+- `ai log --category memory --trace <id>` 保留为 local compatibility view，内部读取同一 Observation projection。
+
+普通用户只看自身 `summary/explain`；平台运营者看聚合指标；`internal` 视图、跨主体关联和原始 canonical id 需要独立 Policy 权限并记录审计。`internal` 不等于跨租户权限；跨租户调查必须为每个目标 tenant 取得短时 break-glass grant、逐 tenant 查询且禁止结果混页。Skill 名称由授权后的 Skill Service 按 id 解析，Observation 只保存 `skillId/nameHash/nameLength`，防止 exporter 泄漏业务流程名称。
+
+Query Adapter 必须把内部 envelope 转为 action + view 对应的 closed `ObservationViewRecord`，不能把原始 payload 透传。cursor 绑定 tenant/scope/view/filter/query cutoff；修改过滤器后复用返回 `invalid_cursor`。`complete` 只表示 closed trace 在 retention 与 projection watermark 内无已知缺口；有意采样为 `sampled`；open trace、drop、lag、retention 截断、missing parent 或 projection corruption 为 `partial` 并显示原因。分页不得让同一查询不同页使用不同 watermark。
+
+Cost & Latency 视图是联合只读视图：latency 来自 Observation，token/cost/ledger revision 来自 `UsageObserver` 权威 read model，先按 `operationId/executionId/invocationId` 关联，再由权威 `RuntimeEvent` 解析到 upstream attempt。`CapabilityObservation` 和 Observability store 禁止复制、修正或补写 usage/cost；关联失败显示 `usage_unavailable|usage_pending|not_billable`，不得按 latency 或 token 估算费用。
+
+#### Metrics 与采样
+
+- Memory：invocation/skip/zero-hit、route latency/error/cache/fallback、filter reason、injected count/tokens、budget trim、compile cache、extract queue age、candidate decision、stale-memory/correction。
+- Skill：match/select/apply rate、adherence、step success/deviation、confirmation/guardrail block、postcondition pass、positive reuse、harm/correction、validation/lifecycle transition。
+- Capability：resolve/invoke/result、latency、error、cancel、retry、compensation、adapter/version 与 budget exhaustion。
+- `traceId/executionId/memoryId/skillId/invocationId/principal/project` 禁止成为 metric label；只允许低基数 family/kind/status/route/adapter family/error code/profile。
+
+默认 tail sampling 对 error、degraded、policy deny、high-impact Skill、Ledger write、candidate activation、lifecycle/promotion/rollback 与用户显式 debug trace 的采样率必须为 100%；普通成功 read trace 可按 deployment policy 采样。这里的 100% 表示“不得被 sampling policy 丢弃”，不承诺基础设施永不故障。实现使用 normal/critical 两级有界队列、critical reserved capacity 和权限为 `0600` 的有界本地 spool；exporter 恢复后按 `observationId` 幂等回放。critical 队列与 spool 都耗尽时仍不得阻塞 Runtime，必须增加 drop counter、触发告警并把查询标为 `partial`。临时 full-detail session 必须绑定 scope/capability/操作者/最长时限，自动过期并审计。任何采样、drop、export lag 必须进入 `ObservationPage.completeness` 与 `observability_dropped_total`，禁止把缺失解释为“未调用”。
+
+#### 硬规格
+
+- **`traceId` 贯穿**：Surfaces→Orchestration→Capability→Kernel→Transport→Memory/Skill→Learning 共用 traceId；异步工作使用 span link。
+- **绝不记敏感内容**：不记录 prompt、memory/Skill 正文、步骤文本、secret、raw Evidence、tool args/output、reasoning；只允许 id、hash、长度、枚举、计数、分数和 reason code。
+- **失败不阻断**：`tryEmit()` 有界且非阻塞；Observation queue/exporter 故障不能影响 Memory、Skill、Usage 或用户回复。
+- **一次埋点，多路投影**：JSONL、OTel、metrics、dashboard 由 Adapter 投影；业务模块禁止多次 emit 同一语义事件。
+- **权威分离**：Observation 不能驱动 Claim/Skill 状态、Policy 或计费；自动 promotion 只能消费权威 RuntimeEvent/EvaluationResult，Observation 仅用于诊断和可重建指标。
+- **资源上限**：单条 envelope ≤16KB；top item/step/reason 数组有 schema 上限；超限确定性截断并写 `truncated=true`。local JSONL `0600`、20MB 锁轮转保留 5 份；多进程锁超时丢 Observation 不阻断主流程。
+- **开销门槛**：同步 emit 本地 p95 ≤2ms、p99 ≤5ms；关闭 exporter 后行为与无 Observability baseline 一致；Observation 不得进入 prompt token 或 Memory 注入预算。
 
 ### R18 Telegram 记忆中间态展示（Phase 2 起）
 
@@ -668,7 +734,7 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - **异步不阻塞（R2）**：`memory_learned` / `skill_learned` 均属 Post-Run 异步结果，不得为显示它们而拖延 `⑤ 立即返回用户`；实现为回复发出后可选追加轻提示，或并入下一轮进度，超时/失败静默丢弃。
 - **skill_learned 门槛**：仅在蒸馏产出 `validated`/`active` 或发生版本升级时提示；`candidate` 态不打扰用户。external 来源 skill 不自动 active，故也不触发该提示（对齐 Skill 系统安全规格）。
 - **降级安全**：所有中间态展示是最佳努力，`ProgressReporter` 现有 429 退避与"best-effort 不影响任务完成"语义继续适用。
-- `memory_injected` 的 N 与 `skill_applied` 的技能名与 R17 `memory.inject` 日志同源，保证"看到的"与"记录的"一致。
+- `memory_injected` 的 N 来自 R17 `memory.inject` Observation；`skill_applied` 的 skill id 来自 `skill.apply`，名称再由授权后的 Skill Service 解析，保证"看到的"与"记录的"一致且不把名称写入 exporter。
 
 ### R19 Claim/Evidence 与来源权限不可洗白（Phase 2 起）
 

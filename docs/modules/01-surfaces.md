@@ -26,6 +26,23 @@
 | `web` | 控制与治理面 |
 | `scheduler` | 定时/事件触发的系统意图 |
 
+### Claude Code / Codex 远程控制的分层
+
+Telegram Bot 只属于 **① Surface**：接收远程消息、做边缘鉴权、构造 `RuntimeRequest`、呈现进度/结果，并把绑定到 user/chat/session/action hash 的确认结果交回 ④ Kernel。它不拥有 Agent 选择、provider routing、tool 授权、Memory、Learning、Usage 或执行真相。
+
+Claude Code 与 Codex CLI 在产品目录中分别是 ③ 的 `agent` Capability；一次运行由 ④ `agent-supervisor` 治理；具体子进程启动、stdin/stdout/JSON stream 转换、session resume 与 CLI 版本差异由 ⑩ 的 `ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 实现。模型流量继续经过 ⑤ 单一 Runtime Transport Proxy 与已选定的 provider/model Adapter。
+
+```text
+Telegram Surface
+  -> Orchestration
+  -> claude-code-agent | codex-cli-agent Capability
+  -> Execution Kernel agent-supervisor
+  -> ClaudeCodeCliAgentAdapter | CodexCliAgentAdapter
+  -> Runtime Transport Proxy -> selected provider/model Adapter
+```
+
+现有 `telegram/engine/types.ts::Engine` 是 delivery-local compatibility facade，不是长期公共 Agent contract。目标态它必须委托 Orchestration 与 `AgentAdapterPort`；Telegram callback 只提交 confirmation decision，禁止直接执行 CLI tool。若某 CLI 版本无法可靠拦截 tool request，Capability descriptor 必须声明限制，Policy 通过该 CLI 原生权限模式、进程/容器隔离、filesystem/network boundary 和显式确认收窄风险，禁止声称已实现无法证明的逐工具强制授权。
+
 ## 4. 对外/消费端口（可插拔点）
 
 - 消费：Orchestration facade（唯一入口），只传 `RuntimeRequest` / 收 `RuntimeEvent` 投影。
@@ -82,7 +99,7 @@ Surfaces **无持久数据所有权**。会话真相属 ② Orchestration 的 Wo
 
 ## B. 统一引擎接口（`telegram/engine/types.ts`）
 
-两个引擎共享统一接口，方便切换——这是 surface 不做 provider 选择、只经稳定接口执行的体现：
+两个引擎当前共享统一接口，方便切换。该接口是 Telegram delivery-local compatibility facade；目标态必须映射到 `AgentRunRequest/AgentRunEvent/AgentAdapterPort`，不能成为绕过 Orchestration/Kernel 的第二条执行路径：
 
 ```typescript
 export interface Engine {

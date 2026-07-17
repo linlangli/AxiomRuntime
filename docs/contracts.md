@@ -412,7 +412,7 @@ Event ordering 与 terminal invariant：
 | `ModelProviderPort` | 模型生成/流式/tool-call 协议 | 本地/CLI adapter | 托管模型 provider |
 | `ToolPort` | 类型化工具调用与结果 | 本地工具/MCP | 企业工具目录 |
 | `WorkflowExecutorPort` | 可恢复 workflow 执行 | 内置执行器 | LangGraph/企业编排器 |
-| `AgentAdapterPort` | Agent runtime 适配，不拥有权限 | Claude/Codex/Hermes | 企业 Agent runtime |
+| `AgentAdapterPort` | Agent runtime 适配，不拥有权限 | `ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` / Hermes adapter | 企业 Agent runtime |
 | `CandidateExtractor` | 记忆抽取 | 内置 | Mem0 风格 |
 | `RetrievalBackend` | 词法/语义/实体/时序检索 | SQLite FTS5 | Postgres/OpenSearch |
 | `VectorRetrievalBackend` | 向量召回 | sqlite-vec | pgvector/Qdrant |
@@ -423,6 +423,7 @@ Event ordering 与 terminal invariant：
 | `ObjectStore` | artifact/大对象的版本化读写与 purge | 本地 content-addressed store | S3 兼容对象存储 |
 | `SecretStore` | secret ref 的 get/set/delete/rotate | Keychain/libsecret/DPAPI | KMS/HSM/Vault |
 | `AuditSink` | append-only 脱敏审计事件 | 本地签名日志 | 企业不可变审计存储 |
+| `ObservabilitySinkPort` / `ObservabilityQueryPort` | 非权威 trace/metric/log 投影与授权查询 | JSONL + OTel file/console | OTLP/APM/可观测平台 |
 | `IdentityDirectoryPort` | identity federation、membership 与 delegated role 查询 | 本地账号目录 | OIDC/SAML + SCIM/企业目录 |
 | `AuditQueryPort` | 按 scope/time/type/actor 查询与导出审计证据 | 本地签名日志索引 | SIEM/不可变审计仓 |
 | `MeteringExportPort` | 从 UsageObserver 权威账本导出 attribution/showback 数据 | JSON/CSV exporter | FinOps/billing exporter |
@@ -744,10 +745,135 @@ type TraceContext = {
   traceId: string;          // Orchestration 在 ExecutionContext 创建时生成，全链路唯一
   spanId: string;           // 当前层/操作的 span
   parentSpanId?: string;    // 上游 span，构成因果树
-  layer: "surface" | "orchestration" | "execution" | "transport" | "memory" | "learning" | "policy";
+  layer: "surface" | "orchestration" | "capability" | "execution" | "transport" | "memory" | "learning" | "policy" | "security";
   source: "telegram" | "cli" | "web" | "desktop" | "api" | "browser" | "scheduler";
 };
+
+type CapabilityKind =
+  | "memory" | "knowledge" | "skill" | "model" | "tool"
+  | "workflow" | "agent" | "retrieval" | "learning" | "policy";
+
+type CapabilityObservationAction =
+  | "capability.resolve" | "capability.invoke" | "capability.result"
+  | "memory.plan" | "memory.retrieve.route" | "memory.filter" | "memory.rank"
+  | "memory.budget" | "memory.compile" | "memory.inject" | "memory.skip"
+  | "memory.extract" | "memory.candidate" | "memory.conflict" | "memory.write"
+  | "memory.feedback" | "memory.compress"
+  | "skill.match" | "skill.select" | "skill.apply" | "skill.step"
+  | "skill.outcome" | "skill.distill" | "skill.validate" | "skill.lifecycle";
+
+type ObservationLink = {
+  traceId: string;
+  spanId: string;
+  relation: "caused_by" | "continued_by" | "evaluated_by" | "compensated_by";
+};
+
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+type JsonObject = { [key: string]: JsonValue };
+
+type CapabilityObservation<TAction extends CapabilityObservationAction = CapabilityObservationAction> = {
+  schemaVersion: 1;
+  observationId: string;
+  action: TAction;
+  trace: TraceContext;
+  operationId: string;
+  executionId?: string;
+  capability: {
+    kind: CapabilityKind;
+    capabilityId: string;
+    version?: string;
+    adapterId?: string;
+    invocationId?: string;
+  };
+  scope: {
+    tenantId: string;
+    kind: ScopeKind;
+    subjectIdHash: string;
+    audience: ScopeRef["audience"];
+  };
+  status: "started" | "succeeded" | "failed" | "cancelled" | "skipped" | "degraded";
+  occurredAt: number;
+  durationMs?: number;
+  links: ObservationLink[];
+  runtimeEventIds: string[];
+  payload: JsonObject;
+};
+
+interface ObservabilitySinkPort {
+  tryEmit(observation: CapabilityObservation): "accepted" | "dropped";
+  flush(input: { deadlineAt: number }): Promise<{ accepted: number; exported: number; dropped: number }>;
+}
+
+type ObservationQuery = {
+  requester: PrincipalRef;
+  policySnapshotId: string;
+  scope: ScopeRef;
+  traceId?: string;
+  executionId?: string;
+  capabilityKinds?: CapabilityKind[];
+  actionPrefixes?: Array<"capability" | "memory" | "skill">;
+  statuses?: CapabilityObservation["status"][];
+  occurredFrom: number;
+  occurredUntil: number;
+  view: "summary" | "explain" | "internal";
+  cursor?: string;
+  limit: number;
+};
+
+type ObservationViewRecord = {
+  viewSchemaVersion: 1;
+  observationId: string;
+  action: CapabilityObservationAction;
+  trace: Pick<TraceContext, "traceId" | "spanId" | "parentSpanId" | "layer" | "source">;
+  operationId?: string;
+  executionId?: string;
+  capability: {
+    kind: CapabilityKind;
+    capabilityId?: string;
+    version?: string;
+    adapterId?: string;
+    invocationId?: string;
+  };
+  scope: Pick<CapabilityObservation["scope"], "kind" | "audience">;
+  status: CapabilityObservation["status"];
+  occurredAt: number;
+  durationMs?: number;
+  links?: ObservationLink[];
+  runtimeEventIds?: string[];
+  payload: JsonObject;
+  redactedFields: string[];
+};
+
+type ObservationCompleteness = {
+  state: "complete" | "sampled" | "partial";
+  reasons: Array<
+    | "sampling_policy" | "sink_drop" | "export_lag" | "retention_boundary"
+    | "trace_open" | "missing_parent" | "projection_corrupt"
+  >;
+  droppedEstimate: number | null;
+  projectionWatermarkAt: number;
+  traceState: "open" | "closed" | "unknown";
+};
+
+type ObservationPage = {
+  observations: ObservationViewRecord[];
+  nextCursor?: string;
+  completeness: ObservationCompleteness;
+};
+
+interface ObservabilityQueryPort {
+  query(input: ObservationQuery): Promise<ObservationPage>;
+}
 ```
+
+`CapabilityObservation` 是可丢弃、可采样、非权威的诊断 envelope；每个 `action` 的 payload 必须按 R17 注册的 closed JSON Schema 校验。`RuntimeEvent` 继续承担 durable lifecycle/audit evidence，Observation 只能通过 `runtimeEventIds` 引用它，禁止根据缺失 Observation 推断操作未发生。同步调用和子调用使用 parent/child span；Post-Run、distill、evaluation 等异步 job 继承 `traceId` 并使用 `ObservationLink`，禁止伪造为仍在原同步调用栈中。
+
+调用点只调用一次 `ObservabilitySinkPort.tryEmit()`；local JSONL、OpenTelemetry trace/metric/log 和企业 OTLP exporter 都是该 Port 后的 projection adapter，禁止在业务代码分别重复埋点。`tryEmit()` 必须是有界、非阻塞操作；queue 满时增加低基数 `observability_dropped_total{action_family,reason}` 并丢弃 Observation，不得阻塞 Runtime、Memory 或 Skill。
+
+`ObservabilityQueryPort` 是受 Policy 控制的诊断查询，不是日志文件透传。它必须把内部 `CapabilityObservation` 投影成 `ObservationViewRecord`，并按 action + view 的 closed output schema 删除未授权字段；`summary/explain/internal` 分别应用独立 allowlist。cursor 必须 opaque、签名、tenant/scope/view/filter-bound 且带有效期；修改原查询后复用 cursor 必须返回 `invalid_cursor`。`requester.tenantId`、`scope.tenantId` 与 cursor tenant 不一致默认拒绝；平台级跨租户调查必须使用针对目标 tenant 的独立 break-glass permission、短时授权并写审计，且仍保持“一次查询一个 tenant”，禁止跨 tenant 混页或复用 cursor。`view=internal` 本身不能绕过 tenant isolation。
+
+`completeness.state=complete` 仅在 trace 已关闭、查询时间位于 retention 内、投影 watermark 已越过 trace terminal，且没有匹配该 trace 的已知 sampling/drop/gap 时返回；仅因有意采样缺失时为 `sampled`；sink drop、export lag、retention 截断、trace 尚未关闭、缺 parent 或投影损坏均为 `partial` 并列出 `reasons`。`droppedEstimate=null` 表示无法可靠估算，禁止用 `0` 伪装无丢失。分页只切分结果，不改变 completeness；所有页必须固定同一 query cutoff 与 watermark。
 
 各层最小埋点职责（每个 span 必挂同一 `traceId`，`action` 命名归各模块规范）：
 
@@ -757,7 +883,9 @@ type TraceContext = {
 | Orchestration | traceId 生成、路由决策 | engine、provider、policy 结果 | [02-orchestration.md](modules/02-orchestration.md) |
 | Execution | 引擎调用生命周期 | engine、tool 事件计数、exit 类别 | [04-execution-kernel.md](modules/04-execution-kernel.md) |
 | Transport | route lease、metrics parity | listener/upstream、token/cost、熔断态 | [05-transport-proxy.md](modules/05-transport-proxy.md) |
-| Memory | retrieve→rank→budget→inject→extract→write | memoryId/分数/长度/reason（R17） | [enforcement-decisions.md](enforcement-decisions.md) R17 |
+| Capability | resolve→invoke→result | capability/version/adapter、permission result、耗时/错误 | [03-capabilities.md](modules/03-capabilities.md) |
+| Memory | plan→route retrieval→filter→rank→budget→compile→inject→extract→write | route/filter reason、memoryId/分数/长度/耗时（R17） | [enforcement-decisions.md](enforcement-decisions.md) R17 |
+| Skill | match→select→apply→step→outcome→lifecycle | skill/version/trigger、step/capability、guardrail、偏离与结果归因（R17） | [enforcement-decisions.md](enforcement-decisions.md) R17 |
 | Learning | signal/decision/evaluation/promotion | 四项 Capability 度量随 traceId（Q5） | enforcement-decisions.md Q5 |
 
 硬规格：
@@ -767,6 +895,8 @@ type TraceContext = {
 - **失败不阻断**：可观测性是 best-effort，埋点异常**绝不**影响主链路或用户回复。
 - **后端非权威**：telemetry backend（OTel exporter）**不是**审计账本；权威证据仍是 `RuntimeEvent` 与加密审计（对齐 [10-adapters-plugins.md](modules/10-adapters-plugins.md) OTel adopt 边界）。
 - **传播标准**：跨进程/跨服务传播采用 W3C Trace Context；`local` profile 用 OTel file/console exporter 降级，语义不变。
+- **指标低基数**：`traceId`、`executionId`、`memoryId`、`skillId`、`invocationId`、user/project id 只能出现在受限 trace/log，不得成为 metric label；metric label 只允许 action family、capability kind、status、route、adapter family、error code 和 deployment profile。
+- **查询授权**：按 trace、principal、scope、Memory/Skill id 查询 Observation 必须重新执行 Policy；普通用户只查看自己的脱敏 explain view，运营者查看聚合指标，原始内部 id 与跨租户关联只对授权审计角色开放。
 
 ## 7. 相关文档
 

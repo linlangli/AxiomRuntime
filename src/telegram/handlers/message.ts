@@ -1,14 +1,18 @@
 import { InputFile, type Bot, type Context } from "grammy";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import type { TelegramConfig, TelegramEngineName } from "../config.js";
 import type { Engine, ExecutionResult } from "../engine/types.js";
 import { getTelegramEngine, type TelegramEngineMap } from "../engine/registry.js";
 import { recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../../core/config/cache-store.js";
 import { resolveProviderCandidatesForTool } from "../../core/runner/fallback.js";
 import type { ApprovalManager } from "../interaction/approval.js";
-import { parseTelegramCommand, resolveMappedCommand } from "../interaction/command-menu.js";
-import { Formatter, truncateText } from "../interaction/formatter.js";
+import { parseTelegramCommand, resolveMappedCommand, safeSetChatCommandMenu } from "../interaction/command-menu.js";
+import { Formatter, truncateText, splitPlainText, escapeHtml } from "../interaction/formatter.js";
 import { applyPromptMiddlewares } from "../interaction/prompt-middleware.js";
 import { ProgressReporter } from "../interaction/progress-reporter.js";
+import { ResultStore } from "../interaction/result-store.js";
+import { buildResultKeyboard } from "../interaction/keyboards.js";
 import { emitTelegramTaskCompleted, emitTelegramTaskFailed } from "../lifecycle-registry.js";
 import type { SessionManager, TelegramSession } from "../session/manager.js";
 import type { MemoryService } from "../memory/memory-service.js";
@@ -30,6 +34,9 @@ export type MessageHandlerDeps = {
 
 export const DEFAULT_PROMPT_TIMEOUT_MS = 15 * 60 * 1000;
 export const CLI_INIT_TIMEOUT_MS = 3 * 60 * 1000;
+const STALE_SESSION_THRESHOLD_MS = 20 * 60 * 1000;
+
+export const resultStore = new ResultStore();
 
 type ProviderAttempt = {
   providerName?: string;
@@ -56,6 +63,15 @@ export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void
     if (!chatId) return;
     const session = deps.sessionManager.getOrCreate(chatId);
     if (text.startsWith("/")) {
+      void writeTelegramLog({ action: "slash_command_received", message: `cmd=${text.split(/\s/)[0]} setupStep=${session.setupStep} chatId=${chatId}` });
+      if (session.setupStep === "command_name") {
+        await handleCommandNameInput(ctx, deps, text, session);
+        return;
+      }
+      if (session.setupStep === "command_template") {
+        await handleCommandTemplateInput(ctx, deps, text, session, bot);
+        return;
+      }
       await executeMappedSlashCommand(ctx, deps, text, session);
       return;
     }
@@ -91,6 +107,14 @@ export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void
       }
       return;
     }
+    if (session.setupStep === "command_name") {
+      await handleCommandNameInput(ctx, deps, text, session);
+      return;
+    }
+    if (session.setupStep === "command_template") {
+      await handleCommandTemplateInput(ctx, deps, text, session, bot);
+      return;
+    }
     if (await remindSetup(ctx, deps, session)) return;
     await executePrompt(ctx, deps, text);
   });
@@ -105,16 +129,35 @@ async function executeMappedSlashCommand(
   const parsed = parseTelegramCommand(text);
   if (!parsed) return;
   if (await remindSetup(ctx, deps, session)) return;
-  const mapped = resolveMappedCommand(session.engine, parsed.command);
+  const customCommands = deps.sessionManager.listCustomCommands(session.chatId, session.cwd);
+  const mapped = resolveMappedCommand(session.engine, parsed.command, customCommands);
   if (!mapped) {
     await ctx.reply("未知命令，请通过 / 打开当前 CLI 可用命令。");
+    return;
+  }
+  if (mapped.prompt === "/__register_command") {
+    deps.sessionManager.update(session.id, { setupStep: "command_name" });
+    await ctx.reply(Formatter.commandNamePrompt());
+    return;
+  }
+  if (mapped.prompt.startsWith("/__custom_")) {
+    await executeCustomCommand(ctx, deps, parsed.command, parsed.args, session);
     return;
   }
   const prompt = [mapped.prompt, parsed.args].filter(Boolean).join(" ");
   await executePrompt(ctx, deps, prompt, session.engine);
 }
 
-export async function runCliInit(ctx: Context, deps: MessageHandlerDeps, engine?: TelegramEngineName): Promise<void> {
+export async function runCliInit(ctx: Context, deps: MessageHandlerDeps, engine?: TelegramEngineName, options: { edit?: boolean } = {}): Promise<void> {
+  try {
+    if (options.edit) {
+      await ctx.editMessageText("🤖 等我熟悉一下当前工作目录哦", { reply_markup: { inline_keyboard: [] } });
+    } else {
+      await ctx.reply("🤖 等我熟悉一下当前工作目录哦");
+    }
+  } catch {
+    // Best-effort notification.
+  }
   await executePrompt(ctx, deps, "/init", engine, {
     silentSuccess: true,
     suppressFailureReply: true,
@@ -164,8 +207,13 @@ async function executePromptLocked(
   }
 
   if (session.status === "running" || session.status === "waiting_approval") {
-    await ctx.reply("已有任务正在运行，请等待完成。");
-    return false;
+    const staleMs = Date.now() - new Date(session.lastActiveAt).getTime();
+    if (staleMs > STALE_SESSION_THRESHOLD_MS) {
+      session = deps.sessionManager.update(session.id, { status: "idle" });
+    } else {
+      await ctx.reply("已有任务正在运行，请等待完成或使用 /stop 终止。");
+      return false;
+    }
   }
 
   session = deps.sessionManager.update(session.id, {
@@ -175,7 +223,8 @@ async function executePromptLocked(
   const stopTypingStatus = startTypingStatus(ctx, chatId);
   const reporter = new ProgressReporter(ctx.api, chatId, {
     silent: options.silentSuccess ?? false,
-    throttleMs: options.progressThrottleMs
+    throttleMs: options.progressThrottleMs,
+    isResume: Boolean(session.engineSessionId)
   });
 
   try {
@@ -336,7 +385,33 @@ async function sendResult(
   maxOutputLength: number,
   reporter?: ProgressReporter
 ): Promise<void> {
-  const formatted = Formatter.taskCompleted(engine, result, Math.min(maxOutputLength, 2500));
+  const chatId = ctx.chat?.id;
+  const hasFullOutput = (result.response || "").trim().length > 200;
+  const hasDiff = Boolean(result.diff);
+
+  if (chatId) resultStore.set(chatId, result);
+
+  const cardHtml = Formatter.resultCard(result);
+  const keyboard = buildResultKeyboard(hasFullOutput, hasDiff);
+
+  if (cardHtml.length <= 4000) {
+    const replaced = await reporter?.replaceWithHtml(
+      cardHtml,
+      truncateText((result.response || "(empty)").trim(), maxOutputLength),
+      { reply_markup: { inline_keyboard: keyboard.inline_keyboard } }
+    );
+    if (replaced) return;
+    await replyHtmlWithPlainFallback(ctx, cardHtml, truncateText((result.response || "(empty)").trim(), maxOutputLength), keyboard);
+    return;
+  }
+
+  void engine;
+  const footer = formatResultFooter(result);
+  const fileSummary = Formatter.fileChangeSummary(result.filesChanged, result.diff);
+  const suffix = [fileSummary, footer].filter(Boolean).join("\n\n");
+  const formatted = Formatter.taskCompleted(engine, result, Math.min(maxOutputLength, 2500))
+    + (suffix ? `\n\n${suffix}` : "");
+
   if (formatted.length <= 4000 && result.response.length <= maxOutputLength) {
     if (await reporter?.replaceWithHtml(formatted, truncateText((result.response || "(empty)").trim(), maxOutputLength))) {
       return;
@@ -345,8 +420,24 @@ async function sendResult(
     return;
   }
 
+  const responseText = (result.response || "(empty)").trim();
+  if (responseText.length <= 12000) {
+    const chunks = splitPlainText(responseText, 3800);
+    const firstChunk = chunks[0] + (chunks.length === 1 && suffix ? `\n\n${suffix}` : "");
+    if (!(await reporter?.replaceWithHtml(firstChunk, chunks[0]))) {
+      await withTelegramNetworkRetry(() => ctx.reply(firstChunk));
+    }
+    for (let i = 1; i < chunks.length; i++) {
+      const isLast = i === chunks.length - 1;
+      const text = isLast && suffix ? `${chunks[i]}\n\n${suffix}` : chunks[i];
+      await withTelegramNetworkRetry(() => ctx.reply(text));
+    }
+    return;
+  }
+
   const attachmentNotice = "Output is attached as a file.";
-  const formattedNotice = Formatter.taskCompleted(engine, { ...result, response: attachmentNotice }, 800);
+  const formattedNotice = Formatter.taskCompleted(engine, { ...result, response: attachmentNotice }, 800)
+    + (suffix ? `\n\n${suffix}` : "");
   if (!(await reporter?.replaceWithHtml(formattedNotice, attachmentNotice))) {
     await withTelegramNetworkRetry(() => ctx.reply(formattedNotice, { parse_mode: "HTML" }));
   }
@@ -365,16 +456,39 @@ async function sendResult(
 }
 
 async function sendFailure(ctx: Context, reporter: ProgressReporter, message: string): Promise<void> {
-  const html = Formatter.taskFailed(message);
-  if (await reporter.replaceWithHtml(html, `Failed\n\n${truncateText(message, 1500)}`)) {
+  const hint = classifyErrorHint(message);
+  const display = hint ? `${message}\n\n💡 ${hint}` : message;
+  const html = Formatter.taskFailed(display);
+  if (await reporter.replaceWithHtml(html, `Failed\n\n${truncateText(display, 1500)}`)) {
     return;
   }
   await withTelegramNetworkRetry(() => ctx.reply(html, { parse_mode: "HTML" }));
 }
 
-async function replyHtmlWithPlainFallback(ctx: Context, html: string, fallbackText: string): Promise<void> {
+function classifyErrorHint(message: string): string | null {
+  if (/Failed to find .* CLI/i.test(message)) {
+    return "CLI 未安装，请确认 claude 或 codex 已正确安装并在 PATH 中。";
+  }
+  if (/timed?\s*out/i.test(message)) {
+    return "任务超时，可使用 /stop 提前终止长任务。";
+  }
+  if (/Dangerous command denied/i.test(message)) {
+    return null;
+  }
+  if (/任务已停止/i.test(message)) {
+    return null;
+  }
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|502|503|429/i.test(message)) {
+    return "Provider 连接异常，系统已尝试 fallback。请稍后重试或检查网络。";
+  }
+  return null;
+}
+
+async function replyHtmlWithPlainFallback(ctx: Context, html: string, fallbackText: string, keyboard?: import("grammy").InlineKeyboard): Promise<void> {
   try {
-    await withTelegramNetworkRetry(() => ctx.reply(html, { parse_mode: "HTML" }));
+    const extra: Record<string, unknown> = { parse_mode: "HTML" };
+    if (keyboard) extra.reply_markup = keyboard;
+    await withTelegramNetworkRetry(() => ctx.reply(html, extra));
   } catch {
     await withTelegramNetworkRetry(() => ctx.reply(fallbackText || "(empty)"));
   }
@@ -463,6 +577,18 @@ function summarizeError(message: string): string {
   return message.replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
+function formatResultFooter(result: ExecutionResult): string {
+  const parts: string[] = [];
+  if (result.duration && result.duration > 0) {
+    const seconds = Math.round(result.duration / 1000);
+    parts.push(seconds >= 60 ? `${Math.floor(seconds / 60)}m${seconds % 60}s` : `${seconds}s`);
+  }
+  if (result.provider) parts.push(result.provider);
+  if (result.model) parts.push(result.model);
+  if (!parts.length) return "";
+  return `<i>⏱ ${parts.join(" · ")}</i>`;
+}
+
 export function startTypingStatus(ctx: Pick<Context, "api">, chatId: number): () => void {
   let stopped = false;
   const sendTyping = async (): Promise<void> => {
@@ -480,4 +606,97 @@ export function startTypingStatus(ctx: Pick<Context, "api">, chatId: number): ()
     stopped = true;
     clearInterval(interval);
   };
+}
+
+const execAsync = promisify(exec);
+
+const pendingCommandRegistration = new Map<number, { name: string; params: string[]; description: string }>();
+
+async function handleCommandNameInput(
+  ctx: Context,
+  deps: MessageHandlerDeps,
+  text: string,
+  session: TelegramSession
+): Promise<void> {
+  const input = text.replace(/^\//, "").trim();
+  if (!input) {
+    await ctx.reply(Formatter.commandNamePrompt());
+    return;
+  }
+  const params: string[] = [];
+  input.replace(/\[(\w+)\]/g, (_, p) => {
+    params.push(p);
+    return "";
+  });
+  const name = input.split(/\s/)[0]!.replace(/\[.*$/, "").toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  if (!name) {
+    await ctx.reply(Formatter.commandNamePrompt());
+    return;
+  }
+  const description = `/${input}`;
+  pendingCommandRegistration.set(session.chatId, { name, params, description });
+  deps.sessionManager.update(session.id, { setupStep: "command_template" });
+  await ctx.reply(Formatter.commandTemplatePrompt(params), { parse_mode: "HTML" });
+}
+
+async function handleCommandTemplateInput(
+  ctx: Context,
+  deps: MessageHandlerDeps,
+  text: string,
+  session: TelegramSession,
+  bot: Bot
+): Promise<void> {
+  const pending = pendingCommandRegistration.get(session.chatId);
+  if (!pending) {
+    deps.sessionManager.update(session.id, { setupStep: "ready" });
+    await ctx.reply("注册流程已失效，请重新 /command");
+    return;
+  }
+  pendingCommandRegistration.delete(session.chatId);
+  const cmd = { ...pending, template: text.trim() };
+  deps.sessionManager.addCustomCommand(session.chatId, session.cwd, cmd);
+  deps.sessionManager.update(session.id, { setupStep: "ready" });
+  const customCommands = deps.sessionManager.listCustomCommands(session.chatId, session.cwd);
+  await safeSetChatCommandMenu(bot, session.chatId, session.engine, customCommands);
+  await ctx.reply(Formatter.commandRegistered(cmd.name, cmd.description), { parse_mode: "HTML" });
+}
+
+async function executeCustomCommand(
+  ctx: Context,
+  deps: MessageHandlerDeps,
+  commandName: string,
+  argsText: string,
+  session: TelegramSession
+): Promise<void> {
+  const commands = deps.sessionManager.listCustomCommands(session.chatId, session.cwd);
+  const cmd = commands.find((c) => c.name === commandName);
+  if (!cmd) {
+    await ctx.reply("自定义命令不存在。");
+    return;
+  }
+  const argValues = parseCustomCommandArgs(argsText, cmd.params.length);
+  let shell = cmd.template;
+  for (let i = 0; i < cmd.params.length; i++) {
+    const value = argValues[i] ?? "";
+    shell = shell.replaceAll(`[${cmd.params[i]}]`, value);
+  }
+  await ctx.reply(`⚙️ 执行中：<code>${escapeHtml(shell)}</code>`, { parse_mode: "HTML" });
+  try {
+    const { stdout, stderr } = await execAsync(shell, { cwd: session.cwd, timeout: 60_000 });
+    const output = (stdout || stderr || "（无输出）").trim();
+    const text = truncateText(output, 3800);
+    await ctx.reply(`<pre>${escapeHtml(text)}</pre>`, { parse_mode: "HTML" });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    await ctx.reply(`❌ 执行失败：\n<pre>${escapeHtml(truncateText(msg, 3800))}</pre>`, { parse_mode: "HTML" });
+  }
+}
+
+function parseCustomCommandArgs(argsText: string, paramCount: number): string[] {
+  if (!argsText || paramCount === 0) return [];
+  const parts = argsText.split(/\s+/);
+  if (parts.length <= paramCount) return parts;
+  const result = parts.slice(0, paramCount - 1);
+  result.push(parts.slice(paramCount - 1).join(" "));
+  return result;
 }

@@ -23,13 +23,13 @@
 | `learning-governor` | 确定性选择：no artifact/extract/verify/ask/consolidate/evaluate/promote/rollback |
 | `evaluation` | `EvaluationHarness` 版本化评测（产出证据，非授权） |
 | `promotion` | scope 提升、组织级激活（需人类授权） |
-| `attribution` | retrieved/injected/referenced/decision-changed/outcome-changed 分离归因 |
+| `attribution` | 从权威 outcome/evaluation 计算 retrieved/injected/referenced/decision-changed/outcome-changed，并投影为 Memory/Skill Observation |
 | `audit` | provenance、可 deprecate/supersede/export/purge |
 
 ## 4. 对外/消费端口（可插拔点）
 
 - 消费：`RuntimeEvent`（来自 ②/④）、`EvaluationHarness`、`CompressionManifest`、⑥ 的候选与证据、⑧ `PolicyEngine`。
-- 产出：激活的 artifact / 保留的 candidate / rollback 记录 + `CapabilityGain`。
+- 产出：激活的 artifact / 保留的 candidate / rollback 记录 + `CapabilityGain`；经 `ObservabilitySinkPort` 输出非权威 attribution/lifecycle Observation。
 - 评测集与评测器可换（本地基准 / 企业评测集）。
 
 ## 5. 依赖（低耦合）
@@ -60,6 +60,8 @@
 - 交互可产生自动学习信号，但模型输出**不能**绕过确定性激活策略。
 - Runtime 能解释为何 learned/asked/verified/consolidated/promoted/ignored/rolled back。
 - "更强" 操作定义：纠错率下降 且 任务成功率不降 且 检索精度不回归（SPEC Q5）。
+- Skill 正向复用必须同时具备 postcondition success、task success、无 hard regression 与明确贡献证据；仅 match/apply 或任务碰巧成功不得计入 `CapabilityGain`。
+- distill/validate/lifecycle/promotion 与来源 execution 通过 span link 可追溯；Observation 缺失只影响诊断完整度，不能改变权威 `LearningDecision` 或 promotion 结果。
 
 ## 11. 相关文档
 

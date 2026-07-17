@@ -26,10 +26,11 @@ Runtime 的学习与知识底座：以 Claim/Evidence 账本为**唯一真相源
 | `skill` | 程序性类型（Skill IR，R36 挖掘/参数化/自愈） |
 | `experience` | 情景类型（episode） |
 | `recall` | Planner→多源召回→RRF 融合→Authority/Taint 过滤→Context Compiler |
+| `observation` | 按 R17 产生 Memory/Skill typed Observation；一次 emit，由 JSONL/OTel Adapter 投影 |
 
 ## 4. 对外/消费端口（可插拔点）
 
-- 消费：`CandidateExtractor`、`RetrievalBackend`、`VectorRetrievalBackend`、`TemporalGraphProjection`、`ProcedureMiner`（全部可替换后端）。
+- 消费：`CandidateExtractor`、`RetrievalBackend`、`VectorRetrievalBackend`、`TemporalGraphProjection`、`ProcedureMiner`（全部可替换后端）与非阻塞 `ObservabilitySinkPort`。
 - 暴露：向 ⑤ MemoryExtension 提供注入 patch 内容；向 ⑦ 提供候选与证据。
 - 各检索后端独立开关（feature flag 逐路启用，见 [enforcement-decisions.md](../enforcement-decisions.md) Q1）。
 
@@ -39,11 +40,11 @@ Runtime 的学习与知识底座：以 Claim/Evidence 账本为**唯一真相源
 
 ## 6. 数据所有权
 
-**独占**账本真相（Claim/Evidence/`memory_units`）——全系统唯一。画像 Snapshot、时序图是账本上的**版本化投影**，可失效、可回滚、可重建，**禁**反向成为真相。压缩替换投影，**禁**销毁 provenance/purge 可达性/显式 pin/审计历史。
+**独占**账本真相（Claim/Evidence/`memory_units`）——全系统唯一。画像 Snapshot、时序图是账本上的**版本化投影**，可失效、可回滚、可重建，**禁**反向成为真相。压缩替换投影，**禁**销毁 provenance/purge 可达性/显式 pin/审计历史。`CapabilityObservation` 是可丢弃诊断投影，不属于账本，不得作为 Claim/Skill 状态变化、Policy 或计费依据。
 
 ## 7. 降级 / kill switch
 
-无 vector provider → 降级为 FTS+recency 正常运行。graph 不可用 → 降级时序 SQL。任一可选后端丢失只降**该路**召回，**禁**绕过 scope 或关掉显式记忆控制。Memory mode 由 ⑤ 收窄（`disabled|passthrough|shadow_capture|read_only|full`）。
+无 vector provider → 降级为 FTS+recency 正常运行。graph 不可用 → 降级时序 SQL。任一可选后端丢失只降**该路**召回，**禁**绕过 scope 或关掉显式记忆控制。Memory mode 由 ⑤ 收窄（`disabled|passthrough|shadow_capture|read_only|full`）。Observation sink/exporter 故障只把 trace 标记为 `partial` 并增加 drop metric，禁止降低 Memory mode、阻塞主链或影响 Usage。
 
 ## 8. 产品化就绪度
 
@@ -59,6 +60,9 @@ Runtime 的学习与知识底座：以 Claim/Evidence 账本为**唯一真相源
 - 压缩投影可失效/回滚到权威 Claim/Evidence 且不丢 purge 可达性。
 - retrieval 频次**不**提升事实 confidence；事实 confidence 来自 evidence。
 - scope 提升**不**迁移私有 evidence，**不**因单一 principal 反复使用而组织级激活。
+- 每次 Memory 调用可按 trace 解释 invoke reason、逐 route latency/hit/error、过滤 reason counts、rank/budget/compiler、最终 injection 与 outcome attribution；每个 route 明确记录授权过滤是否生效。
+- 每次 Skill 应用可还原 match→select→apply→step→outcome；每个 step 关联实际 `CapabilityInvocation`，Agent 偏离与 postcondition 结果可见，且不记录步骤正文或 tool args/output。
+- JSONL、OpenTelemetry 和 dashboard 来自同一 `CapabilityObservation` emission；关闭/阻塞 exporter 时 Memory/Skill 结果与 baseline 一致。
 
 ## 11. 相关文档
 
@@ -862,3 +866,15 @@ external < assistant/model_inferred < tool_verified < user_stated < user_confirm
 最终 scope 扩展为 private user、agent-private、project-shared、team-shared 和 delegated memory。共享记忆必须带 owner、readers、writers、delegation chain、audience 和 purpose limitation；子 Agent 默认只能写 episode/candidate，提升为共享 semantic memory 需要 owner policy。
 
 图片、文档、音频和 UI 状态使用加密 Artifact Store 保存原始对象，SQLite 只保存 hash、媒体类型、区域引用、OCR/vision observations 和派生 Claim。任何多模态派生内容继续继承原始 artifact 的 authority 和 privacy 标签。
+
+## T. Memory / Skill Observability 实施规格
+
+实现时在 Memory Service 内提供单一 `observeMemory(action, payload, context)` helper，负责从 `ExecutionContext.trace` 派生 span，补齐 capability/scope/operation 字段，执行 action JSON Schema、字段 allowlist、数组上限和 hash/length 转换，然后调用 `ObservabilitySinkPort.tryEmit()`。Retriever、Context Compiler、extractor、Ledger、Skill matcher/executor 禁止各自直接调用 JSONL 或 OpenTelemetry SDK。
+
+Pre-Read 固定 span 顺序为 `memory.plan → memory.retrieve.route* → memory.filter → memory.rank → memory.budget → memory.compile → memory.inject`；没有进入下一阶段时必须以 `memory.skip` 或上一个 span 的 failed/degraded 终态结束。Skill 固定为 `skill.match → skill.select → skill.apply → skill.step* → skill.outcome`，没有 selected Skill 不是错误，但必须在 `skill.select` 记录 reason counts。
+
+Post-Run 和 Skill distill 从 durable job payload 读取原 trace context 与 source span id，用 `continued_by` link 连接，不延长用户请求 duration。Observation payload 只保存 operation/id/hash/length/count/enum/rounded score/reason code；Skill name、memory content、trigger keyword、step text、tool args/output、prompt、reasoning 与 raw Evidence 禁止进入 envelope。
+
+查询侧只经 `ObservabilityQueryPort`：`summary` 返回阶段、状态、耗时和计数；`explain` 增加授权后的 id、score、reason 与调用关系；`internal` 才可返回 adapter/version、policy decision id 和内部 canonical id。Query Adapter 将内部 envelope 投影为 action + view 的 closed schema，禁止原始 payload 透传。cursor 绑定 tenant/scope/view/filter/cutoff；`internal` 不授予跨租户权限，break-glass 调查必须按目标 tenant 单独授权、逐 tenant 查询、自动过期并审计。
+
+查询结果按 [contracts](../contracts.md#6-运行时可观测性契约跨层observability) 返回结构化 completeness：trace 未关闭、projection lag、drop、retention 截断或缺 parent 均显示 `partial`，只有 policy sampling 导致缺失才显示 `sampled`。Cost & Latency 页只把 Observation latency 与 `UsageObserver` 权威 read model 做只读关联，不把 token/cost 写回 Observation。详细 action 与 payload schema 以 [../enforcement-decisions.md](../enforcement-decisions.md) R17 为唯一行为规范。

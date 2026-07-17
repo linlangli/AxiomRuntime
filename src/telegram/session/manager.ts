@@ -1,7 +1,7 @@
 import type { TelegramConfig } from "../config.js";
 import type { TokenUsage } from "../../core/types.js";
 import type { SessionStore } from "./store.js";
-import type { TelegramAttachment, TelegramConversationTurn, TelegramProviderUsage, TelegramSession } from "./types.js";
+import type { CustomCommand, TelegramAttachment, TelegramConversationTurn, TelegramProviderUsage, TelegramSession } from "./types.js";
 
 export type TelegramProviderUsageInput = {
   provider: string;
@@ -180,8 +180,24 @@ export class SessionManager {
     return this.store.listWorkdirs(chatId, limit);
   }
 
+  addCustomCommand(chatId: number, cwd: string, cmd: CustomCommand): void {
+    this.store.addCustomCommand(chatId, cwd, cmd);
+  }
+
+  listCustomCommands(chatId: number, cwd: string): CustomCommand[] {
+    return this.store.listCustomCommands(chatId, cwd);
+  }
+
+  deleteCustomCommand(chatId: number, cwd: string, name: string): boolean {
+    return this.store.deleteCustomCommand(chatId, cwd, name);
+  }
+
   cleanupExpired(): number {
     return this.store.deleteExpired(this.config.sessionTimeoutHours);
+  }
+
+  resetOrphanSessions(): number {
+    return this.store.resetRunningToIdle();
   }
 }
 

@@ -27,12 +27,15 @@
 | `workflow` | 可 checkpoint/signal/resume/compensate 的版本化状态机定义 |
 | `agent` | 外部 reasoning/execution runtime 的受限适配入口，不拥有权限 |
 | `skill` | 经验证的程序性知识，可建议 Tool/Workflow，但不能授予 capability |
+| `observation` | 为 resolve/invoke/result 派生统一 `CapabilityObservation`，关联专用 Memory/Skill 子 span |
+
+Claude Code 与 Codex CLI 在本层分别注册为 `kind=agent` 的 `CapabilityDescriptor`（例如 `claude-code-agent`、`codex-cli-agent`），而不是注册为 Surface 或普通 Model Provider。Descriptor 固定 CLI compatibility range、所需权限、支持的 permission mode、tool interception、resume/cancel/event cursor、isolation、provider/model constraints 与已验证 Adapter 版本；Registry 只解析已批准且健康的版本，不直接 spawn 子进程。
 
 ## 4. 对外/消费端口（可插拔点）
 
 - 暴露：`CapabilityDescriptor`（id/semver/permissions/configSchema/health/lifecycle）、`CapabilityInvocation`。
 - 暴露：`ToolDescriptor/ToolInvocation`、`WorkflowDefinition/WorkflowRunState`、`AgentRunRequest/AgentRunEvent`。
-- 消费：`ToolPort`、`WorkflowExecutorPort`、`AgentAdapterPort` 与各能力后端 Port（如 memory→⑥）。
+- 消费：`ToolPort`、`WorkflowExecutorPort`、`AgentAdapterPort`、`ObservabilitySinkPort` 与各能力后端 Port（如 memory→⑥）。
 - 换实现 = 注册另一 descriptor + Policy 激活；`registry.resolve(port, ctx)` 取当前激活实现，调用方零改动。
 
 Tool/Workflow/Agent 的共同规则：
@@ -48,7 +51,7 @@ Tool/Workflow/Agent 的共同规则：
 
 ## 6. 数据所有权
 
-能力层**无独立真相源**。memory 真相在 ⑥ 账本；usage 真相在 ⑤ UsageObserver；registry 仅持 descriptor 与激活态（激活态的权威来自 Policy 决策记录）。
+能力层**无独立真相源**。memory 真相在 ⑥ 账本；usage 真相在 ⑤ UsageObserver；registry 仅持 descriptor 与激活态（激活态的权威来自 Policy 决策记录）。Capability Observation 是可采样诊断投影，不是 invocation terminal、权限或激活状态的权威来源。
 
 ## 7. 降级 / kill switch
 
@@ -71,7 +74,10 @@ Tool/Workflow/Agent 的共同规则：
 - Tool contract fixture 覆盖 schema invalid、idempotency conflict、cancel、deadline、side-effect unknown、compensation success/failure。
 - Workflow fixture 覆盖 checkpoint crash recovery、重复 signal、waiting confirmation、逐步 retry、reverse compensation 与 manual recovery。
 - Agent fixture 覆盖 event resume/dedup、tool proposal 再授权、provider 固定、confirmation、budget/step limit、cancel 与 reasoning 不落盘。
+- Claude Code/Codex 的 Capability、Kernel run 与 CLI Adapter 三个身份可分别追踪；从 Telegram 与本机 CLI 调用同一 descriptor 时产生相同的权限、provider 固定、event 和 Usage 语义。
 - 能力层代码中**不存在**供应商 SDK 类型作为公共契约。
+- 每个 resolved invocation 产生 `capability.resolve→invoke→result` 调用链，固定 capability/version/adapter/policy snapshot；Memory/Skill 专用 span 能关联到实际 Tool/Workflow/Agent/Model invocation，不重复 emit 通用终态。
+- 指标标签不含 trace/user/memory/skill/invocation 等高基数 id；sink/drop/exporter 故障不改变能力选择、执行结果或 retry owner。
 
 ## 11. 相关文档
 

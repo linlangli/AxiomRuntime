@@ -140,23 +140,24 @@ export async function selectSetupModel(
   await showWorkdirStart(ctx, deps, { edit: true });
 }
 
-export async function showWorkdirStart(ctx: Context, deps: SetupDeps, options: { edit?: boolean; scope?: "setup" | "ready" } = {}): Promise<void> {
+export async function showWorkdirStart(ctx: Context, deps: SetupDeps, options: { edit?: boolean; scope?: "setup" | "ready"; prompt?: string } = {}): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const workdirs = deps.sessionManager.getWorkdirs(chatId);
+  const text = options.prompt ?? Formatter.workdirPrompt();
   const extra = {
     parse_mode: "HTML",
     reply_markup: buildWorkdirStartKeyboard(workdirs.length > 0, options.scope ?? "setup")
   } as const;
   if (options.edit) {
     try {
-      await ctx.editMessageText(Formatter.workdirPrompt(), extra);
+      await ctx.editMessageText(text, extra);
       return;
     } catch {
       // The original message may no longer be editable; fall back to a fresh prompt.
     }
   }
-  await ctx.reply(Formatter.workdirPrompt(), extra);
+  await ctx.reply(text, extra);
 }
 
 export async function showWorkdirList(ctx: Context, deps: SetupDeps, options: { edit?: boolean; scope?: "setup" | "ready" } = {}): Promise<void> {
@@ -223,6 +224,10 @@ export async function setWorkdir(
   });
   deps.sessionManager.rememberWorkdir(chatId, cwd);
   await options.afterSet?.(next);
+  if (deps.bot) {
+    const customCommands = deps.sessionManager.listCustomCommands(chatId, cwd);
+    await safeSetChatCommandMenu(deps.bot, chatId, next.engine, customCommands);
+  }
   if (options.returnToReady) {
     await showReadyCard(ctx, deps, next, { edit: options.edit });
     return next;
@@ -273,7 +278,8 @@ export async function completeAgentProfile(
   }
   const next = deps.sessionManager.update(session.id, { setupStep: "ready" });
   if (deps.bot) {
-    await safeSetChatCommandMenu(deps.bot, chatId, next.engine);
+    const customCommands = deps.sessionManager.listCustomCommands(chatId, next.cwd);
+    await safeSetChatCommandMenu(deps.bot, chatId, next.engine, customCommands);
   }
   if (options.showReady !== false) {
     await showReadyCard(ctx, deps, next, { edit: options.edit });
@@ -435,7 +441,8 @@ export async function selectReadyModel(
     setupStep: "ready"
   });
   if (deps.bot) {
-    await safeSetChatCommandMenu(deps.bot, chatId, engine);
+    const customCommands = deps.sessionManager.listCustomCommands(chatId, next.cwd);
+    await safeSetChatCommandMenu(deps.bot, chatId, engine, customCommands);
   }
   await showReadyCard(ctx, deps, next, { edit: true });
 }

@@ -28,6 +28,7 @@
 | `SecretStore` | 密钥材料（配合 ⑨ codec） |
 | `AuditSink` / `AuditQueryPort` | append-only 审计落地、完整性 checkpoint、授权查询/导出 |
 | `MeteringExportPort` | 从 UsageObserver ledger revision 生成幂等导出，不复制权威账本 |
+| `ObservabilitySinkPort` / `ObservabilityQueryPort` | 非权威 Observation 投影、采样、索引与授权 trace 查询 |
 
 ## 4. 对外/消费端口（可插拔点）
 
@@ -41,6 +42,7 @@
 | `SecretStore` | OS SecretStore | KMS / HSM |
 | `AuditSink` / `AuditQueryPort` | 本地签名日志 + 索引 | 不可变审计仓 / SIEM adapter |
 | `MeteringExportPort` | JSONL / CSV operation | FinOps / billing adapter |
+| `ObservabilitySinkPort` / `ObservabilityQueryPort` | JSONL + OTel file/console | OTLP / APM / Observability store |
 
 ## 5. 依赖（低耦合）
 
@@ -48,7 +50,7 @@
 
 ## 6. 数据所有权
 
-Storage 持有**字节与索引**，不持有**语义**。账本真相的生命周期规则（purge 可达、audit 保留、derivation）由 ⑥/⑦ 定义，Storage 只忠实执行读写与迁移。
+Storage 持有**字节与索引**，不持有**语义**。账本真相的生命周期规则（purge 可达、audit 保留、derivation）由 ⑥/⑦ 定义，Storage 只忠实执行读写与迁移。Observation store 非权威且允许按策略采样/过期；它不能替代 `RuntimeEvent`、AuditSink、Usage Ledger 或 Claim/Evidence。
 
 ## 7. 降级 / kill switch
 

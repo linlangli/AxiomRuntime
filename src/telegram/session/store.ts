@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import type {
+  CustomCommand,
   TelegramAttachment,
   TelegramConversationTurn,
   TelegramProviderUsage,
@@ -196,6 +197,13 @@ export class SessionStore {
     return result.changes;
   }
 
+  resetRunningToIdle(): number {
+    const result = this.db.prepare(
+      "update sessions set status = 'idle' where status in ('running', 'waiting_approval')"
+    ).run();
+    return result.changes;
+  }
+
   addAttachment(sessionId: string, attachment: TelegramAttachment): TelegramSession {
     const session = this.getById(sessionId);
     if (!session) {
@@ -243,6 +251,44 @@ export class SessionStore {
     this.ensureColumn("sessions", "provider_usage_json", "provider_usage_json text not null default '[]'");
     this.ensureColumn("sessions", "bot_context_fingerprint", "bot_context_fingerprint text");
     this.ensureColumn("sessions", "conversation_json", "conversation_json text not null default '[]'");
+    this.db.exec(`
+      create table if not exists custom_commands (
+        chat_id integer not null,
+        cwd text not null,
+        name text not null,
+        params_json text not null default '[]',
+        template text not null,
+        description text not null,
+        created_at text not null,
+        primary key (chat_id, cwd, name)
+      );
+    `);
+  }
+
+  addCustomCommand(chatId: number, cwd: string, cmd: CustomCommand): void {
+    this.db.prepare(
+      `insert or replace into custom_commands (chat_id, cwd, name, params_json, template, description, created_at)
+       values (?, ?, ?, ?, ?, ?, ?)`
+    ).run(chatId, cwd, cmd.name, JSON.stringify(cmd.params), cmd.template, cmd.description, new Date().toISOString());
+  }
+
+  listCustomCommands(chatId: number, cwd: string): CustomCommand[] {
+    const rows = this.db.prepare(
+      "select name, params_json, template, description from custom_commands where chat_id = ? and cwd = ? order by created_at"
+    ).all(chatId, cwd) as Array<{ name: string; params_json: string; template: string; description: string }>;
+    return rows.map((r) => ({
+      name: r.name,
+      params: JSON.parse(r.params_json),
+      template: r.template,
+      description: r.description
+    }));
+  }
+
+  deleteCustomCommand(chatId: number, cwd: string, name: string): boolean {
+    const result = this.db.prepare(
+      "delete from custom_commands where chat_id = ? and cwd = ? and name = ?"
+    ).run(chatId, cwd, name);
+    return result.changes > 0;
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -287,6 +333,8 @@ function normalizeSetupStep(value: string): TelegramSetupStep {
     || value === "memory_promote"
     || value === "cli"
     || value === "agent_profile"
+    || value === "command_name"
+    || value === "command_template"
     || value === "ready"
   ) return value;
   return "ready";

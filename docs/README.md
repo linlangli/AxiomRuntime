@@ -24,6 +24,7 @@
 | [Repository Instructions](../AGENTS.md) | AI 在仓库内工作的规则、文档优先级和交付标准 |
 | [Target Architecture](AI_RUNTIME_ARCHITECTURE.md) | Enterprise AI Runtime 目标架构与演进路径 |
 | [Development Conventions](CONVENTIONS.md) | 工程、发布、文档同步和模块边界规范 |
+| [Portable AI Specification](AI_RUNTIME_PORTABLE_SPEC.md) | 可直接提供给其他 AI 的英文单文件完整上下文；仓库内属于便携快照，不替代分层权威文档 |
 
 产品宪法摘要、产品规范与验收标准构成中英混合的 `doc_2.0` 文档层：宪法摘要见 [00-overview.md](00-overview.md)，跨模块强制条款（R1–R36 / Q1–Q6）见 [enforcement-decisions.md](enforcement-decisions.md)。
 
@@ -39,11 +40,11 @@
 |---|---|
 | [00-overview.md](00-overview.md) | ⭐项目整体文档：三条不变量、分层全景、模块清单、现状映射 |
 | [glossary.md](glossary.md) | 中英术语表（一致性锁） |
-| [contracts.md](contracts.md) | L0 端口契约清单 |
+| [contracts.md](contracts.md) | L0 端口契约清单，含统一 Capability Observability envelope、Sink 与授权查询契约 |
 | [extraction-readiness.md](extraction-readiness.md) | 模块产品化就绪度判据 |
 | [enforcement-decisions.md](enforcement-decisions.md) | ⭐规范约定 + R1–R36 强制实施决策 + Q1–Q6 质量/运维决策（跨模块权威引用源）|
 | [roadmap.md](roadmap.md) | Release R0–R3 纵向产品闭环、Phase 0–13 技术计划与贯穿全程可观测性 |
-| [testing.md](testing.md) | 测试计划：核心记忆/Telegram/CLI/Auth/检索质量/长期仿真/可观测性 |
+| [testing.md](testing.md) | 测试计划：核心记忆/Telegram/CLI/Auth/检索质量/长期仿真/Memory、Skill 与 Capability 可观测性 |
 | [service-level-objectives.md](service-level-objectives.md) | `local/team/enterprise` 的 SLO、RTO、RPO、容量与恢复演练门槛 |
 | [usage.md](usage.md) | 用户使用指南：逐命令用法（交互模式/Claude·Codex/Hermes/Telegram/Provider/会话/日志等）|
 

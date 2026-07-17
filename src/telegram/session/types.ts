@@ -13,7 +13,16 @@ export type TelegramSetupStep =
   | "memory_promote"
   | "cli"
   | "agent_profile"
+  | "command_name"
+  | "command_template"
   | "ready";
+
+export type CustomCommand = {
+  name: string;
+  params: string[];
+  template: string;
+  description: string;
+};
 
 export type TelegramAttachment = {
   name: string;

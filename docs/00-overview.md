@@ -480,7 +480,7 @@ flowchart TD
 12. 检索评测 harness（R11）在 Phase 0 建立，先于 FTS/向量/时序/图谱/回流，之后每次检索改动都以它把关。
 13. 时序正确性（R12/R13）与证据强度（R4/R19）是正交两轴：前者管"何时成立"，后者管"哪些独立来源支持或反驳"，冲突消解同时用两者。
 14. Skill 是程序性记忆，由"情景层→蒸馏→Skill IR→回放/Shadow 验证"沉淀；沉淀主链是确定性算法（相似度聚类→anti-unification 参数化→trace alignment 防幻觉→失败自动重挖或 deprecate，坏经验不污染后续挖掘，R36），模型只提候选。高危步骤、external 来源和环境变化必须进入确认或重验证路径。
-15. 记忆是隐式自动的，必须可观测：链路日志（R17，`traceId` 贯穿、复用 `writeLog`、全程脱敏）和 Telegram 中间态（R18，复用 `ProgressReporter`、只显状态不泄内容）从一开始就随每个节点同步落地，不作事后补丁。
+15. 记忆与 Skill 是隐式自动能力，必须可观测：R17 通过统一 `CapabilityObservation`、非阻塞 `ObservabilitySinkPort` 和授权 `ObservabilityQueryPort` 展示逐 route 检索、过滤、排名、预算、注入、Skill step 与实际 Capability 调用；JSONL/OTel/dashboard 只投影同一次 emission，并显式标记 sampling/drop completeness。R18 复用 `ProgressReporter` 展示中间态且不泄内容。两者从每个节点落地时同步建设，不作事后补丁。
 16. 所有入口统一通过 spawn CLI + 单一 Runtime Transport Proxy 执行；现有 Usage Proxy 按职责拆分为稳定 facade、Transport 核心和唯一 UsageObserver，Memory Proxy 是同一数据平面内的 MemoryExtension。协议层实现 OpenAI Responses/Chat、Anthropic Messages、streaming state machine、tool assembler 和 fixture replay；禁止双代理链与 usage 双写。
 17. Post-Run 的"异步"必须是 SQLite durable job，不是进程内 Promise；operation id、lease、重试和 dead-letter 保证进程退出后仍可完成且不重复。
 18. canonical schema 使用统一 Memory Unit + 类型化 Payload + Claim/Evidence Ledger；Phase 只启用能力，不再向万能 memories 单表叠加类别专用字段。

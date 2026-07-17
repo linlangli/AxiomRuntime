@@ -87,6 +87,26 @@ export function getTelegramDbPath(): string {
   return path.join(getConfigRoot(), "telegram.sqlite");
 }
 
+export function getTelegramBotDir(): string {
+  return path.join(getConfigRoot(), "telegram", "bots");
+}
+
+export function getTelegramBotConfigPath(name: string): string {
+  return path.join(getTelegramBotDir(), `${name}.json`);
+}
+
+export function getTelegramBotPidPath(name: string): string {
+  return path.join(getTelegramBotDir(), `${name}.pid`);
+}
+
+export function getTelegramBotLogPath(name: string): string {
+  return path.join(getTelegramBotDir(), `${name}.log`);
+}
+
+export function getTelegramBotDbPath(name: string): string {
+  return path.join(getTelegramBotDir(), `${name}.sqlite`);
+}
+
 export function getMemoryDbPath(): string {
   return path.join(getConfigRoot(), "memory.sqlite");
 }

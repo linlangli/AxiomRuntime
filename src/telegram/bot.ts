@@ -1,5 +1,5 @@
 import { Bot } from "grammy";
-import { loadTelegramConfig, type TelegramConfig } from "./config.js";
+import { loadBotConfig, loadTelegramConfig, type TelegramConfig } from "./config.js";
 import { createTelegramEngines, type TelegramEngineMap } from "./engine/registry.js";
 import { registerCallbackHandler } from "./handlers/callback.js";
 import { registerCommands } from "./handlers/command.js";
@@ -23,8 +23,8 @@ export type TelegramRuntime = {
   engines: TelegramEngineMap;
 };
 
-export async function createBot(): Promise<TelegramRuntime> {
-  const config = await loadTelegramConfig();
+export async function createBot(botName?: string): Promise<TelegramRuntime> {
+  const config = botName ? await loadBotConfig(botName) : await loadTelegramConfig();
   if (!config.token) {
     throw new Error("Telegram token is not configured. Run `ai telegram config set token <token>`.");
   }
@@ -49,6 +49,13 @@ export async function createBot(): Promise<TelegramRuntime> {
   const approvalManager = new ApprovalManager(bot);
 
   sessionManager.cleanupExpired();
+  const orphanCount = sessionManager.resetOrphanSessions();
+  if (orphanCount > 0) {
+    void writeTelegramLog({
+      action: "orphan_reset",
+      message: `Reset ${orphanCount} orphan session(s) stuck in running/waiting_approval`
+    });
+  }
   memoryService.cleanupExpired();
   void memoryService.backup();
 

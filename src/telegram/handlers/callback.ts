@@ -1,4 +1,4 @@
-import type { Bot } from "grammy";
+import { InputFile, type Bot } from "grammy";
 import type { TelegramPermissionMode } from "../config.js";
 import {
   askCustomWorkdir,
@@ -20,9 +20,10 @@ import {
   showWorkdirList,
   showWorkdirStart
 } from "./setup.js";
-import { runCliInit, type MessageHandlerDeps } from "./message.js";
+import { executePrompt, runCliInit, resultStore, type MessageHandlerDeps } from "./message.js";
 import { handleMemoryManageCallback, handleRememberScopeCallback, type RememberScopeMode } from "./memory.js";
 import { askUsagePrice, showUsagePanel } from "./usage.js";
+import { withTelegramNetworkRetry } from "../network-retry.js";
 
 export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
   bot?: Bot;
@@ -110,7 +111,7 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
         await ctx.answerCallbackQuery({ text: "工作路径已选择" });
         await setWorkdir(ctx, deps, cwd, {
           edit: true,
-          afterSet: (next) => runCliInit(ctx, deps, next.engine)
+          afterSet: (next) => runCliInit(ctx, deps, next.engine, { edit: true })
         });
         return;
       }
@@ -219,7 +220,7 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
         await setWorkdir(ctx, deps, cwd, {
           returnToReady: true,
           edit: true,
-          afterSet: (next) => runCliInit(ctx, deps, next.engine)
+          afterSet: (next) => runCliInit(ctx, deps, next.engine, { edit: true })
         });
         return;
       }
@@ -255,6 +256,52 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
       await ctx.answerCallbackQuery();
       await handleMemoryManageCallback(ctx, deps, parseMemoryManageAction(action), scope);
       return;
+    }
+
+    if (data === "retry:last") {
+      const session = deps.sessionManager.getOrCreate(chatId);
+      const lastTurn = session.conversation[session.conversation.length - 1];
+      if (!lastTurn?.user) {
+        await ctx.answerCallbackQuery({ text: "没有可重试的消息" });
+        return;
+      }
+      await ctx.answerCallbackQuery({ text: "正在重新执行…" });
+      await executePrompt(ctx, deps, lastTurn.user);
+      return;
+    }
+
+    if (data.startsWith("result:")) {
+      const action = data.slice("result:".length);
+      const cached = resultStore.get(chatId);
+      if (action === "full") {
+        if (!cached?.response) {
+          await ctx.answerCallbackQuery({ text: "输出已过期" });
+          return;
+        }
+        await ctx.answerCallbackQuery();
+        await withTelegramNetworkRetry(() =>
+          ctx.replyWithDocument(new InputFile(Buffer.from(cached.response, "utf8"), "output.md"), { caption: "完整输出" })
+        );
+        return;
+      }
+      if (action === "diff") {
+        if (!cached?.diff) {
+          await ctx.answerCallbackQuery({ text: "Diff 已过期" });
+          return;
+        }
+        await ctx.answerCallbackQuery();
+        await withTelegramNetworkRetry(() =>
+          ctx.replyWithDocument(new InputFile(Buffer.from(cached.diff!, "utf8"), "changes.diff"), { caption: "Diff" })
+        );
+        return;
+      }
+      if (action === "continue") {
+        await ctx.answerCallbackQuery({ text: "请输入下一步指令" });
+        try {
+          await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+        } catch { /* message may no longer be editable */ }
+        return;
+      }
     }
 
     await ctx.answerCallbackQuery();

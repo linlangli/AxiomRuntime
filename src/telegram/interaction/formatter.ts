@@ -65,6 +65,23 @@ export const Formatter = {
     return "🤖 你好呀，先确定工作路径吧";
   },
 
+  workdirChangePrompt(): string {
+    return "🤖 输入你要设置的工作路径吧";
+  },
+
+  commandNamePrompt(): string {
+    return "🤖 请输入命令名称，如：/ci [type] [channel]";
+  },
+
+  commandTemplatePrompt(params: string[]): string {
+    const example = params.map((p) => `[${p}]`).join(" ");
+    return `🤖 请输入对应终端命令，用 ${example} 作为占位符\n\n如：./gradlew createReleaseTag -Pmessage="[message]" -PbuildType=[type]`;
+  },
+
+  commandRegistered(name: string, description: string): string {
+    return `✅ 命令已注册：<code>/${name}</code>\n用法：<code>${description}</code>`;
+  },
+
   workdirRequired(): string {
     return "🤖 请选确定工作路径哦";
   },
@@ -165,6 +182,42 @@ export const Formatter = {
     return markdownToTelegramHtml(result.response || "(empty)", maxOutputLength);
   },
 
+  resultCard(result: ExecutionResult): string {
+    const lines: string[] = [];
+    const parts: string[] = [];
+    if (result.duration && result.duration > 0) {
+      const seconds = Math.round(result.duration / 1000);
+      parts.push(seconds >= 60 ? `${Math.floor(seconds / 60)}m${seconds % 60}s` : `${seconds}s`);
+    }
+    if (result.provider) parts.push(result.provider);
+    if (result.model) parts.push(result.model);
+    lines.push(`✅ <b>完成</b>${parts.length ? ` · ${parts.join(" · ")}` : ""}`);
+
+    const summary = extractSummary(result.response, 200);
+    if (summary) {
+      lines.push("");
+      lines.push(escapeHtml(summary));
+    }
+
+    if (result.filesChanged?.length) {
+      lines.push("");
+      const stats = parseDiffStats(result.diff);
+      const header = stats
+        ? `📁 ${result.filesChanged.length} file(s) changed · <code>${stats}</code>`
+        : `📁 ${result.filesChanged.length} file(s) changed`;
+      lines.push(header);
+      const maxFiles = 6;
+      const shown = result.filesChanged.slice(0, maxFiles);
+      const fileLines = shown.map((f) => `  ${escapeHtml(f)}`);
+      if (result.filesChanged.length > maxFiles) {
+        fileLines.push(`  … +${result.filesChanged.length - maxFiles} more`);
+      }
+      lines.push(`<pre>${fileLines.join("\n")}</pre>`);
+    }
+
+    return lines.join("\n");
+  },
+
   taskFailed(error: string): string {
     return [`<b>Failed</b>`, "", `<pre>${escapeHtml(truncateText(error, 1500))}</pre>`].join("\n");
   },
@@ -198,6 +251,26 @@ export const Formatter = {
       return `🔧 运行 <code>${escapeHtml(tool.name)}</code>${count}`;
     }
     return "⏱️ 思考中…";
+  },
+
+  progressTimeline(entries: string[], isResume = false): string {
+    const prefix = isResume ? "🔄 续接会话\n" : "";
+    return prefix + entries.join("\n");
+  },
+
+  fileChangeSummary(filesChanged?: string[], diff?: string): string {
+    if (!filesChanged?.length) return "";
+    const maxFiles = 10;
+    const shown = filesChanged.slice(0, maxFiles);
+    const lines = shown.map((f) => `  ${escapeHtml(f)}`);
+    if (filesChanged.length > maxFiles) {
+      lines.push(`  … +${filesChanged.length - maxFiles} more`);
+    }
+    const stats = parseDiffStats(diff);
+    const header = stats
+      ? `📁 ${filesChanged.length} file(s) changed · <code>${stats}</code>`
+      : `📁 ${filesChanged.length} file(s) changed`;
+    return [header, `<pre>${lines.join("\n")}</pre>`].join("\n");
   },
 
   taskAborted(): string {
@@ -237,6 +310,14 @@ export const Formatter = {
 
 function isEditingTool(tool: string): boolean {
   return /^(Write|Edit|MultiEdit|NotebookEdit|apply_patch|patch)$/i.test(tool);
+}
+
+function extractSummary(response: string | undefined, maxLength: number): string {
+  if (!response) return "";
+  const trimmed = response.trim();
+  const firstLine = trimmed.split("\n").find((l) => l.trim() && !l.startsWith("#") && !l.startsWith("```"));
+  if (!firstLine) return truncateText(trimmed, maxLength);
+  return truncateText(firstLine.trim(), maxLength);
 }
 
 function renderMarkdownBlocks(value: string): string {
@@ -448,4 +529,16 @@ function formatProviderCost(
 
 function formatTokenCount(tokens: number): string {
   return Math.round(tokens).toLocaleString("en-US");
+}
+
+function parseDiffStats(diff?: string): string | null {
+  if (!diff) return null;
+  let added = 0;
+  let removed = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) added++;
+    else if (line.startsWith("-") && !line.startsWith("---")) removed++;
+  }
+  if (added === 0 && removed === 0) return null;
+  return `+${added} -${removed}`;
 }

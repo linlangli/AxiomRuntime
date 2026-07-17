@@ -27,12 +27,27 @@ R0 保留完整目标，但拆成三个可以独立演示、验收和回滚的�
 
 Increment gate：前一 Increment 的 contract/version/error 语义冻结并通过 replacement fixture 后才进入下一项；后续项可在 feature flag 后开发，但禁止反向修改已经发布的外部契约，除非走版本升级与 migration。R0.1/R0.2/R0.3 全部通过才可对外称为 `Release R0`。
 
+## 关键交付风险与应对闭环
+
+以下六项是当前目标方案的首要交付风险。应对措施、降级路径和退出门槛属于 Release gate；困难能力可以分阶段、Shadow 或切换 Adapter，但不得被静默删除。
+
+| 风险 | 责任边界 | 必须执行的应对 | 降级 / 回退 | 退出门槛 |
+|---|---|---|---|---|
+| 一次性交付范围过大 | Runtime Architecture + Release Governance | 先冻结 `R0.1` 最小公共契约，只交付一条完整 `Surface→Orchestration→Agent→Kernel→Transport→Provider→Event` 纵向链；后续能力按兼容版本和 Release 逐步加入 | 未过 gate 的 Increment 不发布，继续运行上一稳定 baseline；高级学习 flag 可关闭 | contract fixture 通过；纵向链可独立部署/观测/回滚；后续项有明确 owner、状态和 exit condition |
+| Provider/协议/streaming/tool/usage 正确性 | ⑤ Transport + `UsageObserver` | 建 CLI/provider/protocol/version 兼容矩阵、脱敏 fixture corpus、SSE 状态机、tool assembly、attempt idempotency、真实 canary 与 usage parity 测试 | 未知 profile 收窄 Memory 至 `shadow_capture/passthrough`；保留已验证 compatibility/Usage；禁止猜测未知协议 | 单 execution 单 listener/upstream；声明 transform 外 AST 相等；usage exactly-once；敏感原文持久化为 0 |
+| Identity、Scope、Evidence 质量不足 | ② Orchestration + Identity + ⑥ Memory + ⑧ Policy | 外部 subject 映射 canonical `PrincipalRef`；固定 directory/policy revision；SQL 查询期与 core 二次授权；Candidate add-only；按来源权威、独立证据、冲突/时态与 category policy 激活 | 身份无法解析或证据不足时 fail-closed/pending；显式 `pin/correct/forget/purge` 仍可用 | cross-tenant/cross-scope leak=0；authority fixture 确定；纠正保留 lineage；projection/backup purge 可证明 |
+| 把召回相关性误判为因果收益 | ⑦ Learning Governor + `EvaluationHarness` | 分开记录 `retrieved/injected/referenced/decision_changed/outcome_changed`；固定 baseline、目标指标、样本量、置信区间；高影响产物做 Shadow/反事实抽样 | 证据不足返回 `no_artifact` 或保留 candidate，不改变生产 ranking/promotion | replay 确定；无 hard safety regression；以 `CapabilityGain` 而非召回次数或模型自评证明收益 |
+| Skill 挖掘与自动激活不安全 | `ProcedureMiner` + Skill lifecycle + ④ Kernel + ⑧ Policy | 只采 verified-success episode；成熟序列挖掘；跨 execution support；anti-unification；trace alignment；typed IR；static/replay/sandbox/shadow；环境指纹与逐步执行期授权 | 保留 candidate、进入 `needs_revalidation`、重复失败 deprecate，或回到直接受治理执行 | `stepCoverage=1.0`；无 unsupported step/secret feature；postcondition 可验证；对应风险 gate 与确认 100% 通过 |
+| Enterprise Control Plane 体量与运营负担 | Enterprise Control Plane Track | CP0-CP3 并行分段；Web/CLI/API 复用同一 core mutation、Policy、Audit、Usage 和 Storage 权威；不得复制数据平面或账本 | 未完成企业能力不阻塞 local R0-R2，但不得标记 enterprise-ready | Surface policy/audit parity；delegated admin 隔离；canary/rollback；quota/FinOps 对账；legal hold/residency fail-closed；恢复演练满足 RTO/RPO |
+
+风险状态至少包含 `open | controlled | accepted_for_increment | triggered | closed`、owner、影响 Release、触发信号、最近证据、剩余风险和下一 gate。`accepted_for_increment` 只表示该风险不阻塞当前较小增量，不表示目标能力被取消；任何 hard safety regression、scope leak、重复副作用/计费或 raw secret persistence 都立即将相关 rollout 冻结为 `triggered`。
+
 ## 技术实施顺序（Phase）
 
 ### Phase 0：契约、评测与迁移保护
 
 - 固化本文最终 schema（含 `memory_units + claims + evidence`）、TypeScript public API、Runtime Transport Proxy 协议（`ApiAdapter/EphemeralParsedTurn/SanitizedTurnEnvelope`）和 feature flags。
-- 固化 `CandidateExtractor/RetrievalBackend/VectorRetrievalBackend/TemporalGraphProjection/WorkflowCheckpointBackend/DurableJobBackend/ProtectedPayloadCodec/ProcedureMiner/PolicyEngine/EvaluationHarness/IdentityDirectoryPort/AuditQueryPort/MeteringExportPort` 契约与 `OrganizationPolicySnapshot`；为每类建立 local reference adapter 和 provider contract fixture，业务代码不得导入第三方 backend 类型。
+- 固化 `CandidateExtractor/RetrievalBackend/VectorRetrievalBackend/TemporalGraphProjection/WorkflowCheckpointBackend/DurableJobBackend/ProtectedPayloadCodec/ProcedureMiner/PolicyEngine/EvaluationHarness/IdentityDirectoryPort/AuditQueryPort/MeteringExportPort/ObservabilitySinkPort/ObservabilityQueryPort` 契约、`CapabilityObservation` 与 `OrganizationPolicySnapshot`；为每类建立 local reference adapter 和 provider contract fixture，业务代码不得导入第三方 backend 类型。
 - 建立 R11 最小黄金集：scope 隔离、中文/英文召回、冲突、预算、forbidden leak；在任何 Retriever 改动前得到 baseline。
 - 复用 LoCoMo、LongMemEval、BEAM 等公开长期记忆评测的许可兼容子集和指标实现，并增加本项目 scope/authority/purge/skill 数据集；所有外部 benchmark 必须固定版本、模型栈和 token/retrieval budget。
 - 增加端到端 QA 基线：知识更新、时序推理、证据不足拒答、stale-memory error、unsupported personalization。
@@ -57,7 +72,7 @@ Increment gate：前一 Increment 的 contract/version/error 语义冻结并通�
 
 - 将 `src/telegram/memory` 迁移为 `src/core/memory`，Telegram 仅保留兼容 adapter，现有行为不变。
 - 落地 accounts/identity_links、`AiExecutionContext`、安全的 `project_id` 派生和群聊硬守卫。
-- 实现 Retriever/Rank/Budget/Injection 的统一只读路径和 R17 trace 日志。
+- 实现 `CapabilityObservation` 单一 emission helper、JSONL local projection 和 `ObservabilityQueryPort`；完成 Memory `plan→route→filter→rank→budget→compile→inject` 调用树、逐 route 授权/耗时/错误与 `complete|sampled|partial` 标记。
 - 实现 local profile：SQLite/FTS5/trigram、reference RRF、可选 sqlite-vec、PolicyEngine reference evaluator 和 OpenTelemetry trace adapter；保持所有成熟 backend 未安装时仍有稳定 baseline。
 - 在现有 `startOpenAiUsageProxy` facade 下引入 `core/transport-proxy` 单一数据平面，先以 usage-only 模式保持当前 Codex/Telegram、translation、records、metrics 和 usage 写入行为不变；禁止启动第二 Memory server。
 - 分离最小 TransportForwarder 与隔离 ExtensionWorker；实现 TransformCoordinator、UsageObserver、MemoryExtension、RedactionGateway、listener registry、route lease/loop detector 和 bounded IPC。
@@ -165,6 +180,7 @@ Increment gate：前一 Increment 的 contract/version/error 语义冻结并通�
 - 失败自愈：`needs_revalidation` 后用新增成功 episode 自动重挖生成 ADD-only 新版本，连续失败 ≥2 次标 deprecated 并移出候选池，坏经验不污染后续挖掘（R36）
 - 生成结构化 Skill IR，执行 schema validation、trace alignment、static risk analysis、sandbox replay 和 shadow invocation
 - Skill 注入 + Post-Run 回流强化 + 蒸馏合并/参数化/版本取代；环境指纹变化时强制重验证
+- 实现 Skill `match→select→apply→step→outcome` Observation；每个 step 关联实际 `CapabilityInvocation`，显示 confirmation/guardrail/deviation/postcondition 和贡献归因，不保存步骤正文。
 - 高危护栏、external 不自动执行、跨 scope 提升需显式、全程 memory_events 留痕
 - Skill 仅作为 advisory 程序记忆，运行时 permission policy 独立生效
 - 退出条件：success criteria 可验证或经用户确认；exit code 不能单独计成功；DSL 禁止项无法编码；高危动作 100% 触发确认；未通过对应风险等级 replay/sandbox/shadow 的 Skill 不得 active
@@ -197,7 +213,9 @@ Increment gate：前一 Increment 的 contract/version/error 语义冻结并通�
 
 ### 贯穿全程：可观测性（不单列 Phase）
 
-- **R17 记忆链路日志**：从 Phase 1 起，每加一个记忆节点就同步埋 `memory.*` 日志（复用 `writeLog`，新增 `memory` category，`traceId` 贯穿），`ai log --category memory --trace <id>` 可还原完整调用链。
+- **R17 Capability Observability**：Phase 0 固化 `CapabilityObservation`/Sink/Query schema；Phase 1 完成 Memory 逐 route explain 与 generic resolve/invoke/result；Phase 2 连接异步 Post-Run span link；Phase 10 完成 Skill step/outcome/lifecycle；JSONL/OTel/dashboard 只投影同一次 emit。
+- **查询体验**：提供 `ai trace show`、`ai memory explain`、`ai skill explain` 与 Web Timeline/Memory/Skill/Capability/Cost/Error 视图；全部经 `ObservabilityQueryPort` 与 Policy，显示 sampling/drop completeness，不读取原始 JSONL。
+- **安全与性能**：高影响/失败/lifecycle trace 100% 保留，普通成功 read 可采样；指标禁止高基数 id；同步 emit p95≤2ms、p99≤5ms，exporter 故障不改变 Runtime 行为。
 - **R18 Telegram 中间态**：Phase 2 随自动记忆一起上，复用 `ProgressReporter` 扩展 `phase`；引擎 `thinking` 改用 `⏱️`，记忆态 `🧠 回忆中/已调用 N 条`、技能态 `🧩 套用/沉淀《名》`、写入 `📝 记住新偏好`（skill 相关随 Phase 10 补齐），只显状态不泄内容。
 
 ## 相关文档

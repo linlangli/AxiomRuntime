@@ -61,6 +61,24 @@ Learning converts execution evidence into candidates and measures whether those 
 
 Provider, model, browser, MCP, Hermes, and enterprise-system integrations are replaceable adapters. No adapter may redefine core policy.
 
+### External Coding Agents and Remote Surfaces
+
+Claude Code and Codex CLI are not Surfaces merely because users can launch them from a terminal, and they are not raw model/provider adapters. The Runtime exposes each one as a versioned `agent` capability, supervises each run in the Execution Kernel, and connects the concrete local process through an `AgentAdapterPort` implementation such as `ClaudeCodeCliAgentAdapter` or `CodexCliAgentAdapter`. Their underlying model/provider traffic still uses the Runtime-selected provider route and the single Runtime Transport Proxy.
+
+Telegram is a Surface adapter. It authenticates the edge request, builds a `RuntimeRequest`, renders progress, and returns confirmation decisions to the Kernel. It must not spawn or control an external coding agent through a second policy path in the target architecture. A Telegram-local `Engine` interface may remain as a temporary delivery facade, but it is not the canonical Agent contract and must delegate to Orchestration and `AgentAdapterPort`.
+
+```text
+Telegram / CLI / API Surface
+  -> Orchestration
+  -> Capability Registry resolves claude-code-agent or codex-cli-agent
+  -> Execution Kernel supervises permission, budget, retry, cancel, and tool proposals
+  -> ClaudeCodeCliAgentAdapter or CodexCliAgentAdapter
+  -> Runtime Transport Proxy
+  -> selected ModelProvider adapter
+```
+
+Native Claude Code or Codex tool requests are untrusted Agent proposals. The adapter normalizes them to `AgentRunEvent.tool_request`; the Kernel authorizes the corresponding `ToolPort` invocation at execution time. If a CLI version cannot expose an interceptable tool-request/confirmation boundary, its descriptor must declare that limitation and Policy must constrain it to an isolation and permission mode appropriate to the resulting risk. Telegram approval callbacks only submit a decision for the bound request; they never execute the tool directly.
+
 ## 3. Capability Evolution
 
 ```text
@@ -115,6 +133,8 @@ The target core contracts are:
 - `IdentityDirectoryPort`: canonical identity and membership lookup behind local or OIDC/SAML/SCIM adapters; it never grants a Runtime capability.
 - `AuditQueryPort`: access-controlled audit search and signed export over immutable Runtime events.
 - `MeteringExportPort`: idempotent FinOps export from the sole UsageObserver ledger, never a second usage or cost record.
+- `CapabilityObservation`: provider-neutral, non-authoritative diagnostic envelope for capability, Memory, and Skill call trees, with bounded typed payloads and links to durable Runtime events.
+- `ObservabilitySinkPort` and `ObservabilityQueryPort`: non-blocking emission plus policy-controlled trace queries behind local JSONL/OpenTelemetry or enterprise OTLP/APM adapters.
 
 Contracts must be provider agnostic and serializable where cross-process execution is required.
 
@@ -142,6 +162,16 @@ Automatic extraction, low-risk category activation, consolidation, compression, 
 Goal relationships and capability dependencies are rebuildable projections over authoritative goals, claims, episodes, skills, and evaluation results. They may prioritize retrieval and validation but may not override tenant, privacy, evidence, or permission boundaries.
 
 Compression replaces projections, never authoritative Claim/Evidence provenance. Every active compressed artifact must provide complete source coverage, a compiler version, evaluation results, and a rollback artifact. Automated forgetting should first cool, invalidate, or archive projections; physical deletion remains controlled by TTL, retention policy, and explicit user or organization authority.
+
+### Capability Observability Boundary
+
+Observability is one cross-layer capability, not separate Memory, Skill, JSONL, dashboard, and OpenTelemetry logging systems. Orchestration creates the execution trace; Capability, Kernel, Memory, Skill, and Learning code emit one validated `CapabilityObservation` per semantic action through `ObservabilitySinkPort`. JSONL, OpenTelemetry traces/metrics/logs, and enterprise OTLP/APM are replaceable projection adapters behind that single emission point.
+
+The canonical call tree includes generic `capability.resolve -> capability.invoke -> capability.result` spans plus specialized Memory `plan -> route retrieval -> filter -> rank -> budget -> compile -> inject` and Skill `match -> select -> apply -> step -> outcome` spans. Each Skill step references the actual authorized Tool, Workflow, Agent, or Model invocation. Post-Run extraction, distillation, validation, evaluation, and promotion preserve the source trace id but use explicit span links rather than pretending to remain on the synchronous request stack.
+
+Observations are sampled, expirable, best-effort diagnostics. They may reference durable `RuntimeEvent` ids but cannot replace events, audit, the UsageObserver ledger, Claim/Evidence truth, Policy decisions, Skill lifecycle records, or evaluation evidence. Missing observations make a trace `partial`; they never prove that an operation did not happen. Critical observations use reserved bounded capacity and an encrypted or permission-restricted bounded local spool before export, while exhaustion still drops and reports low-cardinality metrics rather than blocking execution, changing Memory mode, changing retry ownership, or affecting Usage.
+
+Observation payloads may contain canonical resource ids in policy-authorized trace views, hashes, lengths, counts, bounded rounded scores, versions, statuses, and reason codes. They must never contain prompts, Memory or Skill content, Skill step text, trigger keywords, reasoning, secrets, raw Evidence, or tool inputs/outputs. Trace, execution, principal, project, Memory, Skill, and invocation ids cannot be metric labels. `ObservabilityQueryPort` returns closed, view-specific projections rather than raw envelopes; cursors are signed and tenant/scope/view/filter-bound. Summary, explain, internal, and cross-tenant break-glass access are distinct policy decisions, and sensitive access is audited. Cost views join observations with the UsageObserver-owned read model at query time; telemetry never becomes a second usage ledger.
 
 ### Unified Runtime Transport Proxy Boundary
 

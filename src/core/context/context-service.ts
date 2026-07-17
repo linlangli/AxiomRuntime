@@ -32,9 +32,9 @@ const DOC_CANDIDATES = [
   "README.md",
   "AGENTS.md",
   "CLAUDE.md",
-  "docs/SPEC.md",
+  "docs/00-overview.md",
   "docs/CONVENTIONS.md",
-  "docs/USAGE.md"
+  "docs/usage.md"
 ];
 
 export type ProjectContext = {

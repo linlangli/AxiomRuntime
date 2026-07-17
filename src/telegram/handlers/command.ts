@@ -8,8 +8,9 @@ import type { ApprovalManager } from "../interaction/approval.js";
 import type { SessionManager } from "../session/manager.js";
 import { runCliInit, type MessageHandlerDeps } from "./message.js";
 import { handleForgetCommand, handleMemoriesCommand, handleMemoryCommand, handleRememberCommand } from "./memory.js";
-import { showConfigPanel, showReadyProviderPicker, showSetupProviderPicker, startSetup } from "./setup.js";
+import { showConfigPanel, showReadyProviderPicker, showSetupProviderPicker, showWorkdirStart, startSetup } from "./setup.js";
 import { showUsagePanel } from "./usage.js";
+import { writeTelegramLog } from "../log.js";
 
 const FRESH_DELETE_SCAN_LIMIT = 1000;
 const TELEGRAM_DELETE_BATCH_SIZE = 100;
@@ -39,6 +40,22 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
     deps.approvalManager.resolveAll(ctx.chat.id, false);
     await safeResetChatCommandMenu(bot, ctx.chat.id);
     await startSetup(ctx, deps);
+  });
+
+  bot.command("stop", async (ctx) => {
+    const session = deps.sessionManager.getOrCreate(ctx.chat.id);
+    if (session.status !== "running" && session.status !== "waiting_approval") {
+      await ctx.reply("当前没有正在运行的任务。");
+      return;
+    }
+    deps.engines.claude.abort(ctx.chat.id);
+    deps.engines.codex.abort(ctx.chat.id);
+    deps.approvalManager.resolveAll(ctx.chat.id, false);
+    deps.sessionManager.update(session.id, { status: "idle" });
+    const hasLastMessage = session.conversation.length > 0;
+    await ctx.reply("已停止当前任务。", hasLastMessage ? {
+      reply_markup: { inline_keyboard: [[{ text: "🔁 重新执行上一条", callback_data: "retry:last" }]] }
+    } : undefined);
   });
 
   bot.command("fresh", async (ctx) => {
@@ -105,7 +122,8 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
     const cwd = String(ctx.match ?? "").trim();
     const session = deps.sessionManager.getOrCreate(ctx.chat.id);
     if (!cwd) {
-      await ctx.reply(`cwd: <code>${escapeHtml(session.cwd)}</code>`, { parse_mode: "HTML" });
+      deps.sessionManager.update(session.id, { setupStep: "ready" });
+      await showWorkdirStart(ctx, deps, { scope: "ready", prompt: Formatter.workdirChangePrompt() });
       return;
     }
     if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
@@ -118,7 +136,16 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
       botContextFingerprint: null
     });
     await runCliInit(ctx, deps, next.engine);
+    const customCommands = deps.sessionManager.listCustomCommands(ctx.chat.id, cwd);
+    await safeSetChatCommandMenu(bot, ctx.chat.id, next.engine, customCommands);
     await ctx.reply(`cwd: <code>${escapeHtml(cwd)}</code>`, { parse_mode: "HTML" });
+  });
+
+  bot.command("command", async (ctx) => {
+    const session = deps.sessionManager.getOrCreate(ctx.chat.id);
+    const next = deps.sessionManager.update(session.id, { setupStep: "command_name" });
+    void writeTelegramLog({ action: "command_register_start", message: `chatId=${ctx.chat.id} sessionId=${session.id} before=${session.setupStep} after=${next.setupStep}` });
+    await ctx.reply(Formatter.commandNamePrompt());
   });
 }
 
@@ -146,7 +173,8 @@ async function runEngineCommand(ctx: CommandContext<Context>, deps: CommandDeps,
     await showSetupProviderPicker(ctx, deps, { forcedEngine: engine, reselect: true });
     return;
   }
-  await safeSetChatCommandMenu(bot, ctx.chat.id, engine);
+  const customCommands = deps.sessionManager.listCustomCommands(ctx.chat.id, session.cwd);
+  await safeSetChatCommandMenu(bot, ctx.chat.id, engine, customCommands);
   await showReadyProviderPicker(ctx, deps, { forcedEngine: engine, reselect: true });
 }
 

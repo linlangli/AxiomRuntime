@@ -1687,7 +1687,7 @@ test("telegram executePrompt streams progress and edits status message into resu
     assert.match(progressMessages[0], /思考中/);
     assert.equal(progressEdits.length, 2);
     assert.match(progressEdits[0], /调用 MCP/);
-    assert.equal(progressEdits[1], "ok");
+    assert.match(progressEdits[1], /✅[\s\S]*完成[\s\S]*ok/);
     assert.deepEqual(deleted, []);
     assert.equal(replies.length, 0);
     store.close();
