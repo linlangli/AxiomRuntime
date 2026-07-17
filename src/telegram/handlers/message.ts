@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { InputFile, type Bot, type Context } from "grammy";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
@@ -137,7 +139,9 @@ async function executeMappedSlashCommand(
   }
   if (mapped.prompt === "/__register_command") {
     deps.sessionManager.update(session.id, { setupStep: "command_name" });
-    await ctx.reply(Formatter.commandNamePrompt());
+    await ctx.reply(Formatter.commandNamePrompt(), {
+      reply_markup: { inline_keyboard: [[{ text: "关闭", callback_data: "command:cancel" }]] }
+    });
     return;
   }
   if (mapped.prompt.startsWith("/__custom_")) {
@@ -149,6 +153,18 @@ async function executeMappedSlashCommand(
 }
 
 export async function runCliInit(ctx: Context, deps: MessageHandlerDeps, engine?: TelegramEngineName, options: { edit?: boolean } = {}): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (chatId) {
+    const session = deps.sessionManager.getOrCreate(chatId);
+    if (session.cwd && fs.existsSync(path.join(session.cwd, "CLAUDE.md"))) {
+      try {
+        await ctx.editMessageText("🤖 介绍一下我和你吧，可以帮你构建画像哦", { reply_markup: { inline_keyboard: [] } });
+      } catch {
+        // Best-effort notification.
+      }
+      return;
+    }
+  }
   try {
     if (options.edit) {
       await ctx.editMessageText("🤖 等我熟悉一下当前工作目录哦", { reply_markup: { inline_keyboard: [] } });
@@ -620,7 +636,9 @@ async function handleCommandNameInput(
 ): Promise<void> {
   const input = text.replace(/^\//, "").trim();
   if (!input) {
-    await ctx.reply(Formatter.commandNamePrompt());
+    await ctx.reply(Formatter.commandNamePrompt(), {
+      reply_markup: { inline_keyboard: [[{ text: "关闭", callback_data: "command:cancel" }]] }
+    });
     return;
   }
   const params: string[] = [];
@@ -630,13 +648,18 @@ async function handleCommandNameInput(
   });
   const name = input.split(/\s/)[0]!.replace(/\[.*$/, "").toLowerCase().replace(/[^a-z0-9_]/g, "_");
   if (!name) {
-    await ctx.reply(Formatter.commandNamePrompt());
+    await ctx.reply(Formatter.commandNamePrompt(), {
+      reply_markup: { inline_keyboard: [[{ text: "关闭", callback_data: "command:cancel" }]] }
+    });
     return;
   }
   const description = `/${input}`;
   pendingCommandRegistration.set(session.chatId, { name, params, description });
   deps.sessionManager.update(session.id, { setupStep: "command_template" });
-  await ctx.reply(Formatter.commandTemplatePrompt(params), { parse_mode: "HTML" });
+  await ctx.reply(Formatter.commandTemplatePrompt(params), {
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: [[{ text: "返回", callback_data: "command:back" }]] }
+  });
 }
 
 async function handleCommandTemplateInput(
@@ -682,13 +705,20 @@ async function executeCustomCommand(
   }
   await ctx.reply(`⚙️ 执行中：<code>${escapeHtml(shell)}</code>`, { parse_mode: "HTML" });
   try {
-    const { stdout, stderr } = await execAsync(shell, { cwd: session.cwd, timeout: 60_000 });
+    const { stdout, stderr } = await execAsync(shell, { cwd: session.cwd, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 });
     const output = (stdout || stderr || "（无输出）").trim();
-    const text = truncateText(output, 3800);
-    await ctx.reply(`<pre>${escapeHtml(text)}</pre>`, { parse_mode: "HTML" });
+    if (output.length <= 3800) {
+      await ctx.reply(`<pre>${escapeHtml(output)}</pre>`, { parse_mode: "HTML" });
+    } else {
+      await ctx.replyWithDocument(new InputFile(Buffer.from(output, "utf-8"), "output.txt"));
+    }
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    await ctx.reply(`❌ 执行失败：\n<pre>${escapeHtml(truncateText(msg, 3800))}</pre>`, { parse_mode: "HTML" });
+    if (msg.length <= 3800) {
+      await ctx.reply(`❌ 执行失败：\n<pre>${escapeHtml(msg)}</pre>`, { parse_mode: "HTML" });
+    } else {
+      await ctx.replyWithDocument(new InputFile(Buffer.from(msg, "utf-8"), "error.txt"));
+    }
   }
 }
 

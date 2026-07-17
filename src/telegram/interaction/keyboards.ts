@@ -158,7 +158,7 @@ export function buildResultKeyboard(hasFullOutput: boolean, hasDiff: boolean): I
   const kb = new InlineKeyboard();
   if (hasFullOutput) kb.text("📄 完整输出", "result:full");
   if (hasDiff) kb.text("📝 查看 Diff", "result:diff");
-  return kb.row().text("▶️ 继续", "result:continue");
+  return kb;
 }
 
 type MemoryClearScope = "bot" | "global";

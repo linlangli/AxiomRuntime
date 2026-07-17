@@ -1,5 +1,6 @@
 import { InputFile, type Bot } from "grammy";
 import type { TelegramPermissionMode } from "../config.js";
+import { Formatter } from "../interaction/formatter.js";
 import {
   askCustomWorkdir,
   completeAgentProfile,
@@ -258,6 +259,24 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
       return;
     }
 
+    if (data === "command:cancel") {
+      const session = deps.sessionManager.getOrCreate(chatId);
+      deps.sessionManager.update(session.id, { setupStep: "ready" });
+      await ctx.answerCallbackQuery({ text: "已关闭" });
+      await ctx.editMessageText("已关闭命令注册。", { reply_markup: { inline_keyboard: [] } });
+      return;
+    }
+
+    if (data === "command:back") {
+      const session = deps.sessionManager.getOrCreate(chatId);
+      deps.sessionManager.update(session.id, { setupStep: "command_name" });
+      await ctx.answerCallbackQuery();
+      await ctx.editMessageText(Formatter.commandNamePrompt(), {
+        reply_markup: { inline_keyboard: [[{ text: "关闭", callback_data: "command:cancel" }]] }
+      });
+      return;
+    }
+
     if (data === "retry:last") {
       const session = deps.sessionManager.getOrCreate(chatId);
       const lastTurn = session.conversation[session.conversation.length - 1];
@@ -293,13 +312,6 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
         await withTelegramNetworkRetry(() =>
           ctx.replyWithDocument(new InputFile(Buffer.from(cached.diff!, "utf8"), "changes.diff"), { caption: "Diff" })
         );
-        return;
-      }
-      if (action === "continue") {
-        await ctx.answerCallbackQuery({ text: "请输入下一步指令" });
-        try {
-          await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
-        } catch { /* message may no longer be editable */ }
         return;
       }
     }

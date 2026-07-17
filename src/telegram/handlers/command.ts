@@ -145,7 +145,9 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
     const session = deps.sessionManager.getOrCreate(ctx.chat.id);
     const next = deps.sessionManager.update(session.id, { setupStep: "command_name" });
     void writeTelegramLog({ action: "command_register_start", message: `chatId=${ctx.chat.id} sessionId=${session.id} before=${session.setupStep} after=${next.setupStep}` });
-    await ctx.reply(Formatter.commandNamePrompt());
+    await ctx.reply(Formatter.commandNamePrompt(), {
+      reply_markup: { inline_keyboard: [[{ text: "关闭", callback_data: "command:cancel" }]] }
+    });
   });
 }
 

@@ -133,7 +133,8 @@ async function refreshStoredChatCommandMenus(bot: Bot, sessionManager: SessionMa
   const sessions = sessionManager.getActiveSessions();
   for (const session of sessions) {
     if (session.setupStep === "ready") {
-      await safeSetChatCommandMenu(bot, session.chatId, session.engine);
+      const customCommands = sessionManager.listCustomCommands(session.chatId, session.cwd);
+      await safeSetChatCommandMenu(bot, session.chatId, session.engine, customCommands);
     } else {
       await safeResetChatCommandMenu(bot, session.chatId);
     }

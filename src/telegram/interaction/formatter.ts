@@ -74,6 +74,9 @@ export const Formatter = {
   },
 
   commandTemplatePrompt(params: string[]): string {
+    if (params.length === 0) {
+      return "🤖 请输入对应终端命令";
+    }
     const example = params.map((p) => `[${p}]`).join(" ");
     return `🤖 请输入对应终端命令，用 ${example} 作为占位符\n\n如：./gradlew createReleaseTag -Pmessage="[message]" -PbuildType=[type]`;
   },
