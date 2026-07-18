@@ -177,7 +177,7 @@ src/
 
 ## E. 进度流式现状（→ 目标 ①/② 呈现与事件）
 
-底层管道本就是流式（Claude `--output-format stream-json`；Codex `codex exec --json`）。`spawnCapture({onStdout})` 实时解析 `tool_calling/writing` 等 `ProgressUpdate`；`ProgressReporter`（节流默认 1500ms，编辑**同一条**状态消息）展示阶段/工具，任务结束时短结果直接覆盖该消息。**不采用 token 级流式**：Telegram `editMessageText` 有约 1 次/秒硬限流（429），且 agent 用户真正要的是结尾 `last_message`。
+底层管道本就是流式（Claude `--output-format stream-json`；Codex `codex exec --json`）。`spawnCapture({onStdout})` 通过跨 chunk JSONL accumulator 实时解析 `tool_calling/writing` 等 `ProgressUpdate`；`ProgressReporter`（节流默认 1500ms，编辑**同一条**状态消息）展示阶段、工具和有界响应预览，任务结束时短结果直接覆盖该消息。**不采用 token 级逐 token 编辑**：Telegram `editMessageText` 有频率限制；当前按完整 JSON stream event 合并预览，避免 429 和重复执行。
 
 ---
 
@@ -568,7 +568,7 @@ LogEvent          // 结构化日志 (level, category, action, message, metadata
 TelegramSession   // SQLite 持久化会话
   - id, chatId, engine, engineSessionId
   - cwd, permissionMode, setupStep, status
-  - messageCount, attachments[], conversation[], providerUsage[]
+  - messageCount, attachments[], conversation[], pinnedTurns[], providerUsage[]
 
 TelegramConfig    // JSON 配置 (12 个字段)
   - token, allowAllUsers, allowedUserIds

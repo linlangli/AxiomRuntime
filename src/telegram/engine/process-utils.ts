@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { StringDecoder } from "node:string_decoder";
 
 export type SpawnCaptureOptions = {
   command: string;
@@ -36,14 +37,16 @@ export async function spawnCapture(options: SpawnCaptureOptions, onProcess?: (ch
   let timedOut = false;
   let aborted = false;
   let killTimer: NodeJS.Timeout | undefined;
+  const stdoutDecoder = new StringDecoder("utf8");
+  const stderrDecoder = new StringDecoder("utf8");
 
   child.stdout?.on("data", (chunk: Buffer) => {
-    const text = chunk.toString();
+    const text = stdoutDecoder.write(chunk);
     stdout += text;
     void options.onStdout?.(text);
   });
   child.stderr?.on("data", (chunk: Buffer) => {
-    const text = chunk.toString();
+    const text = stderrDecoder.write(chunk);
     stderr += text;
     void options.onStderr?.(text);
   });
@@ -74,6 +77,8 @@ export async function spawnCapture(options: SpawnCaptureOptions, onProcess?: (ch
       child.once("error", reject);
       child.once("close", (code, signal) => resolve([code, signal]));
     });
+    stdout += stdoutDecoder.end();
+    stderr += stderrDecoder.end();
     return { stdout, stderr, code, signal, timedOut, aborted };
   } finally {
     if (timeout) clearTimeout(timeout);
@@ -114,6 +119,43 @@ export function extractJsonLines(raw: string): unknown[] {
   return events;
 }
 
+export type JsonLineAccumulator = {
+  push(chunk: string): void;
+  end(): void;
+};
+
+export function createJsonLineAccumulator(onEvent: (event: unknown) => void): JsonLineAccumulator {
+  let pending = "";
+
+  const emitLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    try {
+      onEvent(JSON.parse(trimmed));
+    } catch {
+      // Ignore non-JSON progress lines. The complete stdout remains available
+      // to the final result/error parser.
+    }
+  };
+
+  return {
+    push(chunk: string): void {
+      pending += chunk;
+      const lines = pending.split("\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) emitLine(line);
+    },
+    end(): void {
+      emitLine(pending);
+      pending = "";
+    }
+  };
+}
+
 export function stripAnsi(value: string): string {
-  return value.replace(/\u001b\[[0-9;]*m/g, "");
+  // eslint-disable-next-line no-control-regex
+  return value.replace(
+    /\u001b(?:\[[0-9;?]*[A-Za-z]|\][^\u0007]*\u0007|[()][A-Z0-9]|[ -\/]*[0-~])/g,
+    ""
+  );
 }

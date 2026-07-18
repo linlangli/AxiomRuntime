@@ -28,6 +28,9 @@ export type TelegramAttachment = {
   name: string;
   path: string;
   text: string;
+  kind?: "text" | "image";
+  mimeType?: string;
+  sizeBytes?: number;
   createdAt: string;
 };
 
@@ -50,6 +53,13 @@ export type TelegramConversationTurn = {
   createdAt: string;
 };
 
+export type TelegramPinnedTurn = {
+  messageId: number;
+  user: string;
+  assistant: string;
+  pinnedAt: string;
+};
+
 export type TelegramSession = {
   id: string;
   chatId: number;
@@ -64,6 +74,7 @@ export type TelegramSession = {
   messageCount: number;
   attachments: TelegramAttachment[];
   conversation: TelegramConversationTurn[];
+  pinnedTurns: TelegramPinnedTurn[];
   providerUsage: TelegramProviderUsage[];
   createdAt: string;
   lastActiveAt: string;

@@ -194,7 +194,7 @@ export const Formatter = {
     }
     if (result.provider) parts.push(result.provider);
     if (result.model) parts.push(result.model);
-    lines.push(`✅ <b>完成</b>${parts.length ? ` · ${parts.join(" · ")}` : ""}`);
+    lines.push(`✅ <b>完成</b>${parts.length ? ` · ${parts.map(escapeHtml).join(" · ")}` : ""}`);
 
     const summary = extractSummary(result.response, 200);
     if (summary) {
@@ -256,9 +256,8 @@ export const Formatter = {
     return "⏱️ 思考中…";
   },
 
-  progressTimeline(entries: string[], isResume = false): string {
-    const prefix = isResume ? "🔄 续接会话\n" : "";
-    return prefix + entries.join("\n");
+  progressTimeline(entries: string[]): string {
+    return entries.join("\n");
   },
 
   fileChangeSummary(filesChanged?: string[], diff?: string): string {
@@ -298,6 +297,10 @@ export const Formatter = {
       "/forget - 删除 Bot 记忆",
       "/memories - 查看 Bot 记忆",
       "/memory - 管理 Bot 记忆",
+      "/pin - 回复一条 Bot 回答并固定为关键上下文",
+      "/unpin - 取消固定上下文",
+      "/terminal command - 在当前工作目录执行终端命令",
+      "/restart - 重启 Bot",
       "/help - 查看帮助"
     ].join("\n");
   },
@@ -317,10 +320,18 @@ function isEditingTool(tool: string): boolean {
 
 function extractSummary(response: string | undefined, maxLength: number): string {
   if (!response) return "";
-  const trimmed = response.trim();
-  const firstLine = trimmed.split("\n").find((l) => l.trim() && !l.startsWith("#") && !l.startsWith("```"));
-  if (!firstLine) return truncateText(trimmed, maxLength);
-  return truncateText(firstLine.trim(), maxLength);
+  const lines = response.trim().split("\n");
+  const contentLines = lines.filter((l) => l.trim() && !l.startsWith("#") && !l.startsWith("```"));
+  if (!contentLines.length) return truncateText(lines.join(" ").trim(), maxLength);
+  let summary = contentLines[0]!.trim();
+  if (/[：:…]$/.test(summary)) {
+    for (let i = 1; i < contentLines.length && summary.length < maxLength; i++) {
+      const line = contentLines[i]!.trim().replace(/^[-*\d.]+\s*/, "");
+      if (!line) break;
+      summary += " " + line;
+    }
+  }
+  return truncateText(summary.trim(), maxLength);
 }
 
 function renderMarkdownBlocks(value: string): string {

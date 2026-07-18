@@ -1,7 +1,8 @@
+import fs from "node:fs";
 import type { TelegramConfig } from "../config.js";
 import type { TokenUsage } from "../../core/types.js";
 import type { SessionStore } from "./store.js";
-import type { CustomCommand, TelegramAttachment, TelegramConversationTurn, TelegramProviderUsage, TelegramSession } from "./types.js";
+import type { CustomCommand, TelegramAttachment, TelegramConversationTurn, TelegramPinnedTurn, TelegramProviderUsage, TelegramSession } from "./types.js";
 
 export type TelegramProviderUsageInput = {
   provider: string;
@@ -15,9 +16,10 @@ export type TelegramConversationTurnInput = {
   assistant: string;
 };
 
-const MAX_CONVERSATION_TURNS = 6;
+const MAX_CONVERSATION_TURNS = 12;
 const MAX_CONVERSATION_USER_CHARS = 1000;
 const MAX_CONVERSATION_ASSISTANT_CHARS = 1600;
+const MAX_PINNED_TURNS = 3;
 
 export class SessionManager {
   private chatQueues = new Map<number, Promise<void>>();
@@ -113,6 +115,27 @@ export class SessionManager {
     });
   }
 
+  pinTurn(chatId: number, messageId: number, turn: { user: string; assistant: string }): TelegramSession {
+    const session = this.getOrCreate(chatId);
+    const existing = session.pinnedTurns.find((p) => p.messageId === messageId);
+    if (existing) return session;
+    const pinned: TelegramPinnedTurn = {
+      messageId,
+      user: truncateConversationText(turn.user, MAX_CONVERSATION_USER_CHARS),
+      assistant: truncateConversationText(turn.assistant, MAX_CONVERSATION_ASSISTANT_CHARS),
+      pinnedAt: new Date().toISOString()
+    };
+    const next = [...session.pinnedTurns, pinned].slice(-MAX_PINNED_TURNS);
+    return this.store.update(session.id, { pinnedTurns: next });
+  }
+
+  unpinTurn(chatId: number, messageId: number): TelegramSession {
+    const session = this.getOrCreate(chatId);
+    const next = session.pinnedTurns.filter((p) => p.messageId !== messageId);
+    if (next.length === session.pinnedTurns.length) return session;
+    return this.store.update(session.id, { pinnedTurns: next });
+  }
+
   appendConversationTurn(sessionId: string, input: TelegramConversationTurnInput): TelegramSession {
     const session = this.store.getById(sessionId);
     if (!session) {
@@ -125,6 +148,21 @@ export class SessionManager {
     };
     return this.store.update(sessionId, {
       conversation: [...session.conversation, turn].slice(-MAX_CONVERSATION_TURNS)
+    });
+  }
+
+  prepareEditedPrompt(chatId: number, previousPrompt: string): TelegramSession {
+    const session = this.getOrCreate(chatId);
+    const conversation = [...session.conversation];
+    for (let index = conversation.length - 1; index >= 0; index -= 1) {
+      if (conversation[index]?.user === previousPrompt) {
+        conversation.splice(index, 1);
+        break;
+      }
+    }
+    return this.store.update(session.id, {
+      engineSessionId: null,
+      conversation
     });
   }
 
@@ -177,7 +215,7 @@ export class SessionManager {
   }
 
   getWorkdirs(chatId: number, limit = 8): string[] {
-    return this.store.listWorkdirs(chatId, limit);
+    return this.store.listWorkdirs(chatId, limit).filter((p) => fs.existsSync(p));
   }
 
   addCustomCommand(chatId: number, cwd: string, cmd: CustomCommand): void {

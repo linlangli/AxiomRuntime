@@ -5,7 +5,7 @@ import type { ChildProcess } from "node:child_process";
 import type { Engine, EngineExecuteParams, ExecutionResult, ProgressUpdate, ToolCallResult } from "./types.js";
 import type { TokenUsage } from "../../core/types.js";
 import { cleanupRuntime, createCommandPermissionRequest, formatEngineTimeout, prepareEngineRuntime, summarizeRuntime } from "./engine-utils.js";
-import { extractJsonLines, spawnCapture, stripAnsi, terminateProcessTree } from "./process-utils.js";
+import { createJsonLineAccumulator, extractJsonLines, spawnCapture, stripAnsi, terminateProcessTree } from "./process-utils.js";
 import { startOpenAiUsageProxy, type OpenAiUsageProxy, type OpenAiUsageProxyRecord } from "../../core/runner/openai-usage-proxy.js";
 import { requiresDangerousConfirmation } from "../interaction/approval.js";
 import { writeTelegramLog } from "../log.js";
@@ -48,7 +48,8 @@ export class CodexEngine implements Engine {
       });
       const args = buildCodexArgs(params.prompt, runtime.model, params.cwd, permissionMode, {
         baseUrl: usageProxy.baseUrl
-      }, params.resume);
+      }, params.resume, params.imagePaths);
+      const progressParser = createJsonLineAccumulator((event) => handleCodexProgressEvent(event, params.onProgress));
       const result = await spawnCapture({
         command: runtime.command,
         args,
@@ -61,8 +62,9 @@ export class CodexEngine implements Engine {
         },
         signal,
         timeoutMs: params.timeoutMs,
-        onStdout: (chunk) => handleCodexProgress(chunk, params.onProgress)
+        onStdout: (chunk) => progressParser.push(chunk)
       }, (child) => this.processes.set(params.chatId, child));
+      progressParser.end();
 
       if (result.timedOut) {
         throw new Error(formatEngineTimeout("Codex", params.timeoutMs, runtime.provider.name, runtime.model));
@@ -133,7 +135,8 @@ export function buildCodexArgs(
   cwd: string,
   permissionMode: string,
   providerOverride?: CodexProviderOverride,
-  resume?: string | null
+  resume?: string | null,
+  imagePaths: string[] = []
 ): string[] {
   const args = [
     "exec",
@@ -166,6 +169,9 @@ export function buildCodexArgs(
 
   if (resume) {
     args.push(resume);
+  }
+  for (const imagePath of imagePaths) {
+    args.push("--image", imagePath);
   }
   args.push(prompt);
   return args;
@@ -350,18 +356,17 @@ function readCodexSessionMeta(filePath: string): CodexSessionMeta | null {
   return null;
 }
 
-function handleCodexProgress(chunk: string, onProgress?: (update: ProgressUpdate) => void | Promise<void>): void {
+function handleCodexProgressEvent(event: unknown, onProgress?: (update: ProgressUpdate) => void | Promise<void>): void {
   if (!onProgress) return;
-  for (const event of extractJsonLines(chunk)) {
-    if (!isRecord(event)) continue;
-    const toolCall = readCodexToolCall(event);
-    if (toolCall) {
-      void onProgress(readCodexProgressUpdate(event, toolCall.tool));
-      continue;
-    }
-    if (String(event.type ?? "").includes("message")) {
-      void onProgress({ phase: "writing" });
-    }
+  if (!isRecord(event)) return;
+  const toolCall = readCodexToolCall(event);
+  if (toolCall) {
+    void onProgress(readCodexProgressUpdate(event, toolCall.tool));
+    return;
+  }
+  const responseText = readCodexMessage(event);
+  if (responseText || String(event.type ?? "").includes("message")) {
+    void onProgress({ phase: "writing", responseText: responseText ?? undefined });
   }
 }
 

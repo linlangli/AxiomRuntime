@@ -39,6 +39,7 @@ export type EngineExecuteParams = {
   resume?: string | null;
   permissionMode?: TelegramPermissionMode;
   allowedTools?: string[];
+  imagePaths?: string[];
   providerName?: string;
   modelName?: string;
   onPermission: PermissionHandler;
@@ -53,6 +54,7 @@ export type ProgressUpdate = {
   tool?: string;
   toolKind?: "builtin" | "mcp" | "command";
   mcpServer?: string;
+  responseText?: string;
 };
 
 export interface Engine {

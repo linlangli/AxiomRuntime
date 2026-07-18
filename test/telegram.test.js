@@ -44,9 +44,9 @@ import {
   buildWorkdirStartKeyboard
 } from "../dist/telegram/interaction/keyboards.js";
 import { buildCodexArgs, findLatestCodexSessionId, formatCodexFailure, parseCodexOutput } from "../dist/telegram/engine/codex-engine.js";
-import { buildClaudeArgs, parseClaudeOutput } from "../dist/telegram/engine/claude-engine.js";
+import { buildClaudeArgs, formatClaudeFailure, parseClaudeOutput } from "../dist/telegram/engine/claude-engine.js";
 import { createTelegramEngines, listTelegramEngineNames } from "../dist/telegram/engine/registry.js";
-import { spawnCapture } from "../dist/telegram/engine/process-utils.js";
+import { createJsonLineAccumulator, spawnCapture } from "../dist/telegram/engine/process-utils.js";
 import { resolveWorkingCommand } from "../dist/telegram/engine/engine-utils.js";
 import { TelegramHandlerRegistry } from "../dist/telegram/handler-registry.js";
 import { TelegramTaskLifecycleRegistry } from "../dist/telegram/lifecycle-registry.js";
@@ -122,6 +122,7 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     assert.equal(session.setupStep, "ready");
     assert.equal(session.botContextFingerprint, null);
     assert.deepEqual(session.conversation, []);
+    assert.deepEqual(session.pinnedTurns, []);
     assert.deepEqual(session.providerUsage, []);
 
     const usage = manager.recordProviderUsage(session.id, {
@@ -161,6 +162,12 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     });
     assert.equal(withConversation.conversation.length, 1);
     assert.equal(withConversation.conversation[0].user, "上一轮问题");
+    const pinned = manager.pinTurn(123, 77, {
+      user: "上一轮问题",
+      assistant: "上一轮回答"
+    });
+    assert.equal(pinned.pinnedTurns.length, 1);
+    assert.equal(manager.getOrCreate(123).pinnedTurns[0].messageId, 77);
     const dirty = manager.update(withAttachment.id, {
       engineSessionId: "engine-session-1",
       botContextFingerprint: "codex:/tmp/project:abc",
@@ -179,6 +186,8 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     assert.equal(cleared.messageCount, 0);
     assert.equal(cleared.attachments.length, 0);
     assert.equal(cleared.conversation.length, 0);
+    assert.equal(cleared.pinnedTurns.length, 1);
+    assert.equal(manager.unpinTurn(123, 77).pinnedTurns.length, 0);
 
     const next = manager.newSession(123);
     assert.notEqual(next.id, session.id);
@@ -198,6 +207,7 @@ test("session store creates, updates, resumes, and stores attachments", async ()
     assert.equal(manager.getOrCreate(123).setupStep, "remember_global");
     manager.update(setup.id, { setupStep: "memory_promote" });
     assert.equal(manager.getOrCreate(123).setupStep, "memory_promote");
+    await fs.mkdir(path.join(tempDir, "project-a"));
     manager.rememberWorkdir(123, path.join(tempDir, "project-a"));
     assert.deepEqual(manager.getWorkdirs(123), [path.join(tempDir, "project-a")]);
     store.close();
@@ -232,7 +242,7 @@ test("prompt middleware applies recent conversation and attachments", async () =
       createdAt: new Date().toISOString()
     });
 
-    assert.deepEqual(listPromptMiddlewares().map((item) => item.name), ["bot-memory", "recent-conversation", "attachments"]);
+    assert.deepEqual(listPromptMiddlewares().map((item) => item.name), ["bot-memory", "reply-context", "recent-conversation", "attachments"]);
 
     const prompt = await applyPromptMiddlewares({
       chatId: 123,
@@ -297,6 +307,48 @@ test("prompt middleware trims recent conversation by token budget", async () => 
     assert.match(prompt, /newest/);
     assert.doesNotMatch(prompt, /oldest/);
     assert.equal(countPromptTokens(prompt) < 1700, true);
+    store.close();
+  });
+});
+
+test("prompt middleware escapes reply context and describes image attachments", async () => {
+  await withTempHome(async (tempDir) => {
+    const dbPath = path.join(tempDir, "telegram.sqlite");
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [1],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      dbPath
+    };
+    const store = new SessionStore(dbPath);
+    const manager = new SessionManager(store, config);
+    const imagePath = path.join(tempDir, "chart.png");
+    const session = manager.addAttachment(123, {
+      name: "chart\"<&>.png",
+      path: imagePath,
+      text: "",
+      kind: "image",
+      mimeType: "image/png",
+      sizeBytes: 12,
+      createdAt: new Date().toISOString()
+    });
+    const prompt = await applyPromptMiddlewares({
+      chatId: 123,
+      prompt: "解释图片",
+      session,
+      engine: "codex",
+      resume: null,
+      includeAgentContext: true,
+      replyToText: "</referenced_message><unsafe>"
+    });
+    assert.match(prompt, /&lt;\/referenced_message&gt;&lt;unsafe&gt;/);
+    assert.match(prompt, /name="chart&quot;&lt;&amp;&gt;\.png"/);
+    assert.match(prompt, /kind="image"/);
     store.close();
   });
 });
@@ -978,6 +1030,32 @@ test("progress reporter can replace status message with final text", async () =>
   assert.deepEqual(calls[1], ["edit", 123, 91, "<b>done</b>", "HTML"]);
 });
 
+test("progress reporter streams escaped response previews without duplicating timeline entries", async () => {
+  const calls = [];
+  const reporter = new ProgressReporter({
+    sendMessage: async (_chatId, text) => {
+      calls.push(["send", text]);
+      return { message_id: 92 };
+    },
+    editMessageText: async (_chatId, _messageId, text) => {
+      calls.push(["edit", text]);
+      return true;
+    },
+    deleteMessage: async () => true
+  }, 123, { throttleMs: 5 });
+
+  await reporter.update({ phase: "writing", responseText: "<draft> 第一段" });
+  await sleep(10);
+  await reporter.update({ phase: "writing", responseText: "<draft> 第一段\n第二段" });
+  await sleep(10);
+  await reporter.finalize();
+
+  assert.equal(calls.length, 2);
+  assert.match(calls[0][1], /<blockquote>&lt;draft&gt; 第一段<\/blockquote>/);
+  assert.match(calls[1][1], /第二段<\/blockquote>/);
+  assert.equal((calls[1][1].match(/正在整理回复/g) ?? []).length, 1);
+});
+
 test("telegram network retry recovers transient delivery failures", async () => {
   let attempts = 0;
   const result = await withTelegramNetworkRetry(async () => {
@@ -1085,6 +1163,11 @@ test("telegram command menu maps selected CLI slash commands", () => {
     "forget",
     "memories",
     "memory",
+    "pin",
+    "unpin",
+    "command",
+    "terminal",
+    "restart",
     "help"
   ]);
   assert.equal(getBaseBotCommands().find((item) => item.command === "reset")?.description, "重置会话信息");
@@ -1247,10 +1330,10 @@ test("agent profile document completes setup without writing BOT.md", async () =
       },
       abort: () => undefined
     };
-    let handler;
+    const handlers = new Map();
     registerDocumentHandler({
-      on: (_event, callback) => {
-        handler = callback;
+      on: (event, callback) => {
+        handlers.set(event, callback);
       }
     }, {
       sessionManager: manager,
@@ -1264,7 +1347,7 @@ test("agent profile document completes setup without writing BOT.md", async () =
     globalThis.fetch = async () => new Response("我是 Lin，偏好中文直接回复。");
     const replies = [];
     try {
-      await handler({
+      await handlers.get("message:document")({
         message: {
           document: {
             file_name: "PROMPT.md",
@@ -1293,6 +1376,148 @@ test("agent profile document completes setup without writing BOT.md", async () =
     assert.equal(replies.some((text) => String(text).includes("Attached")), false);
     assert.equal(replies.some((text) => String(text).includes("已就绪")), true);
     assert.equal(replies.some((text) => String(text).includes("initialized")), false);
+    store.close();
+  });
+});
+
+test("telegram photo attachments are passed to the engine and removed after success", async () => {
+  await withTempHome(async (tempDir) => {
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      dbPath: path.join(tempDir, "telegram.sqlite")
+    };
+    const store = new SessionStore(config.dbPath);
+    const manager = new SessionManager(store, config);
+    const engineCalls = [];
+    const engine = {
+      name: "codex",
+      execute: async (params) => {
+        engineCalls.push(params);
+        return { response: "图片已分析", provider: "test", model: "gpt-5.5" };
+      },
+      abort: () => undefined
+    };
+    const deps = {
+      sessionManager: manager,
+      claudeEngine: { ...engine, name: "claude" },
+      codexEngine: engine,
+      approvalManager: { request: async () => true, resolveAll: () => undefined },
+      config
+    };
+    const handlers = new Map();
+    registerDocumentHandler({ on: (event, callback) => handlers.set(event, callback) }, deps);
+
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(Buffer.from([1, 2, 3, 4]));
+    try {
+      await handlers.get("message:photo")({
+        message: {
+          message_id: 42,
+          photo: [{ file_id: "small" }, { file_id: "large", file_size: 4 }]
+        },
+        chat: { id: 123 },
+        getFile: async () => ({ file_path: "photos/chart.jpg" }),
+        reply: async () => undefined
+      });
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+
+    const attached = manager.getOrCreate(123).attachments[0];
+    assert.equal(attached.kind, "image");
+    assert.equal(attached.mimeType, "image/jpeg");
+    assert.equal(attached.sizeBytes, 4);
+    await fs.stat(attached.path);
+
+    const ok = await executePrompt({
+      chat: { id: 123 },
+      reply: async () => undefined,
+      api: { sendChatAction: async () => true }
+    }, deps, "这张图说明了什么？");
+    assert.equal(ok, true);
+    assert.deepEqual(engineCalls[0].imagePaths, [attached.path]);
+    assert.match(engineCalls[0].prompt, /kind="image"/);
+    await assert.rejects(fs.stat(attached.path), /ENOENT/);
+    assert.deepEqual(manager.getOrCreate(123).attachments, []);
+    store.close();
+  });
+});
+
+test("editing the latest prompt reruns without the superseded native session", async () => {
+  await withTempHome(async (tempDir) => {
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      dbPath: path.join(tempDir, "telegram.sqlite")
+    };
+    const store = new SessionStore(config.dbPath);
+    const manager = new SessionManager(store, config);
+    const engineCalls = [];
+    const engine = {
+      name: "codex",
+      execute: async (params) => {
+        engineCalls.push(params);
+        return {
+          response: engineCalls.length === 1 ? "旧回答" : "新回答",
+          sessionId: `session-${engineCalls.length}`,
+          provider: "test",
+          model: "gpt-5.5"
+        };
+      },
+      abort: () => undefined
+    };
+    const handlers = new Map();
+    registerMessageHandler({ on: (event, callback) => handlers.set(event, callback) }, {
+      sessionManager: manager,
+      claudeEngine: { ...engine, name: "claude" },
+      codexEngine: engine,
+      approvalManager: { request: async () => true, resolveAll: () => undefined },
+      config
+    });
+    const context = {
+      chat: { id: 123 },
+      reply: async () => undefined,
+      api: { sendChatAction: async () => true }
+    };
+
+    await handlers.get("message:text")({
+      ...context,
+      message: {
+        message_id: 9,
+        text: "旧问题",
+        reply_to_message: { text: "<被引用内容>" }
+      }
+    });
+    assert.equal(manager.getOrCreate(123).engineSessionId, "session-1");
+
+    await handlers.get("edited_message:text")({
+      ...context,
+      editedMessage: {
+        message_id: 9,
+        text: "新问题",
+        reply_to_message: { text: "<被引用内容>" }
+      }
+    });
+
+    assert.equal(engineCalls.length, 2);
+    assert.equal(engineCalls[1].resume, null);
+    assert.doesNotMatch(engineCalls[1].prompt, /旧问题|旧回答/);
+    assert.match(engineCalls[1].prompt, /新问题/);
+    assert.match(engineCalls[1].prompt, /&lt;被引用内容&gt;/);
+    assert.deepEqual(manager.getOrCreate(123).conversation.map((turn) => turn.user), ["新问题"]);
     store.close();
   });
 });
@@ -1940,6 +2165,54 @@ test("dangerous command detector catches high risk commands", () => {
   assert.equal(requiresDangerousConfirmation("ls -la"), false);
 });
 
+test("telegram terminal command requires confirmation for dangerous shell input", async () => {
+  await withTempHome(async (tempDir) => {
+    const config = {
+      token: "token",
+      allowAllUsers: false,
+      allowedUserIds: [123],
+      defaultEngine: "codex",
+      defaultCwd: tempDir,
+      defaultPermissionMode: "bypassPermissions",
+      sessionTimeoutHours: 24,
+      maxOutputLength: 4000,
+      dbPath: path.join(tempDir, "telegram.sqlite")
+    };
+    const store = new SessionStore(config.dbPath);
+    const manager = new SessionManager(store, config);
+    const commands = new Map();
+    let approvalRequests = 0;
+    const engine = { name: "codex", execute: async () => ({ response: "ok" }), abort: () => undefined };
+    registerCommands({
+      command: (name, callback) => commands.set(name, callback),
+      api: { setMyCommands: async () => true }
+    }, {
+      sessionManager: manager,
+      claudeEngine: { ...engine, name: "claude" },
+      codexEngine: engine,
+      engines: { claude: { ...engine, name: "claude" }, codex: engine },
+      approvalManager: {
+        request: async () => {
+          approvalRequests += 1;
+          return false;
+        },
+        resolveAll: () => undefined
+      },
+      config
+    });
+    const replies = [];
+    await commands.get("terminal")({
+      chat: { id: 123 },
+      match: "rm -rf /tmp/should-not-run",
+      reply: async (text) => replies.push(text)
+    });
+    assert.equal(approvalRequests, 1);
+    assert.match(String(replies.at(-1)), /已取消高风险终端命令/);
+    assert.equal(manager.getOrCreate(123).status, "idle");
+    store.close();
+  });
+});
+
 test("codex args map permission modes to non-interactive CLI flags", () => {
   assert.deepEqual(buildCodexArgs("hello", "gpt-5.5", "/tmp/project", "default"), [
     "-a",
@@ -2011,6 +2284,49 @@ test("claude args include verbose stream-json output", () => {
   assert.equal(args.includes("--output-format"), true);
   assert.equal(args.includes("stream-json"), true);
   assert.equal(args.includes("--verbose"), true);
+});
+
+test("codex args attach multiple images to the prompt", () => {
+  const args = buildCodexArgs(
+    "分析图片",
+    "gpt-5.5",
+    "/tmp/project",
+    "default",
+    undefined,
+    "session-1",
+    ["/tmp/a.png", "/tmp/b.jpg"]
+  );
+  assert.deepEqual(args.filter((item) => item === "--image"), ["--image", "--image"]);
+  assert.equal(args.includes("/tmp/a.png"), true);
+  assert.equal(args.includes("/tmp/b.jpg"), true);
+  assert.equal(args.at(-1), "分析图片");
+});
+
+test("claude failure formatter extracts the terminal result instead of system init", () => {
+  const message = formatClaudeFailure([
+    JSON.stringify({ type: "system", subtype: "init", tools: ["Read", "Edit"] }),
+    JSON.stringify({ type: "system", subtype: "api_retry", attempt: 10 }),
+    JSON.stringify({
+      type: "result",
+      is_error: true,
+      result: "API Error: Unable to connect to API (UNKNOWN_CERTIFICATE_VERIFICATION_ERROR)"
+    })
+  ].join("\n"), "", 1);
+  assert.equal(message, "API Error: Unable to connect to API (UNKNOWN_CERTIFICATE_VERIFICATION_ERROR)");
+  assert.doesNotMatch(message, /system|tools|api_retry/);
+});
+
+test("json line accumulator preserves events split across stdout chunks", () => {
+  const events = [];
+  const parser = createJsonLineAccumulator((event) => events.push(event));
+  parser.push('{"type":"assis');
+  parser.push('tant","text":"你好"}\n{"type":"res');
+  parser.push('ult","result":"完成"}');
+  parser.end();
+  assert.deepEqual(events, [
+    { type: "assistant", text: "你好" },
+    { type: "result", result: "完成" }
+  ]);
 });
 
 test("codex session id fallback reads local session metadata", async () => {

@@ -1,7 +1,11 @@
 import fs from "node:fs";
-import { type Bot, type CommandContext, type Context } from "grammy";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { InputFile, type Bot, type CommandContext, type Context } from "grammy";
 import type { TelegramConfig, TelegramEngineName } from "../config.js";
 import type { Engine } from "../engine/types.js";
+import { createCommandPermissionRequest } from "../engine/engine-utils.js";
+import { requiresDangerousConfirmation } from "../interaction/approval.js";
 import { safeResetChatCommandMenu, safeSetChatCommandMenu } from "../interaction/command-menu.js";
 import { Formatter, escapeHtml } from "../interaction/formatter.js";
 import type { ApprovalManager } from "../interaction/approval.js";
@@ -12,6 +16,7 @@ import { showConfigPanel, showReadyProviderPicker, showSetupProviderPicker, show
 import { showUsagePanel } from "./usage.js";
 import { writeTelegramLog } from "../log.js";
 
+const execAsync = promisify(exec);
 const FRESH_DELETE_SCAN_LIMIT = 1000;
 const TELEGRAM_DELETE_BATCH_SIZE = 100;
 const START_COMMAND_DEDUP_MS = 10000;
@@ -149,6 +154,95 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
       reply_markup: { inline_keyboard: [[{ text: "关闭", callback_data: "command:cancel" }]] }
     });
   });
+
+  bot.command("pin", async (ctx) => {
+    const reply = ctx.message?.reply_to_message;
+    if (!reply) {
+      await ctx.reply("用法：回复一条 bot 消息并发送 /pin 来固定该对话。");
+      return;
+    }
+    const session = deps.sessionManager.getOrCreate(ctx.chat.id);
+    const replyText = "text" in reply ? reply.text : "caption" in reply ? reply.caption : undefined;
+    const normalizedReply = normalizePinText(replyText ?? "");
+    const turn = [...session.conversation].reverse().find((item) => {
+      const assistant = normalizePinText(item.assistant);
+      const sample = assistant.slice(0, Math.min(80, assistant.length));
+      return Boolean(sample && (normalizedReply.includes(sample) || assistant.includes(normalizedReply)));
+    });
+    if (!turn) {
+      await ctx.reply("未找到对应的对话记录，只能固定 bot 回复的消息。");
+      return;
+    }
+    deps.sessionManager.pinTurn(ctx.chat.id, reply.message_id, { user: turn.user, assistant: turn.assistant });
+    await ctx.reply("📌 已固定该对话，后续请求会优先携带此上下文。");
+  });
+
+  bot.command("unpin", async (ctx) => {
+    const reply = ctx.message?.reply_to_message;
+    if (!reply) {
+      const session = deps.sessionManager.getOrCreate(ctx.chat.id);
+      if (!session.pinnedTurns.length) {
+        await ctx.reply("当前没有固定的对话。");
+        return;
+      }
+      deps.sessionManager.unpinTurn(ctx.chat.id, session.pinnedTurns[session.pinnedTurns.length - 1]!.messageId);
+      await ctx.reply("已取消最近一条固定对话。");
+      return;
+    }
+    deps.sessionManager.unpinTurn(ctx.chat.id, reply.message_id);
+    await ctx.reply("已取消固定该对话。");
+  });
+
+  bot.command("terminal", async (ctx) => {
+    const shell = String(ctx.match ?? "").trim();
+    if (!shell) {
+      await ctx.reply("用法：<code>/terminal &lt;命令&gt;</code>\n例如：<code>/terminal ls -la</code>", { parse_mode: "HTML" });
+      return;
+    }
+    const session = deps.sessionManager.getOrCreate(ctx.chat.id);
+    const cwd = session.cwd || process.cwd();
+    if (requiresDangerousConfirmation(shell)) {
+      deps.sessionManager.update(session.id, { status: "waiting_approval" });
+      const approved = await deps.approvalManager.request(
+        ctx.chat.id,
+        createCommandPermissionRequest("Telegram terminal", shell)
+      );
+      deps.sessionManager.update(session.id, { status: "idle" });
+      if (!approved) {
+        await ctx.reply("已取消高风险终端命令。");
+        return;
+      }
+    }
+    await ctx.reply(`⚙️ 执行中：<code>${escapeHtml(shell)}</code>`, { parse_mode: "HTML" });
+    try {
+      const { stdout, stderr } = await execAsync(shell, { cwd, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 });
+      const output = (stdout || stderr || "（无输出）").trim();
+      if (output.length <= 3800) {
+        await ctx.reply(`<pre>${escapeHtml(output)}</pre>`, { parse_mode: "HTML" });
+      } else {
+        await ctx.replyWithDocument(new InputFile(Buffer.from(output, "utf-8"), "output.txt"));
+      }
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.length <= 3800) {
+        await ctx.reply(`❌ 执行失败：\n<pre>${escapeHtml(msg)}</pre>`, { parse_mode: "HTML" });
+      } else {
+        await ctx.replyWithDocument(new InputFile(Buffer.from(msg, "utf-8"), "error.txt"));
+      }
+    }
+  });
+
+  bot.command("restart", async (ctx) => {
+    await ctx.reply("🔄 Bot 正在重启…");
+    setTimeout(() => process.kill(process.pid, "SIGHUP"), 500).unref?.();
+  });
+}
+
+function normalizePinText(value: string): string {
+  return value
+    .replace(/^✅\s*完成(?:\s*·[^\n]+)?/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function shouldHandleStartCommand(

@@ -27,7 +27,11 @@ const BASE_COMMANDS: TelegramCommandMapping[] = [
   { command: "forget", description: "删除 Bot 记忆", prompt: "/forget" },
   { command: "memories", description: "查看 Bot 记忆", prompt: "/memories" },
   { command: "memory", description: "管理 Bot 记忆", prompt: "/memory" },
+  { command: "pin", description: "固定一条重要对话", prompt: "/pin" },
+  { command: "unpin", description: "取消固定对话", prompt: "/unpin" },
   { command: "command", description: "注册自定义命令", prompt: "/__register_command" },
+  { command: "terminal", description: "执行终端命令", prompt: "/terminal" },
+  { command: "restart", description: "重启 Bot", prompt: "/restart" },
   { command: "help", description: "查看帮助", prompt: "/help" }
 ];
 

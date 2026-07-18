@@ -2,12 +2,11 @@ import type { Context } from "grammy";
 import type { InlineKeyboardMarkup } from "grammy/types";
 import type { ProgressUpdate } from "../engine/types.js";
 import { withTelegramNetworkRetry } from "../network-retry.js";
-import { Formatter } from "./formatter.js";
+import { escapeHtml, Formatter, truncateText } from "./formatter.js";
 
 export type ProgressReporterOptions = {
   silent?: boolean;
   throttleMs?: number;
-  isResume?: boolean;
 };
 
 type ProgressApi = Pick<Context["api"], "sendMessage" | "editMessageText" | "deleteMessage">;
@@ -23,8 +22,9 @@ export class ProgressReporter {
   private toolCount = 0;
   private throttleMs: number;
   private readonly silent: boolean;
-  private readonly isResume: boolean;
   private timeline: string[] = [];
+  private lastTimelinePhase?: ProgressUpdate["phase"];
+  private responsePreview = "";
   private startTime = Date.now();
 
   constructor(
@@ -34,7 +34,6 @@ export class ProgressReporter {
   ) {
     this.silent = options.silent ?? false;
     this.throttleMs = options.throttleMs ?? 1500;
-    this.isResume = options.isResume ?? false;
   }
 
   async update(update: ProgressUpdate): Promise<void> {
@@ -96,9 +95,18 @@ export class ProgressReporter {
     const signature = buildProgressSignature(update, this.toolCount);
     if (signature === this.lastSignature) return;
 
-    const entry = Formatter.progress(update, { toolCount: this.toolCount });
-    this.appendTimeline(entry);
-    const text = Formatter.progressTimeline(this.getDisplayEntries(), this.isResume);
+    if (update.responseText?.trim()) {
+      this.responsePreview = update.responseText.trim();
+    }
+    if (this.lastTimelinePhase !== update.phase || update.phase !== "writing") {
+      const entry = Formatter.progress(update, { toolCount: this.toolCount });
+      this.appendTimeline(entry);
+      this.lastTimelinePhase = update.phase;
+    }
+    const preview = this.responsePreview
+      ? `<blockquote>${escapeHtml(truncateText(this.responsePreview, 1200))}</blockquote>`
+      : "";
+    const text = [Formatter.progressTimeline(this.getDisplayEntries()), preview].filter(Boolean).join("\n\n");
 
     try {
       if (!this.messageId) {
@@ -153,6 +161,7 @@ function buildProgressSignature(update: ProgressUpdate, toolCount: number): stri
     update.tool ?? "",
     update.toolKind ?? "",
     update.mcpServer ?? "",
+    update.responseText ?? "",
     update.phase === "tool_calling" ? toolCount : ""
   ].join("\0");
 }

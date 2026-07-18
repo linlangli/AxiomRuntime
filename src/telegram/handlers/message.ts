@@ -40,6 +40,24 @@ const STALE_SESSION_THRESHOLD_MS = 20 * 60 * 1000;
 
 export const resultStore = new ResultStore();
 
+const MAX_PROMPT_HISTORY = 10;
+type PromptMessageEntry = { messageId: number; prompt: string; replyToText?: string };
+const promptMessageMap = new Map<number, PromptMessageEntry[]>();
+
+function recordPromptMessage(chatId: number, entry: PromptMessageEntry): void {
+  const list = promptMessageMap.get(chatId) ?? [];
+  const existing = list.findIndex((item) => item.messageId === entry.messageId);
+  if (existing >= 0) list.splice(existing, 1);
+  list.push(entry);
+  if (list.length > MAX_PROMPT_HISTORY) list.shift();
+  promptMessageMap.set(chatId, list);
+}
+
+function getLatestPromptMessage(chatId: number): PromptMessageEntry | null {
+  const list = promptMessageMap.get(chatId);
+  return list?.length ? list[list.length - 1]! : null;
+}
+
 type ProviderAttempt = {
   providerName?: string;
   modelName?: string;
@@ -56,9 +74,30 @@ export type ExecutePromptOptions = {
   skipSetupReminder?: boolean;
   timeoutMs?: number;
   progressThrottleMs?: number;
+  replyToText?: string;
 };
 
 export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void {
+  bot.on("edited_message:text", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+    const editedId = ctx.editedMessage.message_id;
+    const previous = getLatestPromptMessage(chatId);
+    if (!previous || previous.messageId !== editedId) return;
+    const newText = ctx.editedMessage.text?.trim();
+    if (!newText || newText.startsWith("/") || newText === previous.prompt) return;
+
+    const session = deps.sessionManager.getOrCreate(chatId);
+    if (session.status === "running" || session.status === "waiting_approval") {
+      abortTelegramEngines(deps, chatId);
+      deps.approvalManager.resolveAll(chatId, false);
+    }
+    deps.sessionManager.prepareEditedPrompt(chatId, previous.prompt);
+    const replyToText = readReplyContext(ctx.editedMessage) ?? previous.replyToText;
+    recordPromptMessage(chatId, { messageId: editedId, prompt: newText, replyToText });
+    await executePrompt(ctx, deps, newText, undefined, { replyToText });
+  });
+
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text;
     const chatId = ctx.chat?.id;
@@ -118,8 +157,26 @@ export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void
       return;
     }
     if (await remindSetup(ctx, deps, session)) return;
-    await executePrompt(ctx, deps, text);
+    const replyToText = readReplyContext(ctx.message);
+    const messageId = ctx.message.message_id;
+    recordPromptMessage(chatId, { messageId, prompt: text, replyToText });
+    await executePrompt(ctx, deps, text, undefined, { replyToText });
   });
+}
+
+function readReplyContext(message: { reply_to_message?: { text?: string; caption?: string } } | undefined): string | undefined {
+  const reply = message?.reply_to_message;
+  const text = reply?.text ?? reply?.caption;
+  return text?.trim() || undefined;
+}
+
+function abortTelegramEngines(deps: MessageHandlerDeps, chatId: number): void {
+  const engines = new Set<Engine>();
+  if (deps.engines?.claude) engines.add(deps.engines.claude);
+  if (deps.engines?.codex) engines.add(deps.engines.codex);
+  if (deps.claudeEngine) engines.add(deps.claudeEngine);
+  if (deps.codexEngine) engines.add(deps.codexEngine);
+  for (const engine of engines) engine.abort(chatId);
 }
 
 async function executeMappedSlashCommand(
@@ -239,8 +296,7 @@ async function executePromptLocked(
   const stopTypingStatus = startTypingStatus(ctx, chatId);
   const reporter = new ProgressReporter(ctx.api, chatId, {
     silent: options.silentSuccess ?? false,
-    throttleMs: options.progressThrottleMs,
-    isResume: Boolean(session.engineSessionId)
+    throttleMs: options.progressThrottleMs
   });
 
   try {
@@ -259,7 +315,8 @@ async function executePromptLocked(
         engine: session.engine,
         resume,
         memoryService: deps.memoryService,
-        includeAgentContext: options.includeAgentContext !== false
+        includeAgentContext: options.includeAgentContext !== false,
+        replyToText: options.replyToText
       });
       try {
         result = await engine.execute({
@@ -270,6 +327,9 @@ async function executePromptLocked(
           permissionMode: session.permissionMode,
           providerName: attempt.providerName,
           modelName: attempt.modelName,
+          imagePaths: session.attachments
+            .filter((attachment) => attachment.kind === "image" || attachment.mimeType?.startsWith("image/"))
+            .map((attachment) => attachment.path),
           timeoutMs: options.timeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS,
           onProgress: (update) => reporter.update(update),
           onPermission: async (req) => {
@@ -326,6 +386,7 @@ async function executePromptLocked(
       status: "idle",
       attachments: []
     });
+    cleanupConsumedAttachments(session.attachments);
     deps.sessionManager.recordProviderUsage(session.id, {
       provider: result.provider ?? deps.config.provider ?? "unknown",
       model: result.model ?? deps.config.model,
@@ -591,6 +652,17 @@ async function writeTelegramFallbackLog(input: {
 
 function summarizeError(message: string): string {
   return message.replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function cleanupConsumedAttachments(attachments: TelegramSession["attachments"]): void {
+  for (const attachment of attachments) {
+    try {
+      fs.unlinkSync(attachment.path);
+    } catch {
+      // Temporary attachment cleanup is best-effort. Failed executions retain
+      // their attachments so the user can retry without uploading again.
+    }
+  }
 }
 
 function formatResultFooter(result: ExecutionResult): string {

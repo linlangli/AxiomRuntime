@@ -40,6 +40,12 @@
 - 切换 `/claude` `/codex` 记忆仍可用
 - 统一设置/审计界面可管理自动写入的记忆
 - Proxy 与 stdout stream-json 解析并行工作互不干扰
+- 动态 conversation 注入优先保留最新 turn，整体不超过 1400 token；`pinnedTurns` 持久化、去重并受 3 条上限约束
+- 编辑最新 prompt 会移除旧 conversation turn、清空 native `engineSessionId` 并重跑；回复文字/caption XML 转义后最多注入 800 token
+- JSONL event 被任意 stdout chunk 切分时仍完整解析；有界 `responseText` 预览 HTML 转义、1500ms 节流且不重复 timeline
+- 一次最多 8 个附件；文本/图片大小与 token budget 生效，Codex 收到全部 `--image`，成功清理临时文件、失败保留
+- Claude 非零退出优先展示 terminal result/error；fixture 断言 `system/init` 与 retry envelope 不成为主错误
+- `/terminal` 高风险命令必须 confirmation，`/restart` 必须先优雅停止再启动 replacement process
 
 ## CLI
 

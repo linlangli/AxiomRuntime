@@ -216,7 +216,7 @@ Increment gate：前一 Increment 的 contract/version/error 语义冻结并通�
 - **R17 Capability Observability**：Phase 0 固化 `CapabilityObservation`/Sink/Query schema；Phase 1 完成 Memory 逐 route explain 与 generic resolve/invoke/result；Phase 2 连接异步 Post-Run span link；Phase 10 完成 Skill step/outcome/lifecycle；JSONL/OTel/dashboard 只投影同一次 emit。
 - **查询体验**：提供 `ai trace show`、`ai memory explain`、`ai skill explain` 与 Web Timeline/Memory/Skill/Capability/Cost/Error 视图；全部经 `ObservabilityQueryPort` 与 Policy，显示 sampling/drop completeness，不读取原始 JSONL。
 - **安全与性能**：高影响/失败/lifecycle trace 100% 保留，普通成功 read 可采样；指标禁止高基数 id；同步 emit p95≤2ms、p99≤5ms，exporter 故障不改变 Runtime 行为。
-- **R18 Telegram 中间态**：Phase 2 随自动记忆一起上，复用 `ProgressReporter` 扩展 `phase`；引擎 `thinking` 改用 `⏱️`，记忆态 `🧠 回忆中/已调用 N 条`、技能态 `🧩 套用/沉淀《名》`、写入 `📝 记住新偏好`（skill 相关随 Phase 10 补齐），只显状态不泄内容。
+- **R18 Telegram 中间态**：现有 Agent baseline 已通过同一 `ProgressReporter` 提供 1500ms 节流的阶段、工具和有界响应预览；Phase 2 随自动记忆扩展 `phase`。引擎 `thinking` 使用 `⏱️`，记忆态 `🧠 回忆中/已调用 N 条`、技能态 `🧩 套用/沉淀《名》`、写入 `📝 记住新偏好`（skill 相关随 Phase 10 补齐），只显状态不泄内容。
 
 ## 相关文档
 

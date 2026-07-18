@@ -6,6 +6,7 @@ import type {
   CustomCommand,
   TelegramAttachment,
   TelegramConversationTurn,
+  TelegramPinnedTurn,
   TelegramProviderUsage,
   TelegramSession,
   TelegramSessionCreateInput,
@@ -26,6 +27,7 @@ type SessionRow = {
   message_count: number;
   attachments_json: string;
   conversation_json: string;
+  pinned_turns_json: string | null;
   provider_usage_json: string;
   created_at: string;
   last_active_at: string;
@@ -61,6 +63,7 @@ export class SessionStore {
       messageCount: 0,
       attachments: [],
       conversation: [],
+      pinnedTurns: [],
       providerUsage: [],
       createdAt: now,
       lastActiveAt: now
@@ -68,10 +71,10 @@ export class SessionStore {
     this.db.prepare(
       `insert into sessions (
         id, chat_id, engine, engine_session_id, bot_context_fingerprint, cwd, permission_mode, approve_all, setup_step,
-        status, message_count, attachments_json, conversation_json, provider_usage_json, created_at, last_active_at
+        status, message_count, attachments_json, conversation_json, pinned_turns_json, provider_usage_json, created_at, last_active_at
       ) values (
         @id, @chatId, @engine, @engineSessionId, @botContextFingerprint, @cwd, @permissionMode, @approveAll, @setupStep,
-        @status, @messageCount, @attachmentsJson, @conversationJson, @providerUsageJson, @createdAt, @lastActiveAt
+        @status, @messageCount, @attachmentsJson, @conversationJson, @pinnedTurnsJson, @providerUsageJson, @createdAt, @lastActiveAt
       )`
     ).run({
       ...session,
@@ -79,6 +82,7 @@ export class SessionStore {
       setupStep: session.setupStep,
       attachmentsJson: JSON.stringify(session.attachments),
       conversationJson: JSON.stringify(session.conversation),
+      pinnedTurnsJson: JSON.stringify(session.pinnedTurns),
       providerUsageJson: JSON.stringify(session.providerUsage)
     });
     return session;
@@ -128,6 +132,7 @@ export class SessionStore {
       ...patch,
       attachments: patch.attachments ?? current.attachments,
       conversation: patch.conversation ?? current.conversation,
+      pinnedTurns: patch.pinnedTurns ?? current.pinnedTurns,
       providerUsage: patch.providerUsage ?? current.providerUsage,
       lastActiveAt: patch.lastActiveAt ?? new Date().toISOString()
     };
@@ -144,6 +149,7 @@ export class SessionStore {
         message_count = @messageCount,
         attachments_json = @attachmentsJson,
         conversation_json = @conversationJson,
+        pinned_turns_json = @pinnedTurnsJson,
         provider_usage_json = @providerUsageJson,
         last_active_at = @lastActiveAt
        where id = @id`
@@ -160,6 +166,7 @@ export class SessionStore {
       messageCount: next.messageCount,
       attachmentsJson: JSON.stringify(next.attachments),
       conversationJson: JSON.stringify(next.conversation),
+      pinnedTurnsJson: JSON.stringify(next.pinnedTurns),
       providerUsageJson: JSON.stringify(next.providerUsage),
       lastActiveAt: next.lastActiveAt
     });
@@ -251,6 +258,7 @@ export class SessionStore {
     this.ensureColumn("sessions", "provider_usage_json", "provider_usage_json text not null default '[]'");
     this.ensureColumn("sessions", "bot_context_fingerprint", "bot_context_fingerprint text");
     this.ensureColumn("sessions", "conversation_json", "conversation_json text not null default '[]'");
+    this.ensureColumn("sessions", "pinned_turns_json", "pinned_turns_json text not null default '[]'");
     this.db.exec(`
       create table if not exists custom_commands (
         chat_id integer not null,
@@ -314,6 +322,7 @@ function rowToSession(row: SessionRow): TelegramSession {
     messageCount: row.message_count,
     attachments: parseAttachments(row.attachments_json),
     conversation: parseConversation(row.conversation_json),
+    pinnedTurns: parsePinnedTurns(row.pinned_turns_json),
     providerUsage: parseProviderUsage(row.provider_usage_json),
     createdAt: row.created_at,
     lastActiveAt: row.last_active_at
@@ -354,6 +363,20 @@ function parseConversation(value: string): TelegramConversationTurn[] {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.flatMap((item) => isConversationTurn(item) ? [item] : []);
+  } catch {
+    return [];
+  }
+}
+
+function parsePinnedTurns(value: string | null): TelegramPinnedTurn[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is TelegramPinnedTurn => {
+      const t = item as TelegramPinnedTurn;
+      return Boolean(t && typeof t.messageId === "number" && typeof t.user === "string" && typeof t.assistant === "string");
+    });
   } catch {
     return [];
   }

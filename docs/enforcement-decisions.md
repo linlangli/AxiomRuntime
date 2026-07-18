@@ -707,6 +707,8 @@ Cost & Latency 视图是联合只读视图：latency 来自 Observation，token/
 
 方案：复用现有 `ProgressReporter` + `ProgressUpdate`（`src/telegram/interaction/progress-reporter.ts`），**扩展 `phase` 增加记忆态**，不新开一条消息通道——记忆态与引擎执行态共用同一条可编辑进度消息，顺序演进、最终由回复替换（`replaceWithHtml`）。
 
+当前 Agent 执行态同时允许在该消息中显示有界 `responseText` 预览：预览来自已完成的 Claude/Codex JSON stream event，必须 HTML 转义、长度截断并沿用至少 1500ms 的节流；相同 `writing` phase 只能更新预览，禁止重复堆叠 timeline。最终结果替换预览，Telegram 投递重试禁止重新执行 Agent。
+
 ```typescript
 // engine/types.ts: ProgressUpdate.phase 追加记忆/技能阶段
 //（thinking 引擎态展示改用 ⏱️，🧠 让位给记忆态）
@@ -788,6 +790,7 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - Turn 关联必须综合 execution marker、协议 id、内容指纹和流状态；末尾 role 只能是弱信号。
 - retry/continuation/compaction 继承 injection manifest 且不重复写事件；relation unknown 时透传并只落低风险 execution episode。
 - adapter 变更必须通过完整 fixture corpus；未知事件原样透传，失败/取消/断流不得误判成功。
+- JSONL adapter 必须跨任意 stdout chunk 保留未完成行并在 close 时 flush；CLI 非零退出时优先提取 terminal `result/error`，禁止把 `system/init` 或 retry envelope 当作面向用户的主错误。
 
 ### R27 分层延迟预算（Phase 1、5、11）
 

@@ -194,10 +194,16 @@ ai telegram stop
 - 工作路径可从历史记录选择，也可以点“自定义”后输入名称；自定义路径固定创建或复用 `~/输入名称`。
 - 未确定工作路径时发送普通内容会提示先确定工作路径；未确定 CLI 时发送普通内容会提示先选择 CLI。
 - 选择 CLI 后只展示会话 ID、工作路径、CLI、provider、model 和权限模式。
-- Bot 默认命令菜单只保留 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/usage` 和 `/help`；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射，点击后转发给当前 CLI 执行。
+- Bot 基础命令菜单包含 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/usage`、Memory、上下文固定、终端和重启命令；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射，点击后转发给当前 CLI 执行。
 - Telegram Codex 执行会自动走 AI Gateway 本地 OpenAI 兼容代理；代理透明转发请求并记录 provider 返回的 usage，不改变 Codex CLI 请求和响应。
 - `/usage` 优先使用 provider 响应里的 cost；如果只有 token usage，会读取 `~/.ai-gateway/model-pricing.json` 按价格表估算。价格表没有命中的模型会显示额度未知。
-- 文件上传支持 UTF-8 文本附件，下一条 prompt 会自动带上附件内容。
+- 会话最多保留最近 12 个 turn，并在最多 1400 token 内从新到旧选择上下文；回复 Bot 回答后发送 `/pin` 可固定关键 turn（最多 3 条），`/unpin` 可取消。
+- 回复历史文字或 caption 会把引用内容作为额外上下文注入；引用内容最多 800 token，并按不可信上下文转义。
+- 编辑最新一条普通 prompt 会自动停止旧执行并用新文本重跑；重跑不会 resume 含旧问题的 native session。
+- 一次最多附加 8 个文件：UTF-8 文本单文件上限 2MB，图片单文件上限 10MB。文本内容总注入预算为 3000 token；Codex 图片通过 `--image` 传入。成功执行后临时附件会清理，失败时保留以便重试。
+- Claude/Codex 的完整 JSON stream event 会驱动同一条进度消息中的阶段、工具和回答预览；默认至少 1500ms 更新一次，不做逐 token 高频编辑。
+- `/terminal <命令>` 在当前工作目录执行命令，最长 60 秒；高风险命令仍需 inline confirmation。`/restart` 会优雅停止当前 Bot 并启动 replacement process。
+- Claude 失败时 Bot 会提取 terminal error；不会再把 `system/init` JSON 当成主错误显示。
 - `full-auto` 会映射到 Claude/Codex 的跳过审批模式，但高风险命令文本仍会在 Telegram 侧强制确认。
 - 如果本机不能直连 `api.telegram.org`，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。
 

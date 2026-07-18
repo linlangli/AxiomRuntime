@@ -111,6 +111,7 @@ export interface Engine {
 export interface EngineExecuteParams {
   chatId: number; prompt: string; cwd: string;
   resume?: string; permissionMode?: string; allowedTools?: string[];
+  imagePaths?: string[];                         // Codex --image / Claude local path context
   onPermission: PermissionHandler;              // 权限请求 → Telegram inline button
   onProgress?: (u: ProgressUpdate) => void;     // 进度事件 → 状态消息
   signal?: AbortSignal;
@@ -124,7 +125,7 @@ export type PermissionHandler = (req: PermissionRequest) => Promise<boolean>;
 
 export interface ProgressUpdate {
   phase: 'thinking' | 'tool_calling' | 'writing' | 'done';
-  message?: string; tool?: string;
+  message?: string; tool?: string; responseText?: string;
 }
 
 export interface ExecutionResult {
@@ -146,6 +147,15 @@ ai telegram logs [-f]      # 日志（最近 50 行 / 实时跟踪）
 ```
 
 Setup 引导：`/start → model(Provider/Model) → workdir(+/init) → agent_profile(画像) → ready`。同一 chat 任务经 `SessionManager.runExclusive()` 串行执行，避免并发写同一 session。
+
+### C.1 当前高优先级 UX 契约
+
+- **动态上下文**：`conversation` 最多保留 12 turn；注入按 1400 token budget 从最新 turn 反向选择，而不是固定轮数。`/pin` 最多持久化 3 个 `pinnedTurns` 并优先纳入预算；`/unpin` 可撤销。native `resume` 可用时不重复注入普通 recent conversation。
+- **编辑重跑**：仅最新一条、由当前 Bot 进程观察到的普通用户 prompt 响应 `edited_message:text`。重跑前终止同 chat 活跃 Agent、拒绝待审批、移除被替代的 conversation turn，并清空 `engineSessionId`，禁止旧 native session 继续携带原问题。
+- **回复引用**：回复文字或 caption 以 `<referenced_message>` 注入，最多 800 token；内容必须 XML 转义并作为上下文而非新指令。
+- **多附件/图片**：下一条请求最多消费 8 个附件。UTF-8 文本单文件 ≤2MB、注入总预算 3000 token；图片单文件 ≤10MB。Codex 使用 `--image` 接收本地路径，Claude 通过结构化附件路径读取。成功后清理临时文件；执行失败保留附件以便重试。
+- **流式预览**：JSONL parser 必须跨任意 stdout chunk 保留未完成行。`ProgressReporter` 在同一状态消息内按至少 1500ms 节流显示 timeline 与最长 1200 字符的 HTML-escaped `responseText`；这是 event-level preview，不是逐 token 编辑。最终结果替换状态消息。
+- **错误呈现**：Claude/Codex 非零退出必须优先显示 terminal result/error；`system/init`、`api_retry` 等协议 envelope 不能作为主错误发送给用户。
 
 ## D. 安全设计（surface 边缘鉴权）
 
@@ -1501,11 +1511,12 @@ case "telegram":
 
 ### Phase 3 — 体验优化
 
-16. 进度更新（编辑消息显示当前阶段）
-17. `telegram/handlers/document.ts` — 文件上传作为上下文
+16. 进度更新（编辑同一消息显示当前阶段与有界 event-level 响应预览）
+17. `telegram/handlers/document.ts` — 多文件/图片上传作为下一条请求上下文
 18. `/config` 设置面板 inline keyboard
 19. 错误重试 + 超时处理
 20. `ai telegram logs` 日志查看
+21. 最新消息编辑重跑、回复引用、动态 token budget 与 `/pin|/unpin`
 
 当前超时与回复投递规则：
 
@@ -1514,6 +1525,7 @@ case "telegram":
 - Telegram 的状态消息编辑、最终回复和附件发送遇到网络断开、连接超时或 HTTP 5xx 时有限重试。
 - Telegram 回复重试只重发消息，不会重新执行已经完成的 Claude Code 或 Codex 请求。
 - HTML 格式错误、参数错误等确定性失败不做网络重试。
+- Claude 非零退出从 terminal JSON `result` 提取真实失败原因，不把首个 `system/init` envelope 当作错误。
 
 ## E. 关键注意事项
 
@@ -1569,6 +1581,13 @@ npm test -- --filter telegram
 - [ ] /new → 清除上下文
 - [ ] /resume → 恢复多轮对话
 - [ ] 超长输出 → 文件附件发送
+- [ ] 连续上传多个 UTF-8 文本/图片 → 下一条请求一次消费，Codex 收到 `--image`
+- [ ] 回复历史消息 → `<referenced_message>` 转义后注入
+- [ ] 编辑最新 prompt → 旧任务停止、旧 turn/native session 不再进入重跑
+- [ ] 长回答 → 同一状态消息按节流显示 event-level 预览，最终被结果替换
+- [ ] `/pin`/`/unpin` → 固定上下文持久化且受 3 条/1400 token budget 约束
+- [ ] Claude API 失败 → 显示 terminal error，不显示 `system/init` JSON
+- [ ] `/terminal` 高风险命令 → inline confirmation；`/restart` → 优雅停止并拉起 replacement process
 - [ ] ai telegram stop → Bot 下线
 - [ ] ai telegram status → 显示运行状态
 ```

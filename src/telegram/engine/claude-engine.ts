@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { Engine, EngineExecuteParams, ExecutionResult, ProgressUpdate, ToolCallResult } from "./types.js";
 import { cleanupRuntime, createCommandPermissionRequest, formatEngineTimeout, prepareEngineRuntime, summarizeRuntime } from "./engine-utils.js";
-import { extractJsonLines, spawnCapture, stripAnsi, terminateProcessTree } from "./process-utils.js";
+import { createJsonLineAccumulator, extractJsonLines, spawnCapture, stripAnsi, terminateProcessTree } from "./process-utils.js";
 import { requiresDangerousConfirmation } from "../interaction/approval.js";
 import { writeTelegramLog } from "../log.js";
 import { isRecord } from "../../core/utils/is-record.js";
@@ -44,6 +44,7 @@ export class ClaudeEngine implements Engine {
     });
 
     try {
+      const progressParser = createJsonLineAccumulator((event) => handleClaudeProgressEvent(event, params.onProgress));
       const result = await spawnCapture({
         command: runtime.command,
         args,
@@ -54,8 +55,9 @@ export class ClaudeEngine implements Engine {
         },
         signal,
         timeoutMs: params.timeoutMs,
-        onStdout: (chunk) => handleClaudeProgress(chunk, params.onProgress)
+        onStdout: (chunk) => progressParser.push(chunk)
       }, (child) => this.processes.set(params.chatId, child));
+      progressParser.end();
 
       if (result.timedOut) {
         throw new Error(formatEngineTimeout("Claude Code", params.timeoutMs, runtime.provider.name, runtime.model));
@@ -64,7 +66,7 @@ export class ClaudeEngine implements Engine {
         throw new Error("任务已停止。");
       }
       if (result.code !== 0) {
-        throw new Error(stripAnsi(result.stderr || result.stdout || `Claude exited with code ${result.code}`));
+        throw new Error(formatClaudeFailure(result.stdout, result.stderr, result.code));
       }
       const parsed = parseClaudeOutput(result.stdout, Date.now() - startTime);
       await params.onProgress?.({ phase: "done" });
@@ -166,19 +168,45 @@ export function parseClaudeOutput(raw: string, duration: number): ExecutionResul
   };
 }
 
-function handleClaudeProgress(chunk: string, onProgress?: (update: ProgressUpdate) => void | Promise<void>): void {
-  if (!onProgress) return;
-  for (const event of extractJsonLines(chunk)) {
-    if (!isRecord(event)) continue;
-    if (event.type === "assistant") {
-      const tool = findFirstToolName(event);
-      if (tool) {
-        void onProgress({ phase: "tool_calling", tool });
-      } else {
-        void onProgress({ phase: "writing" });
-      }
+export function formatClaudeFailure(stdout: string, stderr = "", code?: number | null): string {
+  let terminalResult = "";
+  for (const event of extractJsonLines(stdout)) {
+    if (!isRecord(event) || event.type !== "result") continue;
+    if (typeof event.result === "string" && event.result.trim()) {
+      terminalResult = event.result.trim();
     }
   }
+
+  const stderrText = stripAnsi(stderr).trim();
+  const plainStdout = stripAnsi(stdout)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("{"))
+    .slice(-6)
+    .join("\n");
+  const diagnostics = [stderrText, terminalResult, plainStdout]
+    .filter((value, index, values) => value && values.indexOf(value) === index);
+  return diagnostics.join("\n") || `Claude exited with code ${code ?? "unknown"}.`;
+}
+
+function handleClaudeProgressEvent(event: unknown, onProgress?: (update: ProgressUpdate) => void | Promise<void>): void {
+  if (!onProgress) return;
+  if (!isRecord(event) || event.type !== "assistant") return;
+  const tool = findFirstToolName(event);
+  if (tool) {
+    void onProgress({ phase: "tool_calling", tool });
+  } else {
+    const responseText = readMessageText(event);
+    void onProgress({ phase: "writing", responseText: responseText || undefined });
+  }
+}
+
+function readMessageText(event: Record<string, unknown>): string {
+  const parts: string[] = [];
+  collectTextFromMessage(event, (text) => {
+    if (text.trim()) parts.push(text.trim());
+  });
+  return parts.join("\n");
 }
 
 function collectTextFromMessage(event: Record<string, unknown>, add: (text: string) => void): void {

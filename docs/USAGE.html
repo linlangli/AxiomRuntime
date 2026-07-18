@@ -775,12 +775,21 @@ ai telegram stop</pre>
 /cwd /path/to/project
 /config
 /usage
+/pin
+/unpin
+/terminal ls -la
+/restart
 /help</pre>
                 <ul>
                   <li>普通文本会发送给当前会话的默认引擎。</li>
-                  <li>默认命令菜单只注册这 8 个基础命令；选择 CLI 后，会在当前 chat 的 <code>/</code> 菜单追加该 CLI 的 slash 命令映射。</li>
+                  <li>基础菜单同时提供 Memory、上下文固定、终端和重启命令；选择 CLI 后，会在当前 chat 的 <code>/</code> 菜单追加该 CLI 的 slash 命令映射。</li>
                   <li>CLI slash 命令不会以消息列表形式额外刷屏，点击菜单项后会转发给当前 CLI 执行。</li>
-                  <li>上传 UTF-8 文本文件会作为下一条 prompt 的附件上下文。</li>
+                  <li>会话按 1400 token budget 动态选择最近上下文；回复 Bot 回答并发送 <code>/pin</code> 可固定最多 3 个关键 turn，<code>/unpin</code> 可撤销。</li>
+                  <li>回复文字或 caption 会注入转义后的引用上下文；编辑最新普通 prompt 会停止旧任务、清除旧 native session 后重跑。</li>
+                  <li>下一条请求最多消费 8 个附件：UTF-8 文本单文件 ≤2MB、图片单文件 ≤10MB；Codex 图片使用 <code>--image</code>。</li>
+                  <li>进度消息按至少 1500ms 节流显示阶段、工具和有界回答预览；最终结果替换同一条消息。</li>
+                  <li><code>/terminal</code> 最长运行 60 秒且高风险命令必须确认；<code>/restart</code> 会优雅停止并启动 replacement process。</li>
+                  <li>Claude 失败会显示 terminal error，不再把 <code>system/init</code> JSON 当作主错误。</li>
                   <li><code>full-auto</code> 会映射到 Claude/Codex 的跳过审批模式，但高风险命令文本仍会在 Telegram 侧强制确认。</li>
                 </ul>
               </div>
