@@ -1078,6 +1078,8 @@ export function registerCallbackHandler(bot: Bot, deps: {
 
 ## R. Bot 命令（`telegram/handlers/command.ts`）
 
+Telegram 自定义命令由 `(chat_id, cwd, name)` 唯一标识并持久化到 Bot 独立的 `custom_commands` 表。Bot 重启或恢复 ready 会话时必须按当前 `cwd` 恢复命令菜单。Telegram 菜单最多展示 100 条命令，排序必须优先保留基础命令、当前 CLI 内建命令和工作目录自定义命令，再填充扫描到的插件命令；该展示上限不得限制运行时对已持久化自定义命令的解析与执行。
+
 ```typescript
 import { InlineKeyboard, type Bot } from 'grammy';
 import { Msg } from '../templates/messages.js';

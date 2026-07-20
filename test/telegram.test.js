@@ -1189,6 +1189,20 @@ test("telegram command menu maps selected CLI slash commands", () => {
   assert.deepEqual(parseTelegramCommand("/model@my_bot opus"), { command: "model", args: "opus" });
 });
 
+test("telegram custom commands remain executable beyond the menu limit", () => {
+  const customCommands = Array.from({ length: 100 }, (_, index) => ({
+    name: `custom_${index}`,
+    params: [],
+    template: `echo ${index}`,
+    description: `custom ${index}`
+  }));
+
+  assert.equal(resolveMappedCommand("claude", "custom_99", customCommands)?.prompt, "/__custom_custom_99");
+  const menuCommands = getChatBotCommands("claude", customCommands).map((item) => item.command);
+  assert.ok(menuCommands.includes("custom_0"));
+  assert.equal(menuCommands.length, 100);
+});
+
 test("start command dedupe suppresses immediate duplicate", () => {
   const recent = new Map();
   assert.equal(shouldHandleStartCommand(123, 1000, recent), true);

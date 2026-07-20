@@ -89,8 +89,8 @@ export function getCommandMappings(engine: TelegramEngineName, customCommands: C
   return mergeCommandMappings([
     ...BASE_COMMANDS,
     ...BUILTIN_CLI_COMMANDS[engine],
-    ...readConfiguredCommands(engine),
-    ...custom
+    ...custom,
+    ...readConfiguredCommands(engine)
   ]);
 }
 
@@ -254,7 +254,7 @@ function mergeCommandMappings(commands: TelegramCommandMapping[]): TelegramComma
       prompt: command.prompt
     });
   }
-  return result.slice(0, MAX_TELEGRAM_COMMANDS);
+  return result;
 }
 
 function normalizeTelegramCommandName(value: string): string {
