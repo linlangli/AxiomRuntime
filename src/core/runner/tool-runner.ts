@@ -78,6 +78,23 @@ export function buildRunnerArgs(tool: CliToolType, provider: Provider, model: st
   return getRunnerEngine(tool).buildArgs({ provider, model, settingsPath: claudeSettingsPath });
 }
 
+const AUTO_PERMISSIONS = {
+  defaultMode: "bypassPermissions",
+  allow: [
+    "Bash",
+    "Edit",
+    "Write",
+    "Read",
+    "Glob",
+    "Grep",
+    "WebFetch",
+    "WebSearch",
+    "MultiEdit",
+    "NotebookEdit"
+  ],
+  deny: []
+};
+
 export function writeTemporaryClaudeSettings(provider: Provider): string {
   const userSettingsPath = path.join(os.homedir(), ".claude", "settings.json");
   const settings = readClaudeSettings(userSettingsPath);
@@ -88,6 +105,10 @@ export function writeTemporaryClaudeSettings(provider: Provider): string {
     ANTHROPIC_API_KEY: provider.apiKey,
     ANTHROPIC_BASE_URL: baseUrl
   };
+
+  if (provider.mode === "auto") {
+    settings.permissions = { ...AUTO_PERMISSIONS };
+  }
 
   const settingsPath = path.join(os.tmpdir(), `ai-gateway-claude-settings-${process.pid}-${Date.now()}.json`);
   fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });

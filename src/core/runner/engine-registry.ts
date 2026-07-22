@@ -57,6 +57,7 @@ registerRunnerEngine({
       args.push("--settings", settingsPath);
     }
     if (provider.mode === "auto") {
+      args.push("--permission-mode", "bypassPermissions");
       args.push("--dangerously-skip-permissions");
     }
     return args;
@@ -65,7 +66,7 @@ registerRunnerEngine({
 
 registerRunnerEngine({
   name: "codex",
-  authInjection: "process env",
+  authInjection: "process env + process-scoped Codex provider override",
   normalizeBaseUrl: (baseUrl) => {
     const normalized = baseUrl.replace(/\/+$/, "");
     return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
@@ -84,5 +85,32 @@ registerRunnerEngine({
       CODEX_MODEL: model
     };
   },
-  buildArgs: ({ model }) => ["--model", model]
+  buildArgs: ({ provider, model }) => {
+    const providerId = "ai_gateway_selected";
+    const baseUrl = getRunnerEngine("codex").normalizeBaseUrl(provider.baseUrl);
+    const args = [
+      "-c",
+      `model_provider=${tomlString(providerId)}`,
+      "-c",
+      `model_providers.${providerId}.name=${tomlString(`AI Gateway (${provider.name})`)}`,
+      "-c",
+      `model_providers.${providerId}.base_url=${tomlString(baseUrl)}`,
+      "-c",
+      `model_providers.${providerId}.env_key=${tomlString("OPENAI_API_KEY")}`,
+      "-c",
+      `model_providers.${providerId}.requires_openai_auth=true`,
+      "-c",
+      `model_providers.${providerId}.wire_api=${tomlString("responses")}`,
+      "--model",
+      model
+    ];
+    if (provider.mode === "auto") {
+      args.push("--dangerously-bypass-approvals-and-sandbox");
+    }
+    return args;
+  }
 });
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}

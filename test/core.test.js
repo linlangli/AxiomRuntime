@@ -11,7 +11,7 @@ import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/mode
 import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
 import { getRunnerEngine, listRunnerEngines } from "../dist/core/runner/engine-registry.js";
 import { startOpenAiUsageProxy } from "../dist/core/runner/openai-usage-proxy.js";
-import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl } from "../dist/core/runner/tool-runner.js";
+import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl, writeTemporaryClaudeSettings } from "../dist/core/runner/tool-runner.js";
 import { estimateTokenCostUsd } from "../dist/core/usage/pricing.js";
 import { runResolvedProviderCandidates } from "../dist/cli/commands/use.js";
 import { getCliCommand, listInteractiveCliCommands, registerCliCommand } from "../dist/cli/registry.js";
@@ -59,6 +59,7 @@ test("swaps provider levels", () => {
 test("filters compatible models", () => {
   assert.equal(isModelCompatible("claude", "claude-opus-4-6"), true);
   assert.equal(isModelCompatible("codex", "gpt-5.5"), true);
+  assert.equal(isModelCompatible("codex", "grok-4.5"), true);
   assert.equal(isModelCompatible("codex", "claude-opus-4-6"), false);
   assert.equal(pickCompatibleModel("codex", "claude-opus", ["claude-opus", "gpt-5"]), "gpt-5");
 });
@@ -72,7 +73,23 @@ test("runner engine registry exposes built-in engines", () => {
   assert.deepEqual(codex.buildArgs({
     provider: { name: "api", baseUrl: "https://api.test", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" },
     model: "gpt-5.5"
-  }), ["--model", "gpt-5.5"]);
+  }), [
+    "-c",
+    'model_provider="ai_gateway_selected"',
+    "-c",
+    'model_providers.ai_gateway_selected.name="AI Gateway (api)"',
+    "-c",
+    'model_providers.ai_gateway_selected.base_url="https://api.test/v1"',
+    "-c",
+    'model_providers.ai_gateway_selected.env_key="OPENAI_API_KEY"',
+    "-c",
+    "model_providers.ai_gateway_selected.requires_openai_auth=true",
+    "-c",
+    'model_providers.ai_gateway_selected.wire_api="responses"',
+    "--model",
+    "gpt-5.5",
+    "--dangerously-bypass-approvals-and-sandbox"
+  ]);
 });
 
 test("CLI command registry resolves commands and aliases", async () => {
@@ -743,7 +760,7 @@ test("json store serializes concurrent read modify write updates", async () => {
   }
 });
 
-test("maps Claude auto mode to dangerously skip permissions", () => {
+test("maps Claude auto mode to bypass permissions + dangerously skip", () => {
   const provider = {
     name: "api",
     baseUrl: "https://icode.51talk.biz/v1/",
@@ -758,6 +775,8 @@ test("maps Claude auto mode to dangerously skip permissions", () => {
     "claude-sonnet-4-6",
     "--settings",
     "/tmp/settings.json",
+    "--permission-mode",
+    "bypassPermissions",
     "--dangerously-skip-permissions"
   ]);
 });
@@ -778,6 +797,145 @@ test("does not skip Claude permissions in ask mode", () => {
     "--settings",
     "/tmp/settings.json"
   ]);
+});
+
+test("maps Codex auto mode to bypass approvals and sandbox", () => {
+  const provider = {
+    name: "api",
+    baseUrl: "https://icode.51talk.biz/v1/",
+    apiKey: "key",
+    mode: "auto",
+    level: 1,
+    model: "gpt-5.5"
+  };
+
+  assert.deepEqual(buildRunnerArgs("codex", provider, "gpt-5.5", null), [
+    "-c",
+    'model_provider="ai_gateway_selected"',
+    "-c",
+    'model_providers.ai_gateway_selected.name="AI Gateway (api)"',
+    "-c",
+    'model_providers.ai_gateway_selected.base_url="https://icode.51talk.biz/v1"',
+    "-c",
+    'model_providers.ai_gateway_selected.env_key="OPENAI_API_KEY"',
+    "-c",
+    "model_providers.ai_gateway_selected.requires_openai_auth=true",
+    "-c",
+    'model_providers.ai_gateway_selected.wire_api="responses"',
+    "--model",
+    "gpt-5.5",
+    "--dangerously-bypass-approvals-and-sandbox"
+  ]);
+});
+
+test("does not skip Codex approvals in ask mode", () => {
+  const provider = {
+    name: "api",
+    baseUrl: "https://icode.51talk.biz/v1/",
+    apiKey: "key",
+    mode: "ask",
+    level: 1,
+    model: "gpt-5.5"
+  };
+
+  assert.deepEqual(buildRunnerArgs("codex", provider, "gpt-5.5", null), [
+    "-c",
+    'model_provider="ai_gateway_selected"',
+    "-c",
+    'model_providers.ai_gateway_selected.name="AI Gateway (api)"',
+    "-c",
+    'model_providers.ai_gateway_selected.base_url="https://icode.51talk.biz/v1"',
+    "-c",
+    'model_providers.ai_gateway_selected.env_key="OPENAI_API_KEY"',
+    "-c",
+    "model_providers.ai_gateway_selected.requires_openai_auth=true",
+    "-c",
+    'model_providers.ai_gateway_selected.wire_api="responses"',
+    "--model",
+    "gpt-5.5"
+  ]);
+});
+
+test("writeTemporaryClaudeSettings injects bypass permissions in auto mode", async () => {
+  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-claude-home-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = tempHome;
+  try {
+    await fs.mkdir(path.join(tempHome, ".claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempHome, ".claude", "settings.json"),
+      `${JSON.stringify({ env: { SOME_VAR: "keep-me" } }, null, 2)}\n`,
+      { mode: 0o600 }
+    );
+
+    const provider = {
+      name: "kunkun",
+      baseUrl: "https://api.kunkunout.cn/",
+      apiKey: "sk-test",
+      mode: "auto",
+      level: 1,
+      model: "claude-opus-4-8"
+    };
+
+    const settingsPath = writeTemporaryClaudeSettings(provider);
+    const written = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+
+    assert.equal(written.env.ANTHROPIC_API_KEY, "sk-test");
+    assert.equal(written.env.ANTHROPIC_BASE_URL, "https://api.kunkunout.cn");
+    assert.equal(written.env.SOME_VAR, "keep-me");
+    assert.equal(written.permissions.defaultMode, "bypassPermissions");
+    assert.ok(written.permissions.allow.includes("Bash"));
+    assert.ok(written.permissions.allow.includes("Edit"));
+    assert.ok(written.permissions.allow.includes("Write"));
+    assert.deepEqual(written.permissions.deny, []);
+
+    await fs.unlink(settingsPath);
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    await fs.rm(tempHome, { recursive: true, force: true });
+  }
+});
+
+test("writeTemporaryClaudeSettings preserves user permissions in ask mode", async () => {
+  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-claude-home-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = tempHome;
+  try {
+    await fs.mkdir(path.join(tempHome, ".claude"), { recursive: true });
+    const userPerms = { defaultMode: "default", allow: ["Read"], deny: ["Bash"] };
+    await fs.writeFile(
+      path.join(tempHome, ".claude", "settings.json"),
+      `${JSON.stringify({ env: {}, permissions: userPerms }, null, 2)}\n`,
+      { mode: 0o600 }
+    );
+
+    const provider = {
+      name: "kunkun",
+      baseUrl: "https://api.kunkunout.cn/",
+      apiKey: "sk-test",
+      mode: "ask",
+      level: 1,
+      model: "claude-opus-4-8"
+    };
+
+    const settingsPath = writeTemporaryClaudeSettings(provider);
+    const written = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+
+    assert.deepEqual(written.permissions, userPerms);
+
+    await fs.unlink(settingsPath);
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    await fs.rm(tempHome, { recursive: true, force: true });
+  }
 });
 
 test("resolveToolCommand skips broken codex shim when app binary exists", () => {
