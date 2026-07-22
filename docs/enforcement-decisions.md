@@ -892,6 +892,7 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - `ai status` shows weekly token usage from real `usage.json` events.
 - `ai doctor` prints a diagnostic report without consuming tokens by default.
 - `ai use claude` and `ai use codex` start the matching CLI with the default provider/model.
+- `ai use codex` pins a process-scoped Codex model provider to the Runtime-selected base URL and injected API key without modifying global Codex auth/config state.
 - Unavailable providers trigger automatic fallback.
 - Manual changes to `providers.json` are recognized on the next command run.
 

@@ -101,7 +101,7 @@ Full per-terminal isolation is not a near-term priority.
 
 ## B. Current Behavior
 
-Current `ai use` launches Claude Code or Codex CLI with provider-specific environment variables in the child process. Different terminals can use different providers at the same time without sharing the active chat process configuration.
+Current `ai use` launches Claude Code or Codex CLI with provider-specific environment variables in the child process. For Codex, the child also receives process-scoped `model_provider` overrides whose `env_key` is `OPENAI_API_KEY`; this pins authentication to the Runtime-selected provider even when the user's global Codex `auth.json` contains a different credential. The Runtime does not modify global Codex authentication or configuration. Different terminals can use different providers at the same time without sharing the active chat process configuration.
 
 Shared management files still exist: `.ai-cache.json`, `.ai-gateway.log`, `usage.json`, global `lastSelection`.
 

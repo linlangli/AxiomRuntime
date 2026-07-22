@@ -52,7 +52,7 @@
 
 `src/core/hermes/`、`src/core/integrations/` 已存在，**应当**移到 integration/workflow 契约后成为标准适配器。`plugins/` 目录待建。
 
-Claude Code/Codex 的具体 CLI 封装目标态属于本层：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 实现 `AgentAdapterPort`。它们拥有二进制发现、启动参数、临时 vendor 配置、进程生命周期、stream event parsing、session cursor 和 vendor error mapping；不拥有 Agent capability 激活、provider/model 选择、tool permission、retry policy、Memory、Usage 或 Learning。Telegram `Engine` wrapper 是 ① 的兼容 facade，不是另一个 Agent Adapter 权威入口。
+Claude Code/Codex 的具体 CLI 封装目标态属于本层：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 实现 `AgentAdapterPort`。它们拥有二进制发现、启动参数、临时 vendor 配置、进程生命周期、stream event parsing、session cursor 和 vendor error mapping；不拥有 Agent capability 激活、provider/model 选择、tool permission、retry policy、Memory、Usage 或 Learning。当前 CLI runner 对 `ai use codex` 使用 process-scoped `model_provider` override，把 `env_key` 固定为本次子进程的 `OPENAI_API_KEY`，禁止回落到用户全局 Codex credential；该 override 不写入全局 `auth.json` 或 `config.toml`。Telegram `Engine` wrapper 是 ① 的兼容 facade，不是另一个 Agent Adapter 权威入口。
 
 ## 10. 验收标准
 

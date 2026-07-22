@@ -167,7 +167,7 @@ src/
 
 ## C. Runner 引擎现状（→ 目标 ④ Execution Kernel + ⑤ Transport）
 
-`src/core/runner/`：`command-resolver`（CLI 二进制查找）、`engine-registry`（Claude/Codex 策略注册）、`tool-runner`（运行环境+密钥注入+临时文件）、`fallback`（候选排序：健康→兼容→优先级+覆盖）。`openai-usage-*` 系列（server/http/responses/recording/types）是本地 HTTP 代理，**目标态剥离到 ⑤ Transport Proxy**。
+`src/core/runner/`：`command-resolver`（CLI 二进制查找）、`engine-registry`（Claude/Codex 策略注册；`ai use codex` 通过 process-scoped provider override 固定本次注入 Key，不改全局 Codex auth/config）、`tool-runner`（运行环境+密钥注入+临时文件）、`fallback`（候选排序：健康→兼容→优先级+覆盖）。`openai-usage-*` 系列（server/http/responses/recording/types）是本地 HTTP 代理，**目标态剥离到 ⑤ Transport Proxy**。
 
 ## D. 双路径用量采集（→ 目标 ⑤ UsageObserver）
 
