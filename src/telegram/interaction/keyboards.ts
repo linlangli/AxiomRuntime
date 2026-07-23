@@ -12,12 +12,10 @@ export function buildApprovalKeyboard(id: string): InlineKeyboard {
     .text("Skip", `perm:skip:${id}`);
 }
 
-export function buildWorkdirStartKeyboard(hasExistingWorkdirs: boolean, scope: "setup" | "ready" = "setup"): InlineKeyboard {
+export function buildWorkdirStartKeyboard(workdirs: string[], scope: "setup" | "ready" = "setup"): InlineKeyboard {
   const keyboard = new InlineKeyboard();
-  if (hasExistingWorkdirs) {
-    keyboard.text("已存在", `${scope}:workdir:list`);
-  } else {
-    keyboard.text("已存在", `${scope}:workdir:list_empty`);
+  for (const [index, cwd] of workdirs.slice(0, 8).entries()) {
+    keyboard.text(cwd, `${scope}:workdir:pick:${index}`).row();
   }
   return keyboard.text("自定义", `${scope}:workdir:custom`);
 }

@@ -675,6 +675,7 @@ ai telegram stop</pre>
                   <li>配置保存在 <code>~/.ai-gateway/telegram.json</code>，会话保存在 <code>~/.ai-gateway/telegram.sqlite</code>。</li>
                   <li>默认只有 <code>allowedUserIds</code> 中的 Telegram 用户可以访问 Bot；如需开放给所有用户，显式设置 <code>allowAllUsers: true</code>。</li>
                   <li>远程执行复用 AI Gateway 顶层 provider；不配置固定 provider/model 时按优先级自动选择。</li>
+                  <li><code>/start</code> 或 <code>/reset</code> 先选择 Provider/Model，再直接以按钮列出历史绝对路径，末尾可选择“自定义”，不再先点击“已存在”。</li>
                   <li>Telegram Codex 执行会自动走本地 OpenAI 兼容代理记录 provider usage；<code>/usage</code> 有 provider cost 时直接展示，否则按 <code>model-pricing.json</code> 估算。</li>
                   <li>如果本机不能直连 <code>api.telegram.org</code>，设置 <code>proxyUrl</code> 或环境变量 <code>HTTPS_PROXY</code> / <code>ALL_PROXY</code>。</li>
                 </ul>

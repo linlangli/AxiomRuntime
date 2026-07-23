@@ -101,8 +101,8 @@ ai telegram stop
 - 配置保存在 `~/.ai-gateway/telegram.json`，会话保存在 `~/.ai-gateway/telegram.sqlite`。
 - 默认只允许 `allowedUserIds` 里的 Telegram 用户访问；如果要开放给所有用户，显式设置 `allowAllUsers: true`。
 - Telegram 远程执行 Claude Code/Codex 时复用 AI Gateway 顶层 provider；可通过 `provider` 和 `model` 配置固定 provider/model，不配置则按 `ai use` 同样的优先级自动选择。
-- 首次 `/start` 或执行 `/reset` 会进入初始化流程：先选择工作路径，再选择 Claude Code/Codex。
-- 工作路径可从历史记录选择，也可以点“自定义”后输入名称；自定义路径固定创建或复用 `~/输入名称`。
+- 首次 `/start` 或执行 `/reset` 会进入初始化流程：先选择 Provider/Model，再选择工作路径并自动确定 Claude Code/Codex。
+- 工作路径步骤直接以按钮列出最多 8 个历史绝对路径，并在末尾提供“自定义”，不再先点击“已存在”。自定义路径固定创建或复用 `~/输入名称`。
 - 未确定工作路径时发送普通内容会提示先确定工作路径；未确定 CLI 时发送普通内容会提示先选择 CLI。
 - 选择 CLI 后只展示会话 ID、工作路径、CLI、provider、model 和权限模式。
 - Bot 基础命令菜单包含 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/usage`、Memory、上下文固定、终端和重启命令；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射，点击后转发给当前 CLI 执行。

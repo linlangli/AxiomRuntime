@@ -146,7 +146,7 @@ ai telegram config set <key> <value>
 ai telegram logs [-f]      # 日志（最近 50 行 / 实时跟踪）
 ```
 
-Setup 引导：`/start → model(Provider/Model) → workdir(+/init) → agent_profile(画像) → ready`。同一 chat 任务经 `SessionManager.runExclusive()` 串行执行，避免并发写同一 session。
+Setup 引导：`/start → model(Provider/Model) → workdir(+/init) → agent_profile(画像) → ready`。`workdir` 步骤直接把最近记录的绝对路径渲染为 inline button，末尾提供“自定义”，不再经过“已存在”二级入口。同一 chat 任务经 `SessionManager.runExclusive()` 串行执行，避免并发写同一 session。
 
 ### C.1 当前高优先级 UX 契约
 

@@ -1070,11 +1070,15 @@ test("telegram network retry recovers transient delivery failures", async () => 
   assert.equal(isRetryableTelegramNetworkError(new Error("Bad Request: can't parse entities")), false);
 });
 
-test("workdir setup keyboards use compact labels and absolute path buttons", () => {
-  assert.deepEqual(buildWorkdirStartKeyboard(true).inline_keyboard, [[
-    { text: "已存在", callback_data: "setup:workdir:list" },
-    { text: "自定义", callback_data: "setup:workdir:custom" }
-  ]]);
+test("workdir setup keyboard lists existing paths directly before custom input", () => {
+  assert.deepEqual(buildWorkdirStartKeyboard([
+    "/Users/linlangli/Script",
+    "/Users/linlangli/Project/agent-router"
+  ]).inline_keyboard, [
+    [{ text: "/Users/linlangli/Script", callback_data: "setup:workdir:pick:0" }],
+    [{ text: "/Users/linlangli/Project/agent-router", callback_data: "setup:workdir:pick:1" }],
+    [{ text: "自定义", callback_data: "setup:workdir:custom" }]
+  ]);
   assert.deepEqual(buildWorkdirListKeyboard(["/Users/linlangli/Script"]).inline_keyboard, [
     [{ text: "/Users/linlangli/Script", callback_data: "setup:workdir:pick:0" }],
     [{ text: "back", callback_data: "setup:workdir:back" }]

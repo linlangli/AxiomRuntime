@@ -144,10 +144,10 @@ export async function showWorkdirStart(ctx: Context, deps: SetupDeps, options: {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const workdirs = deps.sessionManager.getWorkdirs(chatId);
-  const text = options.prompt ?? Formatter.workdirPrompt();
+  const text = options.prompt ?? Formatter.workdirList(workdirs);
   const extra = {
     parse_mode: "HTML",
-    reply_markup: buildWorkdirStartKeyboard(workdirs.length > 0, options.scope ?? "setup")
+    reply_markup: buildWorkdirStartKeyboard(workdirs, options.scope ?? "setup")
   } as const;
   if (options.edit) {
     try {
