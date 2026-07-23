@@ -22,7 +22,9 @@ services:
     ports:
       - "127.0.0.1:${AI_GATEWAY_PORT:-8020}:8080"
     networks:
-      - ai-runtime
+      ai-runtime:
+        aliases:
+          - agent-router
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health/ready').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 10s
