@@ -51,6 +51,8 @@
 
 **部分存在、待收敛**。当前脱敏与凭证处理散落 Transport/Memory；本层将其收敛为统一 Security，明确四子责任边界。
 
+常驻 Runtime 服务使用独立 Bearer Token，在 constant-time comparison 后才允许访问 `/v1/*`。生产 Token 与 provider credentials 通过只读/持久化挂载注入，不进入镜像。Agent Run 禁止任意 cwd，只接受规范化 `workspace_id`；默认 `read_only`，服务 API 不暴露 `bypassPermissions`，并设置请求体、并发与执行超时上限。
+
 ## 10. 验收标准
 
 - 凭证/会话态**不出现**在任何 prompt 或 memory 中。

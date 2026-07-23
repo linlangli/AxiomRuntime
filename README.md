@@ -54,6 +54,35 @@ npm run build
 npm test
 ```
 
+## 内网 Runtime 服务
+
+常驻服务为其他应用提供两类受鉴权接口，同时保留现有 `ai` CLI 和 Telegram 行为：
+
+- `POST /v1/chat/completions`、`/v1/responses`、`/v1/embeddings`：OpenAI 兼容模型调用，按 provider 优先级、模型目录、健康度和熔断状态自动切换。
+- `POST /v1/agent/runs`：复用 Telegram 背后的 Claude/Codex Engine。只接受受控 `workspace_id`，默认 `read_only`，服务端限制并发和超时。
+- `GET /health/live`、`/health/ready`：不含 Secret 的存活与就绪检查；其他接口必须使用 Bearer Token。
+
+```bash
+npm run build
+AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
+```
+
+生产 Compose 位于 `deploy/docker-compose.prod.yml`，默认仅映射宿主机 `127.0.0.1:8020`，并加入外部 Docker 网络 `ai-runtime`。Provider 配置挂载到 `/var/lib/ai-gateway`，服务 Token 通过只读文件挂载，不写入镜像或仓库。
+
+### GitLab 自动部署
+
+默认分支提交通过测试后，GitLab CI 会构建以 commit SHA 标记的镜像，并由锁定当前项目的受保护 Runner（标签 `agent-router-prod`）部署到 `154.201.73.41:/opt/agent-router`。部署只操作 `agent-router` Compose 项目；健康检查失败时恢复上一镜像，不清理服务器上的其他容器或镜像。
+
+首次部署前，服务器必须已有 `/opt/agent-router/config/providers.json` 和 `/opt/agent-router/secrets/server-token`，且容器用户 `10001:10001` 可以读写配置目录。CI 只校验这些文件，不生成或覆盖凭据。
+
+Telegram 容器默认不启动，以免与现有 long polling 进程争抢消息。完成迁移并停止旧 Bot 后，在服务器 `/opt/agent-router/.env` 中设置：
+
+```dotenv
+COMPOSE_PROFILES=telegram
+```
+
+启用前还要把各 Bot 的 `defaultCwd` 改为容器内的 `/workspace/...`，对应宿主机 `/opt/agent-router/workspaces/...`。之后的自动部署会同时更新 Runtime API 和所有位于 `config/telegram/bots/*.json` 的 Telegram Bot。资源上限和工作目录可参考 `.env.server.example` 调整。
+
 ## 本机注册 `ai` 命令
 
 ```bash

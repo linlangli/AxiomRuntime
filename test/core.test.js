@@ -938,6 +938,46 @@ test("writeTemporaryClaudeSettings preserves user permissions in ask mode", asyn
   }
 });
 
+test("writeTemporaryClaudeSettings enforces read-only permissions for auto providers", async () => {
+  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-claude-home-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = tempHome;
+  try {
+    await fs.mkdir(path.join(tempHome, ".claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempHome, ".claude", "settings.json"),
+      `${JSON.stringify({ permissions: { defaultMode: "bypassPermissions", allow: ["Bash", "Write"] } }, null, 2)}\n`,
+      { mode: 0o600 }
+    );
+    const provider = {
+      name: "auto-provider",
+      baseUrl: "https://example.test/",
+      apiKey: "sk-test",
+      mode: "auto",
+      level: 1,
+      model: "claude-opus-4-8"
+    };
+
+    const settingsPath = writeTemporaryClaudeSettings(provider, { permissionMode: "readOnly" });
+    const written = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+
+    assert.equal(written.permissions.defaultMode, "default");
+    assert.ok(written.permissions.allow.includes("Read"));
+    assert.ok(written.permissions.deny.includes("Bash"));
+    assert.ok(written.permissions.deny.includes("Write"));
+    assert.ok(!written.permissions.allow.includes("Bash"));
+
+    await fs.unlink(settingsPath);
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    await fs.rm(tempHome, { recursive: true, force: true });
+  }
+});
+
 test("resolveToolCommand skips broken codex shim when app binary exists", () => {
   const brokenShim = "/opt/homebrew/bin/codex";
   const appBinary = "/Applications/Codex.app/Contents/Resources/codex";

@@ -67,6 +67,8 @@ Claude Code and Codex CLI are not Surfaces merely because users can launch them 
 
 Telegram is a Surface adapter. It authenticates the edge request, builds a `RuntimeRequest`, renders progress, and returns confirmation decisions to the Kernel. It must not spawn or control an external coding agent through a second policy path in the target architecture. A Telegram-local `Engine` interface may remain as a temporary delivery facade, but it is not the canonical Agent contract and must delegate to Orchestration and `AgentAdapterPort`.
 
+The current incremental server surface exposes authenticated OpenAI-compatible model routes and `POST /v1/agent/runs`. The Agent route reuses the existing Claude/Codex `Engine` implementations used by Telegram; it does not route through Telegram itself. External callers receive a constrained workspace and `readOnly` by default. `bypassPermissions` is not part of the server contract. This is a compatibility step toward the canonical `AgentAdapterPort`, not a second execution kernel.
+
 ```text
 Telegram / CLI / API Surface
   -> Orchestration
@@ -176,6 +178,8 @@ Observation payloads may contain canonical resource ids in policy-authorized tra
 ### Unified Runtime Transport Proxy Boundary
 
 The repository already has a production OpenAI Usage Proxy with Responses-to-Chat compatibility translation, usage records, metrics, and direct Codex/Telegram callers. The Runtime must enhance that capability into one provider-agnostic Runtime Transport Proxy. It must not add a second Memory HTTP proxy or chain `Memory Proxy -> Usage Proxy -> provider`.
+
+`src/server/runtime-server.ts` is the first persistent internal surface over that transport capability. It authenticates callers, allowlists supported routes, resolves ordered candidates, records provider runtime success/failure, retries only provider-specific/transient outcomes before response streaming starts, and remains the sole upstream connection path for the request.
 
 Each execution has one listener, one upstream route, one base-URL override, and one ordered transform coordinator. The existing `startOpenAiUsageProxy()` API remains a compatibility facade over the unified data plane until callers migrate. Its translation, records, metrics, cost, usage persistence, and error semantics are preserved by parity tests.
 

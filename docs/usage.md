@@ -6,6 +6,12 @@
 
 本指南只描述当前已经可用的用户操作。项目定位和未来能力见 [文档总览](README.md)。
 
+## 内网服务
+
+`npm run server` 启动常驻 Runtime API。必须设置 `AI_GATEWAY_SERVER_TOKEN` 或 `AI_GATEWAY_SERVER_TOKEN_FILE`；生产建议使用后者。可配置 `AI_GATEWAY_SERVER_HOST/PORT`、`AI_GATEWAY_MAX_REQUEST_BYTES`、`AI_GATEWAY_UPSTREAM_HEADERS_TIMEOUT_MS`、`AI_GATEWAY_AGENT_WORKSPACE_ROOT`、`AI_GATEWAY_AGENT_MAX_CONCURRENT_RUNS` 与 `AI_GATEWAY_AGENT_TIMEOUT_MS`。
+
+模型调用使用 `/v1/chat/completions`、`/v1/responses` 或 `/v1/embeddings`。需要 Claude/Codex CLI 工具能力时使用 `/v1/agent/runs`，传入 `engine`、`prompt`、`workspace_id`，可选 `provider/model`；`permission_mode` 仅支持默认的 `read_only` 或显式 `workspace_write`。服务端 API 不提供 `bypassPermissions`。
+
 ## 运行环境
 
 - Node.js `22.19.0` 或更高版本；Node.js 20 不受支持。

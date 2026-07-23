@@ -56,6 +56,8 @@
 
 `src/core/runner/openai-usage-*.ts`（约 6 文件，职责耦合）→ 按职责拆为 `transport-core` / `TransformCoordinator` / `UsageObserver` / `MemoryExtension` / 兼容 facade。Codex 传输 facade 保留 execution-scoped dispatcher、禁 keep-alive 复用、45s header 截止、双超时短路。
 
+`src/server/runtime-server.ts` 新增常驻内网入口：Bearer 鉴权后仅转发 allowlist 中的 `/v1/chat/completions`、`/v1/responses` 与 `/v1/embeddings`，按 model catalog、优先级和 circuit 状态选择 provider，并在尚未开始下游 streaming 时对 provider/transient failure 进行 fallback。现有执行期 `startOpenAiUsageProxy()`、CLI 与 Telegram 调用路径保持不变。
+
 ## 10. 验收标准
 
 - 一次执行只创建 1 listener + 1 upstream route；facade 保留原 records/metrics/translation/error 行为。

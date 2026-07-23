@@ -20,6 +20,8 @@
 
 Availability 仅覆盖 Runtime 自有边界。第三方 provider 故障单独计为 dependency availability，但 Runtime 的正确 fallback、明确错误和不扩权行为仍计入自身 SLO。
 
+当前单机 profile 的常驻 Runtime 服务仅绑定宿主机 loopback，并通过私有 `ai-runtime` Docker 网络供 SynapseOS 等受控 caller 使用。模型请求最大 body 默认 16 MiB、upstream headers timeout 默认 45 秒；Agent Run 默认最多 2 个并发、10 分钟超时。达到限制时必须显式返回 `413` 或 `429`，不得无界排队。
+
 ## 3. 在线路径 SLO
 
 | 边界 | `team` | `enterprise` | 超限行为 |

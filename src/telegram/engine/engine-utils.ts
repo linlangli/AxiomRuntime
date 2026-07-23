@@ -3,6 +3,7 @@ import type { CliToolType, Provider } from "../../core/types.js";
 import { resolveExactProviderForTool, resolveProviderForTool } from "../../core/runner/fallback.js";
 import { buildRunnerEnv, cleanupTemporaryFiles, getToolBaseUrl, writeTemporaryClaudeSettings } from "../../core/runner/tool-runner.js";
 import { resolveToolCommand } from "../../core/runner/command-resolver.js";
+import type { TelegramPermissionMode } from "../config.js";
 import type { PermissionRequest } from "./types.js";
 
 export type RuntimeSelection = {
@@ -14,7 +15,12 @@ export type RuntimeSelection = {
   claudeSettingsPath: string | null;
 };
 
-export async function prepareEngineRuntime(tool: CliToolType, providerName?: string, modelName?: string): Promise<RuntimeSelection> {
+export async function prepareEngineRuntime(
+  tool: CliToolType,
+  providerName?: string,
+  modelName?: string,
+  permissionMode?: TelegramPermissionMode
+): Promise<RuntimeSelection> {
   // Telegram resolves and orders fallback candidates before invoking an
   // engine. Once a candidate is selected, execute it exactly so the engine
   // cannot perform a second, conflicting provider fallback.
@@ -31,7 +37,9 @@ export async function prepareEngineRuntime(tool: CliToolType, providerName?: str
     AI_GATEWAY_SOURCE: "telegram"
   };
   const temporaryFiles: string[] = [];
-  const claudeSettingsPath = tool === "claude" ? writeTemporaryClaudeSettings(provider) : null;
+  const claudeSettingsPath = tool === "claude"
+    ? writeTemporaryClaudeSettings(provider, { permissionMode: permissionMode === "readOnly" ? "readOnly" : "provider" })
+    : null;
   if (claudeSettingsPath) temporaryFiles.push(claudeSettingsPath);
   return { provider, model, env, command, temporaryFiles, claudeSettingsPath };
 }

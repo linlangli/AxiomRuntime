@@ -841,6 +841,7 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 ### R34 Runtime Transport Proxy、Usage/Memory 扩展与兼容治理（Phase 0-1，持续）
 
 - 每个 execution 只允许一个 Runtime Transport Proxy listener、upstream route 和 base URL 覆写。现有 `startOpenAiUsageProxy` 是兼容 facade，UsageObserver 与 MemoryExtension 共用数据平面，禁止串联第二个 Memory HTTP Proxy。
+- 常驻 `runtime-server` 是内部 Surface，不得绕过 Transport 的 header policy、usage ledger、provider health/circuit 与 compatibility transform。它只暴露 allowlisted `/v1/*` routes；Agent Run 复用既有 Agent Engine，禁止通过 Telegram bot-to-bot 或第二套 CLI 执行实现。
 - TransportForwarder 是最小数据平面；关键 request decode、TransformCoordinator 和批准的 CompatibilityTransform 留在受监督 Transport 路径，非关键 response parser、UsageObserver、MemoryExtension 在相互隔离的 worker/channel。Memory worker 失败当前 stream 与 Usage 继续；Usage worker 失败显式 degraded 并从 journal/reconciliation 恢复；forwarder 进程失败时当前 request 可失败但不得产生错误学习，下一 request 由 supervisor 恢复。
 - TransformCoordinator 是唯一 mutator，Memory patch 先作用于 canonical AST，再执行批准的 Responses↔Chat/Provider compatibility transform；声明 patch path 之外 AST 必须保持一致。
 - `core/memory` 只消费 SanitizedTurnEnvelope/Execution 契约。raw header、system、reasoning、tool input/output 只存在于 EphemeralTransportExchange，经递归 RedactionGateway 后仅以 hash 或 TTL 加密 sanitized ref 持久化。

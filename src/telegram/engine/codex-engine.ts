@@ -149,7 +149,9 @@ export function buildCodexArgs(
     ...(resume ? [] : ["-C", cwd])
   ];
 
-  if (permissionMode === "bypassPermissions") {
+    if (permissionMode === "readOnly") {
+      args.unshift("-a", "never", "-s", "read-only");
+    } else if (permissionMode === "bypassPermissions") {
     args.push("--dangerously-bypass-approvals-and-sandbox");
   } else if (permissionMode === "acceptEdits") {
     args.unshift("-a", "never");

@@ -315,7 +315,7 @@ function rowToSession(row: SessionRow): TelegramSession {
     engineSessionId: row.engine_session_id,
     botContextFingerprint: row.bot_context_fingerprint ?? null,
     cwd: row.cwd,
-    permissionMode: row.permission_mode === "acceptEdits" || row.permission_mode === "bypassPermissions" ? row.permission_mode : "default",
+    permissionMode: row.permission_mode === "readOnly" || row.permission_mode === "acceptEdits" || row.permission_mode === "bypassPermissions" ? row.permission_mode : "default",
     approveAll: row.approve_all === 1,
     setupStep: normalizeSetupStep(row.setup_step),
     status: row.status === "running" || row.status === "waiting_approval" || row.status === "closed" ? row.status : "idle",

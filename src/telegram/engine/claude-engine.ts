@@ -12,12 +12,12 @@ export class ClaudeEngine implements Engine {
   private controllers = new Map<number, AbortController>();
 
   async execute(params: EngineExecuteParams): Promise<ExecutionResult> {
-    const runtime = await prepareEngineRuntime("claude", params.providerName, params.modelName);
+    const permissionMode = params.permissionMode ?? "default";
+    const runtime = await prepareEngineRuntime("claude", params.providerName, params.modelName, permissionMode);
     const controller = new AbortController();
     this.controllers.set(params.chatId, controller);
     const signal = params.signal ?? controller.signal;
     const startTime = Date.now();
-    const permissionMode = params.permissionMode ?? "default";
 
     if (permissionMode === "bypassPermissions" && requiresDangerousConfirmation(params.prompt)) {
       const approved = await params.onPermission(createCommandPermissionRequest("Claude prompt", params.prompt));
@@ -105,6 +105,7 @@ export function buildClaudeArgs(options: {
   resume?: string | null;
   allowedTools?: string[];
 }): string[] {
+  const permissionMode = options.permissionMode === "readOnly" ? "default" : options.permissionMode;
   const args = [
     "-p",
     "--output-format",
@@ -115,7 +116,7 @@ export function buildClaudeArgs(options: {
     "--settings",
     options.settingsPath ?? "",
     "--permission-mode",
-    options.permissionMode,
+    permissionMode,
     "--max-budget-usd",
     "20"
   ].filter(Boolean);
@@ -127,6 +128,9 @@ export function buildClaudeArgs(options: {
   }
   if (options.permissionMode === "bypassPermissions") {
     args.push("--dangerously-skip-permissions");
+  }
+  if (options.permissionMode === "readOnly") {
+    args.push("--allowedTools", "Read,Grep,Glob,WebFetch,WebSearch");
   }
   args.push(options.prompt);
   return args;

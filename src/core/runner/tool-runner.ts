@@ -95,7 +95,16 @@ const AUTO_PERMISSIONS = {
   deny: []
 };
 
-export function writeTemporaryClaudeSettings(provider: Provider): string {
+const READ_ONLY_PERMISSIONS = {
+  defaultMode: "default",
+  allow: ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
+  deny: ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"]
+};
+
+export function writeTemporaryClaudeSettings(
+  provider: Provider,
+  options: { permissionMode?: "provider" | "readOnly" } = {}
+): string {
   const userSettingsPath = path.join(os.homedir(), ".claude", "settings.json");
   const settings = readClaudeSettings(userSettingsPath);
   const settingsEnv = isRecord(settings.env) ? settings.env : {};
@@ -106,7 +115,9 @@ export function writeTemporaryClaudeSettings(provider: Provider): string {
     ANTHROPIC_BASE_URL: baseUrl
   };
 
-  if (provider.mode === "auto") {
+  if (options.permissionMode === "readOnly") {
+    settings.permissions = { ...READ_ONLY_PERMISSIONS };
+  } else if (provider.mode === "auto") {
     settings.permissions = { ...AUTO_PERMISSIONS };
   }
 

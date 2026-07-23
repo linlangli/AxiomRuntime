@@ -5,7 +5,7 @@ import { readJsonFile, updateJsonFile, writeJsonFile } from "../core/config/json
 import { readBoolean, readNumber, readOptionalString, readString } from "../core/config/schema.js";
 
 export type TelegramEngineName = "claude" | "codex";
-export type TelegramPermissionMode = "default" | "acceptEdits" | "bypassPermissions";
+export type TelegramPermissionMode = "readOnly" | "default" | "acceptEdits" | "bypassPermissions";
 
 export type TelegramConfig = {
   token: string;
@@ -23,7 +23,7 @@ export type TelegramConfig = {
 };
 
 const VALID_ENGINES = new Set<TelegramEngineName>(["claude", "codex"]);
-const VALID_PERMISSION_MODES = new Set<TelegramPermissionMode>(["default", "acceptEdits", "bypassPermissions"]);
+const VALID_PERMISSION_MODES = new Set<TelegramPermissionMode>(["readOnly", "default", "acceptEdits", "bypassPermissions"]);
 
 export async function loadTelegramConfig(): Promise<TelegramConfig> {
   const raw = await readJsonFile<unknown>(getTelegramConfigPath(), getDefaultTelegramConfig());
