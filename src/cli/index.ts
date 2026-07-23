@@ -4,7 +4,6 @@ import { runContextCommand } from "./commands/context.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runProviderDeleteCommand, runProviderEditCommand } from "./commands/edit.js";
 import { runHelpCommand } from "./commands/help.js";
-import { runHermesCommand } from "./commands/hermes.js";
 import { runListCommand } from "./commands/list.js";
 import { runLogCommand } from "./commands/log.js";
 import { runMemoryCommand } from "./commands/memory.js";
@@ -98,7 +97,7 @@ function maskSecretArg(value: string): string {
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["use", "add", "memory", "hermes", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["use", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -181,11 +180,6 @@ function registerBuiltInCommands(): void {
     name: "context",
     description: "context",
     run: (args) => runContextCommand(args)
-  });
-  registerCliCommand({
-    name: "hermes",
-    description: "hermes",
-    run: (args) => runHermesCommand(args)
   });
   registerCliCommand({
     name: "telegram",

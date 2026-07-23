@@ -10,7 +10,7 @@
 
 ### 1.1 首个产品切入点（不改变长期定位）
 
-首个可销售、可验收的产品形态是 **Governed Coding/Agent Runtime**：在一个组织内统一承载开发者与知识工作者使用 Claude Code、Codex、Hermes 及后续 Agent 的执行、记忆、学习与治理。它不是把 Runtime 缩减为 coding assistant，而是选择已有高频执行链路作为企业能力沉淀的第一条闭环。
+首个可销售、可验收的产品形态是 **Governed Coding/Agent Runtime**：在一个组织内统一承载开发者与知识工作者使用 Claude Code、Codex 及后续 Agent 的执行、记忆、学习与治理。它不是把 Runtime 缩减为 coding assistant，而是选择已有高频执行链路作为企业能力沉淀的第一条闭环。
 
 首批核心用户与运营者：
 
@@ -104,7 +104,6 @@ flowchart TB
 | `src/core/context/`,`sessions/` | ② Orchestration | 合并上移 |
 | `src/core/providers/`,`models/` | ③ Capabilities | 暴露稳定契约 |
 | `src/telegram/memory/` | ⑥ Memory | 升级为账本初始实现 |
-| `src/core/hermes/` | ⑩ Adapters | 移到 integration/workflow 契约后 |
 | CLI/engine/handler registries | ③ Registry | 收敛为单一 `CapabilityRegistry` |
 
 ## 7. 相关文档
@@ -131,7 +130,6 @@ src/
 ├── core/                核心领域层
 │   ├── config/          JSON/SQLite 持久化：cache/json/paths/providers/schema/session/usage-store
 │   ├── context/         项目上下文注入
-│   ├── hermes/          Hermes 集成（service-core/yaml/local-files/import-export/provider-sync/...）
 │   ├── integrations/    集成状态（provider revision / sync registry）
 │   ├── logs/            结构化日志
 │   ├── models/          model-discovery.ts / model-filter.ts（引擎兼容性）
@@ -588,8 +586,6 @@ ExecutionResult   // 引擎执行结果
 PermissionRequest // 危险操作审批请求
   - id, tool, description, command?, filePath?, params
 
-// === Hermes 类型 ===
-HermesRobot       // Hermes 机器人配置 (provider, model, tasks[], telegram)
 ```
 
 ## C. 核心用户场景
@@ -610,7 +606,6 @@ Then enter the interactive workflow and complete common tasks:
 - View provider health and token usage.
 - Select a default provider by priority.
 - Automatically fall back to the next available provider when the current provider is unavailable.
-- Manage Hermes robots that reuse AI Gateway providers and launch through Hermes CLI.
 - Execute work through one governed Runtime context across CLI and Telegram.
 - Accumulate auditable knowledge and skills without allowing model output to bypass policy.
 - Promote validated capabilities to the appropriate user, project, team, or organization scope.

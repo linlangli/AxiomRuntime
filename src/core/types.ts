@@ -1,6 +1,6 @@
 export type CliToolType = "claude" | "codex";
 
-export type RunToolType = CliToolType | "hermes" | "telegram";
+export type RunToolType = CliToolType | "provider" | "telegram";
 
 export type ProviderMode = "ask" | "auto";
 
@@ -87,7 +87,6 @@ export type SessionRecord = {
   status: SessionStatus;
   exitCode: number | null;
   fallbackFrom: string | null;
-  hermesRobot?: string | null;
 };
 
 export type SessionsFile = {

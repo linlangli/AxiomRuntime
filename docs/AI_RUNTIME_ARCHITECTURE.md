@@ -4,7 +4,7 @@
 
 ## 1. Architectural Objective
 
-Evolve the existing AI Gateway into an enterprise AI Runtime without discarding its working provider routing, execution, usage, Telegram, Hermes, and memory foundations.
+Evolve the existing AI Gateway into an enterprise AI Runtime without discarding its working provider routing, execution, usage, Telegram, and memory foundations.
 
 The transition is evolutionary:
 
@@ -59,7 +59,7 @@ Learning converts execution evidence into candidates and measures whether those 
 
 ### Adapter Layer
 
-Provider, model, browser, MCP, Hermes, and enterprise-system integrations are replaceable adapters. No adapter may redefine core policy.
+Provider, model, browser, MCP, and enterprise-system integrations are replaceable adapters. No adapter may redefine core policy.
 
 ### External Coding Agents and Remote Surfaces
 
@@ -295,7 +295,6 @@ Quantitative availability, latency, durable-operation, capacity, RTO, and RPO ga
 | `src/core/runner` | execution/provider foundation and current OpenAI Usage Proxy | preserve `startOpenAiUsageProxy` as a facade; evolve its server into the unified transport data plane and move protocol-specific behavior behind adapters |
 | target `src/core/transport-proxy` | single transport data plane | own listener, routes, transforms, streaming, isolation, UsageObserver, and MemoryExtension dispatch |
 | `src/core/providers`, `models` | provider capability | expose stable provider/model contracts |
-| `src/core/hermes` | external agent/workflow adapter | move behind integration and workflow contracts |
 | `src/telegram` | delivery surface | keep as adapter; move reusable policy to core |
 | `src/core/memory` and current Telegram memory | learning and knowledge foundation | implement the governed memory specification |
 | sessions, logs, usage, reports | Runtime evidence and operations | converge on traceable Runtime events |

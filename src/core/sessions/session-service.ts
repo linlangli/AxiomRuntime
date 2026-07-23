@@ -8,7 +8,6 @@ export type StartSessionInput = {
   model: string;
   projectPath: string;
   fallbackFrom?: string | null;
-  hermesRobot?: string | null;
 };
 
 export async function startSession(input: StartSessionInput): Promise<SessionRecord> {
@@ -24,8 +23,7 @@ export async function startSession(input: StartSessionInput): Promise<SessionRec
     endedAt: null,
     status: "running",
     exitCode: null,
-    fallbackFrom: input.fallbackFrom ?? null,
-    hermesRobot: input.hermesRobot ?? null
+    fallbackFrom: input.fallbackFrom ?? null
   };
   await addSession(session);
   return session;

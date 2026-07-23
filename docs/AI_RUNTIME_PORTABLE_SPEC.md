@@ -739,7 +739,7 @@ Observability is implemented continuously, not as a final phase.
 
 ## 13. Existing Foundation and Evolution Guarantees
 
-The target specification is ahead of implementation. Existing foundations include CLI, Telegram, provider/model configuration, Claude/Codex/Hermes execution paths, sessions, progress streaming, usage records, reports, local configuration, an OpenAI Usage Proxy with compatibility behavior, and an early Telegram Memory implementation.
+The target specification is ahead of implementation. Existing foundations include CLI, Telegram, provider/model configuration, Claude/Codex execution paths, sessions, progress streaming, usage records, reports, local configuration, an OpenAI Usage Proxy with compatibility behavior, and an early Telegram Memory implementation.
 
 Evolution guarantees:
 
@@ -753,7 +753,7 @@ Evolution guarantees:
 
 ## 14. User and Operator Surfaces
 
-The product retains CLI commands for interactive mode, help, provider add/edit/list/delete/use/status, Claude/Codex launch, Hermes management/import/export, Telegram lifecycle, sessions, reports, logs, context generation, diagnostics, continuation, Web control plane, and Memory controls.
+The product retains CLI commands for interactive mode, help, provider add/edit/list/delete/use/status, Claude/Codex launch, Telegram lifecycle, sessions, reports, logs, context generation, diagnostics, continuation, Web control plane, and Memory controls.
 
 Expected Memory controls include list/show/history, pin, correct, forget, purge, import/export, Skill list/show/approve/deprecate/edit, and trace/explain views. User-facing documentation is Chinese. Dangerous operations show scope and consequence, require confirmation where policy demands it, return durable progress, and expose completion evidence.
 
@@ -786,24 +786,11 @@ Fallback sorts providers by level, skips unhealthy or model-incompatible candida
 - `.ai-gateway.log`: redacted operational JSONL for commands, health, fallback, diagnostics, and errors.
 - `sessions.json`: launch/session metadata including tool, provider, model, mode, project, times, status, exit code, and fallback source.
 - `reports/`: secret-free session handoff reports.
-- `hermes.json`: user-editable Hermes robot definitions that reference providers by name and never duplicate keys.
 - `transport-proxy.json` and other internal stores: versioned, validated, bounded, and excluded from user-editable provider semantics.
 
 Internal state does not pollute user configuration. Logs, reports, caches, exports, crash output, and diagnostics never contain full API keys, authorization, cookies, passwords, prompts, reasoning, or raw tool arguments.
 
-### 14.3 Hermes robot management
-
-Hermes is a managed external Agent/robot capability, not another provider type. A robot has a unique name, provider reference, model, mode, optional Telegram binding, and owned tasks. Cron jobs belong to a robot and are not robots themselves.
-
-Supported operations are status, use, add, list, edit, clear, delete, import, import-local, and export. Add/edit flows are selection-first. List does not refresh provider health or consume tokens. Status verifies CLI availability, provider existence/health, cached model availability, Telegram binding, and last session/error.
-
-Launching a robot resolves the provider and model, generates an isolated robot-specific `HERMES_HOME`, injects secrets only into the supervised process, excludes unmanaged native credentials, and records Runtime session/events. User-owned global Hermes configuration is not overwritten by default.
-
-Synchronization preserves unrelated Telegram, toolset, terminal, cron, memory, and MCP settings; replaces only Runtime-managed provider/model blocks; stores only key fingerprints in logs; restarts a gateway only when effective runtime configuration changes. Compatibility adjustments are version-checked, backed up, reversible, and never patch unknown versions blindly.
-
-Clear removes runtime state while preserving the robot definition unless the command explicitly states otherwise. Delete displays affected robot, tasks, Telegram binding, and isolated data, requires confirmation, revokes capabilities, and produces completion evidence. Export defaults to provider references without secrets; protected secret transfer requires a separately encrypted recipient-bound artifact.
-
-### 14.4 Auth Session Broker
+### 14.3 Auth Session Broker
 
 Auth Session Broker lets tools use logged-in websites without exposing credentials to models. It is an `auth` capability routed by Capabilities; credential truth remains in Security.
 
@@ -815,7 +802,7 @@ Commands include `ai auth login`, list, status, refresh, logout, and clear. Chat
 
 External page content remains untrusted. Reads of sensitive financial/medical/personal data and cross-domain output can require confirmation. Actions are classified as read, navigate, form write, submit, financial, or destructive; submit/financial/destructive actions require execution-time confirmation of final target and parameters. Memory or Skill cannot waive this requirement.
 
-### 14.5 Telegram execution experience
+### 14.4 Telegram execution experience
 
 Telegram supports Claude and Codex engines through one engine contract, one Orchestration lifecycle, and per-session serialization. It maps engine output into text, progress, tool calls, confirmation requests, files, diffs, completion, failure, cancellation, and session state without owning execution policy.
 

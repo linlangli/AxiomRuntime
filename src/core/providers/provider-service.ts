@@ -230,7 +230,7 @@ async function filterCallableModels(provider: Provider, models: string[]): Promi
 async function recordModelProbeUsage(provider: Provider, model: string, usage: TokenUsage): Promise<void> {
   await appendUsageEvent(buildUsageEvent({
     provider: provider.name,
-    tool: "hermes",
+    tool: "provider",
     model,
     source: "model_probe",
     inputTokens: usage.inputTokens,

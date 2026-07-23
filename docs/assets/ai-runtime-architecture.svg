@@ -204,7 +204,7 @@
 
   <rect x="75" y="1320" width="390" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
   <text x="270" y="1345" text-anchor="middle" class="node-title">Agent CLI / Model Provider Adapter</text>
-  <text x="270" y="1368" text-anchor="middle" class="node-body">Claude Code · Codex CLI · Hermes · Hosted Models</text>
+  <text x="270" y="1368" text-anchor="middle" class="node-body">Claude Code · Codex CLI · Hosted Models</text>
 
   <rect x="500" y="1320" width="390" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
   <text x="695" y="1345" text-anchor="middle" class="node-title">Tool / MCP / 浏览器 Adapter</text>

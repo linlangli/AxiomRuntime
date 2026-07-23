@@ -21,7 +21,7 @@
 |---|---|
 | provider/model adapter | 执行选定的 provider/model 调用 |
 | tool/MCP adapter | 工具与 MCP 集成 |
-| agent adapter | 启动 Claude Code/Codex/Hermes 等外部 Agent runtime，并把进程/SDK event 规范化为 `AgentRunEvent` |
+| agent adapter | 启动 Claude Code/Codex 等外部 Agent runtime，并把进程/SDK event 规范化为 `AgentRunEvent` |
 | workflow executor | 工作流执行适配 |
 | backend adapter | 实现检索/向量/图/队列/存储/Observability Port |
 | evaluator/policy module | 评测器、策略模块插件 |
@@ -50,7 +50,7 @@
 
 ## 9. 现状映射
 
-`src/core/hermes/`、`src/core/integrations/` 已存在，**应当**移到 integration/workflow 契约后成为标准适配器。`plugins/` 目录待建。
+`src/core/integrations/` 已提供通用集成状态注册；`plugins/` 目录和完整插件生命周期仍待建设。
 
 Claude Code/Codex 的具体 CLI 封装目标态属于本层：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 实现 `AgentAdapterPort`。它们拥有二进制发现、启动参数、临时 vendor 配置、进程生命周期、stream event parsing、session cursor 和 vendor error mapping；不拥有 Agent capability 激活、provider/model 选择、tool permission、retry policy、Memory、Usage 或 Learning。当前 CLI runner 对 `ai use codex` 使用 process-scoped `model_provider` override，把 `env_key` 固定为本次子进程的 `OPENAI_API_KEY`，禁止回落到用户全局 Codex credential；该 override 不写入全局 `auth.json` 或 `config.toml`。Telegram `Engine` wrapper 是 ① 的兼容 facade，不是另一个 Agent Adapter 权威入口。
 
@@ -212,7 +212,7 @@ Profile 只替换 backend，不改变 `MemoryService`、Claim/Evidence、PolicyD
 
 ## A. 问题 1：CLI 命令硬编码（`cli/index.ts`）
 
-**现状**：每新增一个命令需要修改 3 处 — import 语句、switch case、interactive 菜单列表。删除 hermes 也需要同时改这 3 处。
+**历史问题**：每新增或删除一个命令都需要同时修改 import、switch case 和 interactive 菜单列表。当前顶层命令已迁移到注册表，以下代码保留为设计说明。
 
 **方案：命令注册表**
 
@@ -243,11 +243,11 @@ export function getInteractiveCommands(): CliCommand[] {
 ```
 
 ```typescript
-// cli/commands/hermes.ts — 自注册
+// cli/commands/example.ts — 自注册
 import { registerCommand } from "../registry.js";
 registerCommand({
-  name: "hermes",
-  description: "Hermes 集成管理",
+  name: "example",
+  description: "示例集成管理",
   async run(args) { /* ... */ }
 });
 ```
@@ -255,7 +255,7 @@ registerCommand({
 ```typescript
 // cli/index.ts — 不再 import 具体命令
 import "./commands/add.js";       // side-effect: 自注册
-import "./commands/hermes.js";    // 删除此行 = 移除 hermes 命令
+import "./commands/example.js";   // 删除此行 = 移除示例命令
 // ...
 const cmd = getCommand(command);
 if (cmd) await cmd.run(args);
@@ -356,7 +356,7 @@ installTelegramHandlers(bot, deps);
 
 ## D. 问题 4：集成状态硬编码（`integration-state.ts`）
 
-**已完成**：`IntegrationState` 新增通用 `integrations` map，同时保留 `hermes` 字段作为向后兼容镜像。
+**已完成**：`IntegrationState` 使用通用 `integrations` map；集成通过名称注册，不保留集成专属镜像字段。
 
 **当前实现：通用集成状态注册**
 
@@ -366,7 +366,7 @@ export type IntegrationRegistration = {
   name: string;
 };
 
-const registeredIntegrations = new Set<string>(["hermes"]);
+const registeredIntegrations = new Set<string>();
 
 export function registerIntegration(registration: IntegrationRegistration): void {
   registeredIntegrations.add(registration.name);
@@ -374,7 +374,6 @@ export function registerIntegration(registration: IntegrationRegistration): void
 
 export type IntegrationState = {
   providerRevision: number;
-  hermes: IntegrationProviderSyncState; // backward-compatible mirror
   integrations: Record<string, {
     syncedProviderRevision: number;
     pendingProviderChanges: ProviderChange[];
@@ -382,14 +381,14 @@ export type IntegrationState = {
 };
 ```
 
-效果：Provider 变更会写入已注册集成的 pending changes；Hermes 继续通过兼容 wrapper 工作，新集成不需要再修改状态文件结构。
+效果：Provider 变更会写入已注册集成的 pending changes；新集成不需要再修改状态文件结构。
 
 ## E. 问题 5：类型联合硬编码（`types.ts`）
 
 **现状**：
 ```typescript
 export type CliToolType = "claude" | "codex";                         // 硬编码引擎
-export type RunToolType = CliToolType | "hermes" | "telegram";        // 硬编码所有工具
+export type RunToolType = CliToolType | "provider" | "telegram";      // 仍硬编码部分工具
 ```
 
 **方案**：改为 string + 运行时注册校验，或使用 branded string
@@ -529,13 +528,13 @@ graph TD
   end
 
   subgraph Plugins["插件（自注册模块）"]
-    P1["commands/hermes.ts"]
+    P1["commands/provider.ts"]
     P2["commands/telegram.ts"]
     P3["engines/claude.ts"]
     P4["engines/codex.ts"]
     P5["handlers/command.ts"]
     P6["handlers/memory.ts ⬡"]
-    P7["integrations/hermes.ts"]
+    P7["integrations/example.ts"]
     P8["memory/memory-inject.ts ⬡"]
     P9["memory/skill-learning.ts ⬡"]
   end
@@ -577,7 +576,7 @@ graph TD
 | P0 | CLI 命令注册表 | 已完成 | `cli/index.ts` + `src/cli/registry.ts` | 中（纯重构，无功能变更） |
 | P0 | 引擎注册表 | 已完成 | `tool-runner.ts` + `bot.ts` + `core/runner/engine-registry.ts` + `telegram/engine/registry.ts` | 中 |
 | P1 | Handler 注册表 | 已完成 | `bot.ts` + `telegram/handler-registry.ts` + handlers/ | 小 |
-| P1 | 集成注册表 | 已完成 | `integration-state.ts` + hermes/ | 小 |
+| P1 | 集成注册表 | 已完成 | `integration-state.ts` | 小 |
 | P1 | Prompt 中间件链 | 已完成 | `message.ts` executePrompt + `telegram/interaction/prompt-middleware.ts` | 小（将现有 buildPromptWithXxx 改为中间件） |
 | P1 | 生命周期钩子 | 已完成 | `message.ts` + `telegram/lifecycle-registry.ts` | 小 |
 | P1 | Bot Memory Phase 1 | 已完成 | `telegram/memory/` + `handlers/memory.ts` + setup/prompt middleware | 中 |
@@ -600,7 +599,7 @@ graph TD
 
 | 状态 | 项目 | 当前结果 | 剩余事项 |
 |------|------|----------|----------|
-| 已完成 | 配置并发安全 | `json-store.ts` 已新增 `withJsonFileLock()`、`updateJsonFile()`；公共写入走文件锁 + atomic rename；providers/cache/usage/session/integration/telegram config/pricing/hermes state 等更新路径已迁移 | 未把所有配置迁移到 SQLite；当前仍保持 JSON 文件方案 |
+| 已完成 | 配置并发安全 | `json-store.ts` 已新增 `withJsonFileLock()`、`updateJsonFile()`；公共写入走文件锁 + atomic rename；providers/cache/usage/session/integration/telegram config/pricing 等更新路径已迁移 | 未把所有配置迁移到 SQLite；当前仍保持 JSON 文件方案 |
 | 已完成 | CLI 运行时 provider fallback | `ai use` 已改为候选列表执行；子进程非 0 退出时尝试下一个 provider；CLI 不存在、用户取消、无候选不 fallback；fallback 事件写结构化日志 | 无 |
 | 已完成 | Telegram 运行时 provider fallback | `executePrompt()` 已按当前 engine 获取候选 provider；候选确定后 Engine 精确执行该 provider/model，不再二次隐藏路由；失败后只尝试模型目录明确兼容的下一个 provider；fallback 成功不修改默认 provider/model，并清空跨 provider resume | 无 |
 | 已完成 | Provider 健康检查 retry/backoff + 熔断 | `checkProvider()`、`runDeepCheck()`、模型 probe 已对临时错误做 retry/backoff；日志记录 attempts/duration/retryErrors；运行时失败会累计 health score 并在连续失败后打开 circuit breaker；冷却结束后进入 half-open 探测，不会被残留 `status=error` 永久禁用 | 熔断阈值目前是固定常量，后续可配置化 |
@@ -609,9 +608,8 @@ graph TD
 | 已完成 | Codex 上游连接隔离 | 每次 Codex execution 使用独立 Undici dispatcher，并关闭上游 keep-alive 复用；Codex 自身每次重连都会建立新连接；代理不再转发来访的 `content-length`，由 HTTP 客户端按最终 Buffer 计算；代理层不额外重试请求 | 相比复用连接会增加少量 TLS 建连开销，优先保证长流式请求稳定性 |
 | 已完成 | Codex 首包超时边界 | 上游 45 秒未返回响应头即结束该次请求；同一 execution 连续两次首包超时后，剩余 Codex 重连立即短路，使 Telegram 能进入下一个 Provider fallback；不会由代理重复模型请求 | 当前 45 秒和两次阈值为内部常量，后续可按 Provider compatibility profile 配置 |
 | 已完成 | Telegram 回复网络重试 | 思考状态编辑、最终回复和附件发送遇到网络断开、连接超时或 HTTP 5xx 时执行有限退避重试；HTML 格式等确定性错误不重试；回复重试不会重新调用模型 | 可后续统一接入 Telegram API 指标和告警 |
-| 已完成 | `hermes-service.ts` 大文件拆分 | 原文件变为 facade；已拆为 core/yaml/local-files/import-export/provider-sync 等模块，外部导出保持兼容 | 还可以继续把 sync/repair 编排再拆得更细，但 P0 小步重构目标已完成 |
-| 已完成 | 共享 `isRecord()` | 已新增 `src/core/utils/is-record.ts`，替换 usage/pricing、runner、Hermes、Telegram config/engine 等重复定义 | 其它通用小工具可后续按需抽取 |
-| 已完成 | 回归覆盖 | 已新增 JSON store 并发更新、CLI fallback、Telegram fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、Provider 熔断/half-open、proxy metrics、schema validation、token budget、progress streaming、Responses 原生转发、Cloudflare `524`、Codex 上游连接/首包超时隔离、Telegram 网络重试与双输出错误保留等测试；当前 `npm test` 为 113 项通过 | 可继续补更多异常路径和持久化 metrics 测试 |
+| 已完成 | 共享 `isRecord()` | 已新增 `src/core/utils/is-record.ts`，替换 usage/pricing、runner、Telegram config/engine 等重复定义 | 其它通用小工具可后续按需抽取 |
+| 已完成 | 回归覆盖 | 已新增 JSON store 并发更新、CLI fallback、Telegram fallback、Provider retry、Prompt middleware、注册表、Telegram 串行队列、Provider 熔断/half-open、proxy metrics、schema validation、token budget、progress streaming、Responses 原生转发、Cloudflare `524`、Codex 上游连接/首包超时隔离、Telegram 网络重试与双输出错误保留等测试 | 可继续补更多异常路径和持久化 metrics 测试 |
 
 **P1 - 中优先级**
 
@@ -647,17 +645,16 @@ graph TD
 
 9. **已完成：`isRecord` 辅助函数重复定义**
    - 已抽为 `src/core/utils/is-record.ts`
-   - 已替换 `claude-engine.ts`、`codex-engine.ts`、`telegram/config.ts`、`tool-runner.ts`、`hermes-store.ts`、`hermes-service-core.ts`、`pricing.ts` 等重复定义
+   - 已替换 `claude-engine.ts`、`codex-engine.ts`、`telegram/config.ts`、`tool-runner.ts`、`pricing.ts` 等重复定义
 
 10. **已完成：类型安全改进（轻量 schema 阶段）**
     - 已完成：新增轻量 `src/core/config/schema.ts`，Provider 配置读取不再用裸 `as Partial<Provider>`，并校验非空 name/baseUrl/apiKey
     - 已完成：Telegram config 字段读取复用 schema helper，同时保留原有宽松归一化行为
-    - 已完成：Hermes 导入 bundle 的 robots/providers/providerCache 复用 schema helper 校验，非法 bundle 会明确失败
     - 后续可选：如果需要更严格的错误聚合和 JSON schema 导出，可再引入 `zod` 或 `valibot`
 
 11. **部分完成：测试覆盖**
     - 当前 `test/` 目录在 build 后用 `node --test` 运行
-    - 已补：JSON store 并发更新、CLI runtime fallback、Telegram runtime fallback、Hermes provider 解析、Provider retry、Prompt middleware、注册表、Telegram 串行队列、熔断策略、usage proxy metrics、schema validation、token budget
+    - 已补：JSON store 并发更新、CLI runtime fallback、Telegram runtime fallback、Provider retry、Prompt middleware、注册表、Telegram 串行队列、熔断策略、usage proxy metrics、schema validation、token budget
     - 未完成：长期指标持久化、更多异常路径仍可继续补
 
 ## C. 性能

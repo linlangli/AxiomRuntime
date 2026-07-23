@@ -436,7 +436,7 @@
     <header>
       <div class="topbar">
         <h1>AI Runtime 命令参考</h1>
-        <p class="subtitle">当前 Gateway 基础层的命令索引：Provider、Claude/Codex、Hermes、Telegram、会话与诊断。</p>
+        <p class="subtitle">当前 Gateway 基础层的命令索引：Provider、Claude/Codex、Telegram、会话与诊断。</p>
       </div>
     </header>
 
@@ -447,7 +447,6 @@
         <a class="nav-link" href="#use"><span>使用模型</span><span class="nav-count">use / last</span></a>
         <a class="nav-link" href="#providers"><span>Provider</span><span class="nav-count">add / edit / delete</span></a>
         <a class="nav-link" href="#memory"><span>Memory</span><span class="nav-count">embedding</span></a>
-        <a class="nav-link" href="#hermes"><span>Hermes</span><span class="nav-count">机器人</span></a>
         <a class="nav-link" href="#telegram"><span>Telegram</span><span class="nav-count">Bot</span></a>
         <a class="nav-link" href="#status"><span>状态诊断</span><span class="nav-count">status / doctor</span></a>
         <a class="nav-link" href="#sessions"><span>会话报告</span><span class="nav-count">session / report</span></a>
@@ -462,14 +461,13 @@
               <p class="hint">输入命令、场景或关键字过滤；点击左侧分类查看详细规则。</p>
             </div>
             <label class="search">
-              <input id="commandSearch" type="search" placeholder="搜索：provider、hermes、doctor、telegram..." />
+              <input id="commandSearch" type="search" placeholder="搜索：provider、doctor、telegram..." />
             </label>
           </div>
 
           <div class="chips" aria-label="常用筛选提示">
             <span class="chip">需要 Node.js <code>22.19.0+</code></span>
             <span class="chip">Provider 统一在 <code>ai provider</code></span>
-            <span class="chip">Hermes 不再需要手动 sync</span>
             <span class="chip">Telegram /model 只显示 AI Gateway 管理的 provider</span>
           </div>
 
@@ -529,43 +527,19 @@
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider edit</code><br /><code class="cmd">ai provider edit 51talk</code></td>
                 <td>修改 name、baseUrl、凭证、mode、level、model。</td>
-                <td>凭证写入 SecretStore，配置只保存 apiKeyRef；编辑时不回显原值。修改后自动同步 Hermes。</td>
+                <td>凭证写入 SecretStore，配置只保存 apiKeyRef；编辑时不回显原值。</td>
               </tr>
-              <tr data-search="provider delete remove fallback hermes">
+              <tr data-search="provider delete remove fallback">
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider delete</code><br /><code class="cmd">ai provider delete 51talk</code></td>
                 <td>删除 provider 和模型缓存。</td>
-                <td>Hermes 会切到剩余最高优先级 provider。</td>
+                <td>后续执行会按优先级重新选择 provider。</td>
               </tr>
               <tr data-search="memory embedding vector jina retrieval config">
                 <td><span class="group-label">Memory</span></td>
                 <td><code class="cmd">ai memory embedding</code><br /><code class="cmd">ai memory embedding set</code><br /><code class="cmd">ai memory embedding test</code><br /><code class="cmd">ai memory embedding clear</code></td>
                 <td>交互配置记忆检索专用 embedding 模型。</td>
                 <td>独立于聊天 provider，保存到 <code>memory.json</code>。</td>
-              </tr>
-              <tr data-search="hermes add robot telegram">
-                <td><span class="group-label">Hermes</span></td>
-                <td><code class="cmd">ai hermes add</code></td>
-                <td>新增 Hermes 机器人，可绑定 Telegram。</td>
-                <td>保存后自动同步本机 Hermes。</td>
-              </tr>
-              <tr data-search="hermes edit robot provider model telegram">
-                <td><span class="group-label">Hermes</span></td>
-                <td><code class="cmd">ai hermes edit</code><br /><code class="cmd">ai hermes edit robot-name</code></td>
-                <td>修改机器人名称、provider、model、mode、Telegram。</td>
-                <td>Provider 管理由 <code>ai provider edit</code> 处理。</td>
-              </tr>
-              <tr data-search="hermes list status use clear delete">
-                <td><span class="group-label">Hermes</span></td>
-                <td><code class="cmd">ai hermes list</code><br /><code class="cmd">ai hermes status</code><br /><code class="cmd">ai hermes use robot-name</code><br /><code class="cmd">ai hermes clear</code><br /><code class="cmd">ai hermes delete</code></td>
-                <td>查看、检查、启动、清空或删除 Hermes 机器人。</td>
-                <td><code>clear</code> 保留机器人配置，清空状态、记忆和 tasks。</td>
-              </tr>
-              <tr data-search="hermes import local export migrate telegram">
-                <td><span class="group-label">Hermes</span></td>
-                <td><code class="cmd">ai hermes import-local</code><br /><code class="cmd">ai hermes export</code><br /><code class="cmd">ai hermes export robot-name</code><br /><code class="cmd">ai hermes import ./robot.json</code></td>
-                <td>导入本机 Hermes、完整导出或迁移机器人。</td>
-                <td><code>export</code> 会包含关联 provider 凭证。</td>
               </tr>
               <tr data-search="telegram bot start stop status config logs claude codex remote">
                 <td><span class="group-label">Telegram</span></td>
@@ -605,7 +579,7 @@
               </tr>
             </tbody>
           </table>
-          <div class="empty" id="emptyState">没有匹配的命令。试试搜索 provider、hermes、status、doctor 或 session。</div>
+          <div class="empty" id="emptyState">没有匹配的命令。试试搜索 provider、status、doctor 或 session。</div>
         </section>
 
         <div class="sections">
@@ -671,67 +645,7 @@ ai provider list</pre>
                   <li><code>mode</code> 可选 <code>ask</code> 或 <code>auto</code>。</li>
                   <li><code>level</code> 是优先级；如果目标等级已占用，会和对应 provider 交换。</li>
                   <li><code>model</code> 从已探测模型中选择，不手动输入。</li>
-                  <li>删除 provider 会清理模型缓存；如果 Hermes 机器人正在用它，下一次 Hermes 命令会切到剩余 provider 中 <code>level</code> 最小的一个并同步本机 Hermes。</li>
-                </ul>
-              </div>
-            </details>
-            <details>
-              <summary>与 Hermes 的关系</summary>
-              <div class="detail-body">
-                <ul>
-                  <li>Provider 是 AI Gateway 顶层配置，不放在 <code>ai hermes edit</code> 里管理。</li>
-                  <li><code>ai provider add/edit/delete</code> 只更新顶层 provider；下一次 Hermes 命令会检测 provider 变化，再同步本机 Hermes provider 列表并按需重启 gateway。</li>
-                  <li><code>ai provider list</code> 是查看 provider 的唯一列表入口；<code>ai hermes list</code> 只列机器人。</li>
-                </ul>
-              </div>
-            </details>
-          </section>
-
-          <section id="hermes" class="panel">
-            <h2>Hermes 机器人</h2>
-            <details open>
-              <summary>日常操作</summary>
-              <div class="detail-body">
-                <pre>ai hermes
-ai hermes add
-ai hermes list
-ai hermes edit
-ai hermes edit robot-name
-ai hermes status
-ai hermes use robot-name
-ai use hermes robot-name</pre>
-                <ul>
-                  <li>机器人配置保存到 <code>~/.ai-gateway/hermes.json</code>，只保存 provider 名称，不保存 API Key。</li>
-                  <li><code>ai hermes use</code> 使用独立目录 <code>~/.ai-gateway/hermes/&lt;机器人名称&gt;/</code>，避免串用全局 Hermes 凭证。</li>
-                  <li><code>ai hermes list/status</code> 会先做轻量自愈，自动补本机 Hermes 兼容补丁和 provider 配置；不会做模型可调用性探测，不额外消耗 token。</li>
-                  <li><code>ai hermes edit providers</code> 不是有效命令；provider 请用 <code>ai provider edit</code>。</li>
-                </ul>
-              </div>
-            </details>
-            <details>
-              <summary>完整迁移、本机 Hermes 导入和 Telegram /model</summary>
-              <div class="detail-body">
-                <pre>ai hermes import-local
-ai hermes import-local --overwrite
-ai hermes export
-ai hermes export robot-name
-ai hermes export --include-secrets --recipient key-id
-ai hermes import ./hermes-robot.json
-ai hermes import ./hermes-secret-bundle.json --allow-secret-import</pre>
-                <ul>
-                  <li><code>export</code> 默认导出 secret-free 复刻包，包含机器人配置、Telegram 绑定、tasks schedule、provider 引用和可移植模型元数据，不包含 API Key。传入机器人名称时只导出单个机器人。</li>
-                  <li>迁移凭证使用 <code>ai hermes export --include-secrets --recipient &lt;key-id&gt;</code>，经确认后生成接收方绑定且有有效期的加密 bundle；导入时必须显式增加 <code>--allow-secret-import</code>，凭证直接写入 SecretStore。</li>
-                  <li><code>import</code> 默认只处理 secret-free bundle；缺失凭证时在目标机器重新配置。旧版可能含明文 secret 的文件会触发安全告警和预览，未经显式允许不会导入 secret。</li>
-                  <li><code>import-local</code> 扫描 <code>~/.hermes/config.yaml</code>、<code>channel_directory.json</code> 和 <code>cron/jobs.json</code>。</li>
-                  <li>本机 Hermes provider 会导入 AI Runtime provider 配置，密钥进入 SecretStore，普通配置只保存 <code>apiKeyRef</code>。</li>
-                  <li>已导入后即使把 <code>hermes-default</code> 改名，再执行 <code>import-local</code> 也会按 Telegram chatId 或 task id 识别为同一个机器人，不会重复新增。</li>
-                  <li>导入后会同步隔离的 Hermes 配置并重启 gateway；密钥由 SecretStore 在进程启动时注入，不写入全局 <code>~/.hermes/config.yaml</code>。</li>
-                  <li>同步会替换旧的 <code>providers</code> / <code>custom_providers</code> 配置块，并清理重复块，避免 <code>/model</code> 可选但执行时报 <code>Unknown provider</code>。</li>
-                  <li>如果 Hermes 网关点击 <code>/model</code> 选项时没有读取 <code>providers</code> 配置，同步会自动打兼容补丁。</li>
-                  <li>同步/自愈也会补 Hermes 请求兼容逻辑：如果历史对话里出现空工具名，会在发送给 OpenAI 兼容接口前清理，避免 <code>Invalid input[*].name</code> 这类 400 错误。</li>
-                  <li>Telegram <code>/model</code> 选择 AI Gateway provider/model 后，会保存为本机 Hermes 默认配置；下次执行 <code>ai hermes status/list</code> 会自动同步回 <code>hermes.json</code>。</li>
-                  <li>Telegram <code>/model</code> 只展示 AI Gateway 管理且验证可调用的 provider/model。</li>
-                  <li>隔离运行时不会加载 Hermes 原生 provider 凭证入口，避免 MoA、Copilot、openai-codex 等 provider 混入列表；不会覆盖用户的全局凭证文件。</li>
+                  <li>删除 provider 会清理模型缓存；后续执行会按 <code>level</code> 从剩余 provider 中重新选择。</li>
                 </ul>
               </div>
             </details>
@@ -843,9 +757,8 @@ ai session clear</pre>
               <div class="detail-body">
                 <pre>~/.ai-gateway/providers.json
 ~/.ai-gateway/memory.json
-~/.ai-gateway/model-pricing.json
-~/.ai-gateway/hermes.json</pre>
-                <p><code>providers.json</code> 保存聊天 provider 与 <code>apiKeyRef</code>；<code>memory.json</code> 保存记忆检索 embedding 模型与 secret ref；实际凭证进入 SecretStore。<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格；<code>hermes.json</code> 保存 Hermes 机器人，不保存 API Key。</p>
+~/.ai-gateway/model-pricing.json</pre>
+                <p><code>providers.json</code> 保存聊天 provider 与 <code>apiKeyRef</code>；<code>memory.json</code> 保存记忆检索 embedding 模型与 secret ref；实际凭证进入 SecretStore。<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格。</p>
               </div>
             </details>
             <details>
@@ -854,8 +767,6 @@ ai session clear</pre>
                 <pre>~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
 ~/.ai-gateway/sessions.json
-~/.ai-gateway/hermes-state.json
-~/.ai-gateway/hermes/&lt;机器人名称&gt;/
 ~/.ai-gateway/telegram.json
 ~/.ai-gateway/telegram.sqlite
 ~/.ai-gateway/telegram.log
@@ -863,15 +774,6 @@ ai session clear</pre>
 ~/.ai-gateway/exports/
 ~/.ai-gateway/.ai-gateway.log</pre>
                 <p>除非调试问题，否则不要手动修改内部文件。</p>
-              </div>
-            </details>
-            <details>
-              <summary>本机 Hermes 同步目标</summary>
-              <div class="detail-body">
-                <pre>~/.hermes/config.yaml
-~/.hermes/.env
-~/.hermes/auth.json</pre>
-                <p>AI Gateway 同步时会写入 provider/model 配置、清理原生凭证入口，并重启 Hermes gateway。</p>
               </div>
             </details>
           </section>

@@ -4,15 +4,9 @@ import { refreshAllProviders } from "../../core/providers/provider-service.js";
 import { resolveProviderCandidatesForTool, type ResolvedRun } from "../../core/runner/fallback.js";
 import { runTool } from "../../core/runner/tool-runner.js";
 import type { CliToolType } from "../../core/types.js";
-import { runHermesUseCommand } from "./hermes.js";
 import { promptConfirm, promptSelect } from "../prompts/prompt.js";
 
 export async function runUseCommand(args: string[]): Promise<void> {
-  if (args[0] === "hermes") {
-    await runHermesUseCommand(args[1]);
-    return;
-  }
-
   const tool = await getTool(args[0]);
   const providerName = args[1];
   const modelName = args[2];

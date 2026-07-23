@@ -412,7 +412,7 @@ Event ordering 与 terminal invariant：
 | `ModelProviderPort` | 模型生成/流式/tool-call 协议 | 本地/CLI adapter | 托管模型 provider |
 | `ToolPort` | 类型化工具调用与结果 | 本地工具/MCP | 企业工具目录 |
 | `WorkflowExecutorPort` | 可恢复 workflow 执行 | 内置执行器 | LangGraph/企业编排器 |
-| `AgentAdapterPort` | Agent runtime 适配，不拥有权限 | `ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` / Hermes adapter | 企业 Agent runtime |
+| `AgentAdapterPort` | Agent runtime 适配，不拥有权限 | `ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` | 企业 Agent runtime |
 | `CandidateExtractor` | 记忆抽取 | 内置 | Mem0 风格 |
 | `RetrievalBackend` | 词法/语义/实体/时序检索 | SQLite FTS5 | Postgres/OpenSearch |
 | `VectorRetrievalBackend` | 向量召回 | sqlite-vec | pgvector/Qdrant |

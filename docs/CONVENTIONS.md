@@ -192,7 +192,6 @@ Documentation review must appear in the task checklist or handoff summary even w
 - Implemented operational logging and `ai log` for recent log inspection.
 - Implemented project context generation.
 - Implemented CLI command resolution fallback for known macOS app paths.
-- Implemented Hermes robot foundation: `ai hermes`, add/list/edit/status/use/clear/delete/import/import-local/export, user-editable `hermes.json`, robot store, state store, native local config sync with callable model refresh, deferred provider sync, Hermes `/model` compatibility patching, and isolated Hermes runtime launch.
 - Added Node tests for provider normalization, level swapping, model compatibility, usage parsing, provider add/edit, status aggregation, doctor diagnostics, deep usage recording, and provider fallback.
 - Added `.gitignore`, Chinese `README.md`, interactive release script, GitLab CI release plan.
 - Implemented Telegram Bot subsystem (see `modules/01-surfaces.md`).
@@ -207,4 +206,3 @@ Documentation review must appear in the task checklist or handoff summary even w
 5. Formalize plugin descriptors and lifecycle rules around the existing registries.
 6. Add organization and project scope, federated identity, sensitive-data boundaries, and versioned policy administration.
 7. Implement the enterprise control-plane API and Web governance surface for identity, policy, capability/plugin lifecycle, audit, FinOps, compliance, and recovery; keep desktop as another adapter.
-8. Expand Hermes from a direct integration into a workflow/agent adapter behind Runtime contracts.

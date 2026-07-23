@@ -8,7 +8,7 @@
 |---|---|
 | [项目 README](../README.md) | 产品定位、当前能力、安装与常用入口 |
 | [doc_2.0 规范层完整索引](#doc_20-规范层完整索引) | 分层架构、模块文档、规范条款、路线图的统一索引（见下方章节）|
-| [使用指南](usage.md) | CLI、Provider、Hermes、Telegram、会话和诊断操作 |
+| [使用指南](usage.md) | CLI、Provider、Telegram、会话和诊断操作 |
 | [HTML 命令手册](USAGE.html) | 可浏览的命令索引 |
 | [整体架构与当前实现快照](00-overview.md) | 分层俯瞰、现状映射与从旧 ARCHITECTURE 迁入的实现快照 |
 | [产品架构全景图](architecture-map.md) | 中文架构图、执行主链、学习闭环与权威所有权说明 |
@@ -46,7 +46,7 @@
 | [roadmap.md](roadmap.md) | Release R0–R3 纵向产品闭环、Phase 0–13 技术计划与贯穿全程可观测性 |
 | [testing.md](testing.md) | 测试计划：核心记忆/Telegram/CLI/Auth/检索质量/长期仿真/Memory、Skill 与 Capability 可观测性 |
 | [service-level-objectives.md](service-level-objectives.md) | `local/team/enterprise` 的 SLO、RTO、RPO、容量与恢复演练门槛 |
-| [usage.md](usage.md) | 用户使用指南：逐命令用法（交互模式/Claude·Codex/Hermes/Telegram/Provider/会话/日志等）|
+| [usage.md](usage.md) | 用户使用指南：逐命令用法（交互模式/Claude·Codex/Telegram/Provider/会话/日志等）|
 
 ### 模块文档（每个独立模块单独维护，位于 `modules/`）
 

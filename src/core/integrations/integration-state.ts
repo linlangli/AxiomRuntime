@@ -11,7 +11,6 @@ export type IntegrationProviderSyncState = {
 
 export type IntegrationState = {
   providerRevision: number;
-  hermes: IntegrationProviderSyncState;
   integrations: Record<string, IntegrationProviderSyncState>;
 };
 
@@ -21,13 +20,9 @@ export type IntegrationRegistration = {
 
 const EMPTY_STATE: IntegrationState = {
   providerRevision: 0,
-  hermes: {
-    syncedProviderRevision: 0,
-    pendingProviderChanges: []
-  },
   integrations: {}
 };
-const registeredIntegrations = new Set<string>(["hermes"]);
+const registeredIntegrations = new Set<string>();
 
 export async function readIntegrationState(): Promise<IntegrationState> {
   const raw = await readJsonFile<Partial<IntegrationState>>(getIntegrationStatePath(), EMPTY_STATE);
@@ -47,17 +42,11 @@ export async function recordProviderChange(change: Omit<ProviderChange, "at">): 
     for (const name of registeredIntegrations) {
       integrations[name] = appendProviderChange(getIntegrationProviderState(state, name), providerChange);
     }
-    const hermes = integrations.hermes ?? appendProviderChange(state.hermes, providerChange);
     return {
       providerRevision: nextRevision,
-      hermes,
-      integrations: { ...integrations, hermes }
+      integrations
     };
   });
-}
-
-export async function markHermesProvidersSynced(): Promise<void> {
-  await markIntegrationProvidersSynced("hermes");
 }
 
 export async function markIntegrationProvidersSynced(integrationName: string): Promise<void> {
@@ -69,17 +58,11 @@ export async function markIntegrationProvidersSynced(integrationName: string): P
       pendingProviderChanges: []
     };
     const integrations = { ...state.integrations, [name]: synced };
-    const hermes = name === "hermes" ? synced : state.hermes;
     return {
       providerRevision: state.providerRevision,
-      hermes,
-      integrations: { ...integrations, hermes }
+      integrations
     };
   });
-}
-
-export async function hasPendingHermesProviderChanges(): Promise<boolean> {
-  return hasPendingProviderChanges("hermes");
 }
 
 export async function hasPendingProviderChanges(integrationName: string): Promise<boolean> {
@@ -97,19 +80,16 @@ export function getIntegrationProviderState(
   integrationName: string
 ): IntegrationProviderSyncState {
   const name = normalizeIntegrationName(integrationName);
-  return state.integrations[name] ?? (name === "hermes" ? state.hermes : {
+  return state.integrations[name] ?? {
     syncedProviderRevision: state.providerRevision,
     pendingProviderChanges: []
-  });
+  };
 }
 
 function normalizeIntegrationState(value: Partial<IntegrationState>): IntegrationState {
   const integrations = normalizeIntegrationMap(value.integrations);
-  const hermes = normalizeIntegrationProviderSyncState(integrations.hermes ?? value.hermes ?? EMPTY_STATE.hermes);
-  integrations.hermes = hermes;
   return {
     providerRevision: Number(value.providerRevision ?? 0),
-    hermes,
     integrations
   };
 }

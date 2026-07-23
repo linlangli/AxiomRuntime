@@ -16,7 +16,7 @@ export function resolveToolCommandWithOptions(
     runner?: (command: string) => boolean;
   } = {}
 ): string | null {
-  const command = tool === "claude" ? "claude" : tool === "hermes" ? "hermes" : "codex";
+  const command = tool === "claude" ? "claude" : "codex";
   const runner = options.runner ?? isRunnableCommand;
   const fromPath = (options.pathResolver ?? resolveFromPath)(command);
   if (fromPath && runner(fromPath)) return fromPath;
@@ -36,15 +36,6 @@ export function getKnownCandidates(tool: RunToolType): string[] {
       path.join(os.homedir(), ".local/bin/claude"),
       "/opt/homebrew/bin/claude",
       "/usr/local/bin/claude"
-    ];
-  }
-
-  if (tool === "hermes") {
-    return [
-      path.join(os.homedir(), ".local/bin/hermes"),
-      path.join(os.homedir(), ".hermes", "bin", "hermes"),
-      "/opt/homebrew/bin/hermes",
-      "/usr/local/bin/hermes"
     ];
   }
 

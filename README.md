@@ -4,7 +4,7 @@
 
 Runtime 才是产品。Memory、Agent 和 LLM 都是可以替换和组合的能力模块。
 
-当前可用版本是 Runtime 的 Gateway 基础层：通过统一的 `ai` 命令管理 Claude Code、Codex CLI 和 Hermes 的 provider、模型、优先级、健康度、故障转移、用量、会话、诊断与 Telegram 入口。后续能力会在保持现有命令稳定的基础上，逐步演进到统一执行、受治理学习、Skill/Capability 沉淀和组织级共享。
+当前可用版本是 Runtime 的 Gateway 基础层：通过统一的 `ai` 命令管理 Claude Code 和 Codex CLI 的 provider、模型、优先级、健康度、故障转移、用量、会话、诊断与 Telegram 入口。后续能力会在保持现有命令稳定的基础上，逐步演进到统一执行、受治理学习、Skill/Capability 沉淀和组织级共享。
 
 北极星目标：**每一次交互，都让 Runtime 更有能力。**
 
@@ -20,7 +20,7 @@ AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/AI_RUNTIME_
 
 ## 当前边界
 
-- 已交付：本地 Provider Gateway、Claude/Codex 启动与 fallback、Hermes、Telegram、会话、用量、诊断和早期 Memory。
+- 已交付：本地 Provider Gateway、Claude/Codex 启动与 fallback、Telegram、会话、用量、诊断和早期 Memory。
 - 演进中：统一 Runtime 执行上下文、自动学习与记忆治理、Skill/Capability 生命周期、插件体系。
 - 长期方向：组织与租户隔离、能力注册与共享、企业集成、Web/Desktop/API 治理界面。
 
@@ -34,7 +34,7 @@ npm install
 
 ## 本机 CLI 前置条件
 
-AI Gateway 不内置 Claude Code、Codex 或 Hermes。它们作为彼此独立的外部 CLI 使用，需要先在本机安装并能通过 `PATH` 或常见安装路径找到。
+AI Gateway 不内置 Claude Code 或 Codex。它们作为彼此独立的外部 CLI 使用，需要先在本机安装并能通过 `PATH` 或常见安装路径找到。
 
 可用下面的命令检查：
 
@@ -69,11 +69,6 @@ ai provider add
 ai provider list
 ai provider edit
 ai provider delete
-ai hermes
-ai hermes list
-ai hermes edit
-ai hermes status
-ai hermes import-local
 ai telegram
 ai telegram start
 ai telegram status
@@ -99,9 +94,6 @@ ai doctor
 ~/.ai-gateway/usage.json
 ~/.ai-gateway/model-pricing.json
 ~/.ai-gateway/sessions.json
-~/.ai-gateway/hermes.json
-~/.ai-gateway/hermes-state.json
-~/.ai-gateway/hermes/<机器人名称>/
 ~/.ai-gateway/telegram.json
 ~/.ai-gateway/telegram.sqlite
 ~/.ai-gateway/telegram.log
@@ -112,15 +104,7 @@ ai doctor
 
 可通过 `AI_GATEWAY_HOME` 覆盖配置目录。
 
-`providers.json` 和 `ai hermes export` 生成的迁移包含 API Key，不要提交到仓库。
-
-Hermes 集成说明：
-
-- `ai provider add/edit/delete` 只更新 AI Gateway 顶层 provider；如果 Hermes 已导入本机配置，下一次执行 Hermes 相关命令时会检测 provider 变化并同步/重启本机 Hermes。
-- `ai hermes import-local` 会把本机 Hermes 配置里的 provider 导入 AI Gateway provider 配置后统一管理，并立即同步本机 Hermes 配置。
-- `ai hermes export` 默认导出所有机器人完整复刻包；传入机器人名称时只导出单个机器人。
-- `ai hermes add/edit/import` 会同步当前机器人、用最小请求验证可调用模型，并自动重启 Hermes gateway。
-- 如果本机 Hermes `/model` 只显示默认模型，同步时会自动打兼容补丁让它读取完整模型列表。
+`providers.json` 包含 provider 配置和 SecretStore 引用，不要提交到仓库。
 
 Telegram Bot 集成说明：
 

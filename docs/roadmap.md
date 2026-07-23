@@ -22,7 +22,7 @@ R0 保留完整目标，但拆成三个可以独立演示、验收和回滚的�
 | Increment | 用户可见结果 | 必须交付 | 明确不阻塞本 Increment 的后续项 |
 |---|---|---|---|
 | `R0.1 Contracted Runtime` | CLI/Telegram 经同一 `RuntimeRequest -> ExecutionContext -> RuntimeEvent` 生命周期调用既有 Agent | canonical identity/scope/policy/event/error；Tool/Workflow/Agent Port；local adapters；secret ref migration；contract fixtures | Memory 自动写入、Web 完整治理、企业 federation |
-| `R0.2 Reliable Execution Plane` | Claude/Codex/Hermes 经唯一 Transport 执行，可看到 usage、失败、retry owner 与 trace | single proxy、Usage parity、Kernel permission/idempotency/cancel、Tool side-effect、Agent event resume、基础 audit、故障恢复 | 自动学习、复杂 Workflow compensation、企业 FinOps export |
+| `R0.2 Reliable Execution Plane` | Claude/Codex 经唯一 Transport 执行，可看到 usage、失败、retry owner 与 trace | single proxy、Usage parity、Kernel permission/idempotency/cancel、Tool side-effect、Agent event resume、基础 audit、故障恢复 | 自动学习、复杂 Workflow compensation、企业 FinOps export |
 | `R0.3 Governed Operations` | 平台可管理 environment、policy revision、plugin activation、quota 和恢复状态 | local identity directory、admin mutation、policy validate/rollout/rollback、plugin lifecycle、audit query、backup/restore drill、SLO dashboard | OIDC/SAML/SCIM、multi-region、organization scope promotion（进入 R3） |
 
 Increment gate：前一 Increment 的 contract/version/error 语义冻结并通过 replacement fixture 后才进入下一项；后续项可在 feature flag 后开发，但禁止反向修改已经发布的外部契约，除非走版本升级与 migration。R0.1/R0.2/R0.3 全部通过才可对外称为 `Release R0`。
@@ -243,7 +243,7 @@ Planned capabilities:
 - **Memory & Learning Governance**：Claim/Evidence 查看与纠正、pin/forget/purge、candidate/evaluation、Skill promotion/rollback、CapabilityGain 与 Shadow 对比。
 - **Execution & Audit**：execution trace、失败原因、permission decision、审计查询/签名导出、数据生命周期操作与完成证据。
 - **FinOps & Reliability**：Provider health、usage/cost/latency、组织/项目/主体归属、quota/budget、SLO、告警、backup/restore 与 DR 演练状态。
-- **Provider / Agent Operations**：Provider/model 配置、排序与刷新；Hermes robot 的状态、绑定、task、迁移、清理与错误，但 secret 只显示 ref/status，禁止回显明文。
+- **Provider / Agent Operations**：Provider/model 配置、排序与刷新；Agent runtime 的状态、执行与错误，但 secret 只显示 ref/status，禁止回显明文。
 
 最小发布顺序：R0 提供 execution/provider/usage/audit 只读视图与受控配置；R1 增加 Memory 用户控制；R2 增加 learning/Skill promotion；R3 补齐 identity/policy/plugin/FinOps/compliance/DR。每个页面必须有 empty/loading/degraded/permission-denied/partial-failure 状态，危险操作必须展示影响范围、二次确认和 operation progress。
 

@@ -95,7 +95,7 @@ Surfaces **无持久数据所有权**。会话真相属 ② Orchestration 的 Wo
 4. **交互映射**——所有 CLI 交互（权限确认、模式切换）映射为 Telegram inline button。
 5. **美观输出**——格式化模板，支持代码块、diff、进度指示、折叠长输出。
 
-技术栈：`grammy`（TS 原生 Bot 框架）+ `better-sqlite3`（会话持久化）；Claude Code/Codex/Hermes 作为外部本机 CLI。
+技术栈：`grammy`（TS 原生 Bot 框架）+ `better-sqlite3`（会话持久化）；Claude Code/Codex 作为外部本机 CLI。
 
 ## B. 统一引擎接口（`telegram/engine/types.ts`）
 
@@ -191,8 +191,6 @@ ai provider edit | list
 ai status | log | context | doctor | last | web
 ai session [list|clear]
 ai report
-ai hermes [status|use <robot>|add|list|edit|clear|delete
-           |import <file>|import-local|export [<robot>]]
 ```
 
 ## F. surface 职责边界（呼应本文 §2）
