@@ -99,6 +99,7 @@ ai provider list
 ai provider edit
 ai provider delete
 ai telegram
+ai telegram remove
 ai telegram start
 ai telegram status
 ai status
@@ -138,9 +139,9 @@ ai doctor
 Telegram Bot 集成说明：
 
 - `ai telegram config` 配置 Bot token、访问用户、默认引擎、默认目录和权限模式；如需所有用户可访问，执行 `ai telegram config set allowAllUsers true`。
-- `ai telegram start|stop|status|logs` 管理后台轮询进程。
+- `ai telegram start|stop|status|logs` 管理后台轮询进程；`ai telegram` 菜单中的 `remove` 可交互选择并解绑一个 Bot，同时删除其本地会话数据。
 - 如果本机不能直连 Telegram API，可设置 `ai telegram config set proxyUrl http://127.0.0.1:7890`。
-- Bot 首次 `/start` 或 `/reset` 会先选择工作路径，再选择 Claude Code/Codex，并展示当前会话、provider 和模型卡片。
+- Bot 首次 `/start` 或 `/reset` 会先选择 Provider/Model，再选择工作路径并自动确定 Claude Code/Codex。
 - Bot 会记录选择过的工作路径；自定义路径会按 `~/输入名称` 创建或复用。
 - Telegram 默认命令菜单只保留 `/claude`、`/codex`、`/reset`、`/cwd` 和 `/help`；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射。
 - Telegram 远程执行复用 AI Gateway 顶层 provider，不维护另一套 provider 配置。

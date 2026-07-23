@@ -90,6 +90,8 @@ ai telegram config set proxyUrl http://127.0.0.1:7890
 ```bash
 ai telegram start
 ai telegram status
+ai telegram remove
+ai telegram remove <bot-name>
 ai telegram logs
 ai telegram logs -f
 ai telegram doctor
@@ -99,6 +101,7 @@ ai telegram stop
 说明：
 
 - 配置保存在 `~/.ai-gateway/telegram.json`，会话保存在 `~/.ai-gateway/telegram.sqlite`。
+- `ai telegram` 的交互菜单会显示 `remove`。`ai telegram remove` 会列出已绑定 Bot 供选择，并删除选中 Bot 的本地配置、进程记录、日志和会话数据库；它不会删除 BotFather 中创建的 Telegram Bot。也可用 `ai telegram remove <bot-name>` 直接指定。
 - 默认只允许 `allowedUserIds` 里的 Telegram 用户访问；如果要开放给所有用户，显式设置 `allowAllUsers: true`。
 - Telegram 远程执行 Claude Code/Codex 时复用 AI Gateway 顶层 provider；可通过 `provider` 和 `model` 配置固定 provider/model，不配置则按 `ai use` 同样的优先级自动选择。
 - 首次 `/start` 或执行 `/reset` 会进入初始化流程：先选择 Provider/Model，再选择工作路径并自动确定 Claude Code/Codex。

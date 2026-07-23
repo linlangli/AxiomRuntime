@@ -77,6 +77,7 @@ export async function runTelegramCommand(args: string[]): Promise<void> {
 async function runTelegramInteractive(): Promise<void> {
   const command = await promptSelect("Telegram", [
     { label: "add", value: "add" },
+    { label: "remove", value: "remove" },
     { label: "list", value: "list" },
     { label: "start", value: "start" },
     { label: "stop", value: "stop" },
@@ -87,6 +88,7 @@ async function runTelegramInteractive(): Promise<void> {
     { label: "exit", value: "exit" }
   ]);
   if (command === "add") await addBot();
+  if (command === "remove") await removeBot();
   if (command === "list") await listAllBots();
   if (command === "start") await startTelegramBot();
   if (command === "stop") await stopTelegramBot();
@@ -123,16 +125,32 @@ async function addBot(nameArg?: string): Promise<void> {
 }
 
 async function removeBot(nameArg?: string): Promise<void> {
-  const name = requireBotName(nameArg, "remove");
+  await migrateLegacyConfig();
+  const name = nameArg?.trim() || await selectBotForRemoval();
+  if (!name) return;
   if (!botExists(name)) throw new Error(`Bot "${name}" does not exist.`);
+  const config = await loadBotConfig(name);
   const { running, pid } = isBotRunning(name);
   if (running && pid) {
     process.kill(pid, "SIGTERM");
     await waitForStop(pid, 5000);
     console.log(`Stopped bot "${name}".`);
   }
-  await removeBotFiles(name);
-  console.log(`Bot "${name}" removed.`);
+  await removeBotFiles(name, config.dbPath);
+  console.log(`Bot "${name}" removed with its local data.`);
+}
+
+async function selectBotForRemoval(): Promise<string | null> {
+  const bots = listBots();
+  if (!bots.length) {
+    console.log("No Telegram bots configured.");
+    return null;
+  }
+  const selected = await promptSelect("Remove Telegram bot", [
+    ...bots.map((bot) => ({ label: bot.name, value: bot.name })),
+    { label: "cancel", value: "__cancel__" }
+  ]);
+  return selected === "__cancel__" ? null : selected;
 }
 
 async function listAllBots(): Promise<void> {
@@ -463,11 +481,6 @@ async function showLogFile(filePath: string, limit: number, follow: boolean): Pr
 function printTelegramConfig(config: TelegramConfig): void {
   console.log(`Telegram config: ${getTelegramConfigPath()}`);
   for (const line of describeTelegramConfig(config)) console.log(line);
-}
-
-function requireBotName(name: string | undefined, command: string): string {
-  if (!name?.trim()) throw new Error(`Usage: ai telegram ${command} <name>`);
-  return name.trim();
 }
 
 async function readPid(pidPath: string): Promise<number | null> {

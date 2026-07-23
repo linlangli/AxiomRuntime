@@ -141,10 +141,13 @@ export interface ExecutionResult {
 ai telegram start          # 启动 Bot（后台 daemon，fork 子进程）
 ai telegram stop           # 停止
 ai telegram status         # 运行状态
+ai telegram remove         # 交互选择并解绑 Bot，删除其本地配置与会话数据
 ai telegram config         # 交互式配置（token、白名单）
 ai telegram config set <key> <value>
 ai telegram logs [-f]      # 日志（最近 50 行 / 实时跟踪）
 ```
+
+`ai telegram` 的交互菜单必须展示 `remove`。`ai telegram remove` 无参数时必须列出已绑定 Bot 并允许取消，选择后停止对应进程，删除 Bot 配置、PID、日志、SQLite 及 sidecar；删除 `default` 时同时清理 legacy `telegram.json`，禁止后续迁移重新创建绑定。`ai telegram remove <name>` 可直接指定 Bot。
 
 Setup 引导：`/start → model(Provider/Model) → workdir(+/init) → agent_profile(画像) → ready`。`workdir` 步骤直接把最近记录的绝对路径渲染为 inline button，末尾提供“自定义”，不再经过“已存在”二级入口。同一 chat 任务经 `SessionManager.runExclusive()` 串行执行，避免并发写同一 session。
 

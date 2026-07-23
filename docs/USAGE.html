@@ -667,12 +667,15 @@ ai telegram config set defaultCwd /path/to/project
 ai telegram config set proxyUrl http://127.0.0.1:7890
 ai telegram start
 ai telegram status
+ai telegram remove
+ai telegram remove &lt;bot-name&gt;
 ai telegram logs
 ai telegram logs -f
 ai telegram doctor
 ai telegram stop</pre>
                 <ul>
                   <li>配置保存在 <code>~/.ai-gateway/telegram.json</code>，会话保存在 <code>~/.ai-gateway/telegram.sqlite</code>。</li>
+                  <li><code>ai telegram</code> 的交互菜单会显示 <code>remove</code>。<code>ai telegram remove</code> 会列出已绑定 Bot 供选择，并删除选中 Bot 的本地配置、进程记录、日志和会话数据库；不会删除 BotFather 中的 Bot。</li>
                   <li>默认只有 <code>allowedUserIds</code> 中的 Telegram 用户可以访问 Bot；如需开放给所有用户，显式设置 <code>allowAllUsers: true</code>。</li>
                   <li>远程执行复用 AI Gateway 顶层 provider；不配置固定 provider/model 时按优先级自动选择。</li>
                   <li><code>/start</code> 或 <code>/reset</code> 先选择 Provider/Model，再直接以按钮列出历史绝对路径，末尾可选择“自定义”，不再先点击“已存在”。</li>

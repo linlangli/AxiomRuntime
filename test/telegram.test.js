@@ -100,6 +100,65 @@ test("normalizes telegram config and parses config values", async () => {
   });
 });
 
+test("telegram remove interactively unbinds the selected bot and removes local data", async () => {
+  await withTempHome(async (tempDir) => {
+    const botDir = path.join(tempDir, "telegram", "bots");
+    const configPath = path.join(botDir, "alpha.json");
+    const dbPath = path.join(botDir, "alpha.sqlite");
+    await fs.mkdir(botDir, { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify({ dbPath }), "utf8");
+    await Promise.all([
+      fs.writeFile(dbPath, "db"),
+      fs.writeFile(`${dbPath}-shm`, "shm"),
+      fs.writeFile(`${dbPath}-wal`, "wal")
+    ]);
+
+    const menuResult = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "telegram"], {
+      cwd: path.resolve("."),
+      env: process.env,
+      input: "10\n",
+      encoding: "utf8"
+    });
+    assert.equal(menuResult.status, 0, menuResult.stderr);
+    assert.match(menuResult.stdout, /Telegram[\s\S]*2\. remove/);
+
+    const result = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "telegram", "remove"], {
+      cwd: path.resolve("."),
+      env: process.env,
+      input: "1\n",
+      encoding: "utf8"
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Remove Telegram bot/);
+    assert.match(result.stdout, /1\. alpha/);
+    assert.match(result.stdout, /Bot "alpha" removed with its local data/);
+    for (const filePath of [configPath, dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
+      await assert.rejects(fs.access(filePath), { code: "ENOENT" });
+    }
+  });
+});
+
+test("telegram remove default clears the legacy binding so it cannot be migrated again", async () => {
+  await withTempHome(async (tempDir) => {
+    const botDir = path.join(tempDir, "telegram", "bots");
+    const namedConfigPath = path.join(botDir, "default.json");
+    const legacyConfigPath = path.join(tempDir, "telegram.json");
+    await fs.mkdir(botDir, { recursive: true });
+    await fs.writeFile(namedConfigPath, "{}", "utf8");
+    await fs.writeFile(legacyConfigPath, "{}", "utf8");
+
+    const result = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "telegram", "remove", "default"], {
+      cwd: path.resolve("."),
+      env: process.env,
+      encoding: "utf8"
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    await assert.rejects(fs.access(namedConfigPath), { code: "ENOENT" });
+    await assert.rejects(fs.access(legacyConfigPath), { code: "ENOENT" });
+  });
+});
+
 test("session store creates, updates, resumes, and stores attachments", async () => {
   await withTempHome(async (tempDir) => {
     const store = new SessionStore(path.join(tempDir, "telegram.sqlite"));
