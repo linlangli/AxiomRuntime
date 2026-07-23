@@ -105,7 +105,9 @@ ai telegram stop
 - 工作路径步骤直接以按钮列出最多 8 个历史绝对路径，并在末尾提供“自定义”，不再先点击“已存在”。自定义路径固定创建或复用 `~/输入名称`。
 - 未确定工作路径时发送普通内容会提示先确定工作路径；未确定 CLI 时发送普通内容会提示先选择 CLI。
 - 选择 CLI 后只展示会话 ID、工作路径、CLI、provider、model 和权限模式。
-- Bot 基础命令菜单包含 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/usage`、Memory、上下文固定、终端和重启命令；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射，点击后转发给当前 CLI 执行。
+- Bot 基础命令菜单包含 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/provider`、`/usage`、Memory、上下文固定、终端和重启命令；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射，点击后转发给当前 CLI 执行。
+- `/provider` 以按钮列出全部 AI Provider。点击条目可编辑名称、Base URL、API Key、默认模型、模式和优先级，也可二次确认后删除；列表底部可添加 Provider。Bot 复用 `ai provider` 的核心 CRUD、连通性检查、模型发现、排序和缓存逻辑，不直接修改配置文件。
+- Provider API Key 在详情中只显示“已配置”，不会写入 Bot 应用日志；输入 Key 后 Bot 会尽力立即删除该 Telegram 消息。添加或编辑的未完成表单只保存在当前 Bot 进程中，进程重启后需重新开始操作。
 - Telegram Codex 执行会自动走 AI Gateway 本地 OpenAI 兼容代理；代理透明转发请求并记录 provider 返回的 usage，不改变 Codex CLI 请求和响应。
 - `/usage` 优先使用 provider 响应里的 cost；如果只有 token usage，会读取 `~/.ai-gateway/model-pricing.json` 按价格表估算。价格表没有命中的模型会显示额度未知。
 - 会话最多保留最近 12 个 turn，并在最多 1400 token 内从新到旧选择上下文；回复 Bot 回答后发送 `/pin` 可固定关键 turn（最多 3 条），`/unpin` 可取消。

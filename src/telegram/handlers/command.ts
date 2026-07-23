@@ -12,6 +12,7 @@ import type { ApprovalManager } from "../interaction/approval.js";
 import type { SessionManager } from "../session/manager.js";
 import { runCliInit, type MessageHandlerDeps } from "./message.js";
 import { handleForgetCommand, handleMemoriesCommand, handleMemoryCommand, handleRememberCommand } from "./memory.js";
+import { showProviderAdminPanel } from "./provider.js";
 import { showConfigPanel, showReadyProviderPicker, showSetupProviderPicker, showWorkdirStart, startSetup } from "./setup.js";
 import { showUsagePanel } from "./usage.js";
 import { writeTelegramLog } from "../log.js";
@@ -85,6 +86,10 @@ export function registerCommands(bot: Bot, deps: CommandDeps): void {
       return;
     }
     await showSetupProviderPicker(ctx, deps, { reselect: true });
+  });
+
+  bot.command("provider", async (ctx) => {
+    await showProviderAdminPanel(ctx);
   });
 
   bot.command("usage", async (ctx) => {

@@ -5,6 +5,7 @@ import { registerCallbackHandler } from "./handlers/callback.js";
 import { registerCommands } from "./handlers/command.js";
 import { registerDocumentHandler } from "./handlers/document.js";
 import { registerMessageHandler } from "./handlers/message.js";
+import { isProviderSecretInput } from "./handlers/provider.js";
 import { installTelegramHandlers, registerTelegramHandler } from "./handler-registry.js";
 import { ApprovalManager } from "./interaction/approval.js";
 import { safeResetChatCommandMenu, safeSetChatCommandMenu, safeSetDefaultCommandMenu } from "./interaction/command-menu.js";
@@ -70,9 +71,10 @@ export async function createBot(botName?: string): Promise<TelegramRuntime> {
 
   bot.use(async (ctx, next) => {
     const text = ctx.message && "text" in ctx.message ? ctx.message.text : undefined;
+    const loggedText = isProviderSecretInput(ctx.chat?.id, ctx.me.id) ? "[REDACTED_PROVIDER_API_KEY]" : text;
     await writeTelegramLog({
       action: "update_received",
-      message: text ? `Received Telegram message: ${text.slice(0, 80)}` : `Received Telegram update ${ctx.update.update_id}`,
+      message: loggedText ? `Received Telegram message: ${loggedText.slice(0, 80)}` : `Received Telegram update ${ctx.update.update_id}`,
       metadata: {
         updateId: ctx.update.update_id,
         userId: ctx.from?.id,

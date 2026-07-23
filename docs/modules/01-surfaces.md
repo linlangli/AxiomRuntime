@@ -157,6 +157,12 @@ Setup 引导：`/start → model(Provider/Model) → workdir(+/init) → agent_p
 - **流式预览**：JSONL parser 必须跨任意 stdout chunk 保留未完成行。`ProgressReporter` 在同一状态消息内按至少 1500ms 节流显示 timeline 与最长 1200 字符的 HTML-escaped `responseText`；这是 event-level preview，不是逐 token 编辑。最终结果替换状态消息。
 - **错误呈现**：Claude/Codex 非零退出必须优先显示 terminal result/error；`system/init`、`api_retry` 等协议 envelope 不能作为主错误发送给用户。
 
+### C.2 Provider 管理
+
+`/provider` 是 Provider control plane 的 Telegram 适配器：以 inline button 列出 Provider，详情页允许编辑 `name/baseUrl/apiKey/model/mode/level`，删除必须二次确认，列表底部提供添加入口。Telegram 层只持有尚未提交的短期表单状态，所有读取和变更必须委托 `core/providers/provider-service.ts` 的 `listProviders/addProvider/updateProvider/deleteProvider/getCachedModels`；不得直接读写 `providers.json`、复制排序/健康检查/缓存更新或变更记录逻辑。
+
+Provider callback 使用 `index + provider name fingerprint` 定位目标，并在每次操作前重新读取列表；索引或指纹失效时只刷新列表，禁止对当前位置上的另一个 Provider 执行操作。API Key 不得出现在详情、callback、错误文本或应用日志中；输入消息应 best-effort 从 Telegram 删除。多 Bot 进程内草稿按 `botId + chatId` 隔离，进程重启可以中断未提交表单，但不得改变已持久化 Provider。
+
 ## D. 安全设计（surface 边缘鉴权）
 
 **鉴权**：白名单制——只有 `allowedUserIds` 列表内的 Telegram user ID 可用；token 存 `~/.ai-gateway/telegram.json`（权限 600）；无远程配置，只能经本机 `ai telegram config` 改。

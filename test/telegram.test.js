@@ -62,6 +62,12 @@ import {
   handleRememberScopeCallback
 } from "../dist/telegram/handlers/memory.js";
 import { executePrompt, registerMessageHandler, runCliInit, startTypingStatus } from "../dist/telegram/handlers/message.js";
+import {
+  handleProviderAdminCallback,
+  handleProviderAdminInput,
+  isProviderSecretInput,
+  showProviderAdminPanel
+} from "../dist/telegram/handlers/provider.js";
 import { completeAgentProfile, inferEngineFromModel, setWorkdir } from "../dist/telegram/handlers/setup.js";
 import { parseModelPriceInput } from "../dist/telegram/handlers/usage.js";
 import { SessionManager } from "../dist/telegram/session/manager.js";
@@ -1162,6 +1168,7 @@ test("telegram command menu maps selected CLI slash commands", () => {
     "fresh",
     "cwd",
     "config",
+    "provider",
     "usage",
     "remember",
     "forget",
@@ -1177,6 +1184,7 @@ test("telegram command menu maps selected CLI slash commands", () => {
   assert.equal(getBaseBotCommands().find((item) => item.command === "reset")?.description, "重置会话信息");
   assert.equal(getBaseBotCommands().find((item) => item.command === "fresh")?.description, "清空聊天窗口");
   assert.equal(getBaseBotCommands().find((item) => item.command === "config")?.description, "查看或编辑 Bot 配置");
+  assert.equal(getBaseBotCommands().find((item) => item.command === "provider")?.description, "管理 AI Provider");
   assert.equal(getBaseBotCommands().find((item) => item.command === "usage")?.description, "查看当前会话额度");
   assert.equal(getBaseBotCommands().find((item) => item.command === "memories")?.description, "查看 Bot 记忆");
   const claudeCommands = getChatBotCommands("claude").map((item) => item.command);
@@ -1191,6 +1199,98 @@ test("telegram command menu maps selected CLI slash commands", () => {
   assert.equal(resolveMappedCommand("claude", "help_claude")?.prompt, "/help");
   assert.deepEqual(parseTelegramCommand("/model opus"), { command: "model", args: "opus" });
   assert.deepEqual(parseTelegramCommand("/model@my_bot opus"), { command: "model", args: "opus" });
+});
+
+test("telegram provider panel lists providers and never reveals API keys", async () => {
+  const service = createFakeProviderAdminService([{
+    name: "primary",
+    baseUrl: "https://api.example.com/v1",
+    apiKey: "super-secret-key",
+    mode: "auto",
+    level: 1,
+    model: "gpt-test"
+  }]);
+  const { ctx, events } = createProviderAdminContext(701);
+
+  await showProviderAdminPanel(ctx, {}, service);
+  const listEvent = events.at(-1);
+  assert.match(listEvent.text, /AI Providers/);
+  const providerButton = findInlineButton(listEvent.extra, "1. primary · auto");
+  assert.ok(providerButton.callback_data.startsWith("pa:view:0:"));
+
+  await handleProviderAdminCallback(ctx, providerButton.callback_data, service);
+  const detailsEvent = events.at(-1);
+  assert.match(detailsEvent.text, /API Key：<code>已配置<\/code>/);
+  assert.equal(JSON.stringify(events).includes("super-secret-key"), false);
+  assert.ok(findInlineButton(detailsEvent.extra, "API Key").callback_data.includes(":apiKey"));
+  assert.ok(findInlineButton(detailsEvent.extra, "删除").callback_data.startsWith("pa:delete:"));
+});
+
+test("telegram provider flow adds, edits, and deletes through provider service", async () => {
+  const service = createFakeProviderAdminService([]);
+  const { ctx, events, state } = createProviderAdminContext(702);
+
+  await handleProviderAdminCallback(ctx, "pa:add", service);
+  await handleProviderAdminInput(ctx, "new-provider", service);
+  await handleProviderAdminInput(ctx, "https://new.example.com/v1", service);
+  assert.equal(isProviderSecretInput(702), true);
+  await handleProviderAdminInput(ctx, "new-secret-key", service);
+
+  assert.equal(state.deletedMessages, 1);
+  assert.equal(isProviderSecretInput(702), false);
+  assert.equal(service.state.calls[0].action, "add");
+  assert.equal(service.state.calls[0].input.apiKey, "new-secret-key");
+  assert.equal(JSON.stringify(events).includes("new-secret-key"), false);
+  assert.equal(service.state.providers.length, 1);
+
+  const detailsEvent = events.at(-1);
+  const apiKeyCallback = findInlineButton(detailsEvent.extra, "API Key").callback_data;
+  await handleProviderAdminCallback(ctx, apiKeyCallback, service);
+  assert.equal(isProviderSecretInput(702), true);
+  await handleProviderAdminInput(ctx, "rotated-secret-key", service);
+  assert.equal(state.deletedMessages, 2);
+  assert.equal(service.state.providers[0].apiKey, "rotated-secret-key");
+  assert.equal(JSON.stringify(events).includes("rotated-secret-key"), false);
+
+  const updatedDetails = events.at(-1);
+  const deleteCallback = findInlineButton(updatedDetails.extra, "删除").callback_data;
+  await handleProviderAdminCallback(ctx, deleteCallback, service);
+  const confirmCallback = findInlineButton(events.at(-1).extra, "确认删除").callback_data;
+  await handleProviderAdminCallback(ctx, confirmCallback, service);
+  assert.equal(service.state.providers.length, 0);
+  assert.match(events.at(-1).text, /已删除/);
+});
+
+test("telegram provider callbacks reject stale provider indexes", async () => {
+  const service = createFakeProviderAdminService([
+    { name: "alpha", baseUrl: "https://a.example/v1", apiKey: "a", mode: "auto", level: 1, model: "a-model" },
+    { name: "beta", baseUrl: "https://b.example/v1", apiKey: "b", mode: "ask", level: 2, model: "b-model" }
+  ]);
+  const { ctx, events } = createProviderAdminContext(703);
+  await showProviderAdminPanel(ctx, {}, service);
+  const staleCallback = findInlineButton(events.at(-1).extra, "2. beta · ask").callback_data;
+
+  service.state.providers.splice(0, 1);
+  await handleProviderAdminCallback(ctx, staleCallback, service);
+
+  assert.match(events.at(-1).text, /AI Providers/);
+  assert.equal(service.state.calls.length, 0);
+});
+
+test("telegram provider errors redact the submitted API key", async () => {
+  const service = createFakeProviderAdminService([]);
+  service.addProvider = async (input) => {
+    throw new Error(`upstream rejected ${input.apiKey}`);
+  };
+  const { ctx, events } = createProviderAdminContext(704);
+
+  await handleProviderAdminCallback(ctx, "pa:add", service);
+  await handleProviderAdminInput(ctx, "failing-provider", service);
+  await handleProviderAdminInput(ctx, "https://failure.example/v1", service);
+  await handleProviderAdminInput(ctx, "must-not-leak", service);
+
+  assert.equal(JSON.stringify(events).includes("must-not-leak"), false);
+  assert.match(events.at(-1).text, /\[REDACTED\]/);
 });
 
 test("telegram custom commands remain executable beyond the menu limit", () => {
@@ -2470,4 +2570,64 @@ async function withTempHome(fn) {
     }
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+}
+
+function createProviderAdminContext(chatId) {
+  const events = [];
+  const state = { deletedMessages: 0 };
+  return {
+    events,
+    state,
+    ctx: {
+      chat: { id: chatId },
+      reply: async (text, extra) => events.push({ kind: "reply", text, extra }),
+      editMessageText: async (text, extra) => events.push({ kind: "edit", text, extra }),
+      answerCallbackQuery: async () => undefined,
+      deleteMessage: async () => {
+        state.deletedMessages += 1;
+      }
+    }
+  };
+}
+
+function createFakeProviderAdminService(initialProviders) {
+  const state = {
+    providers: initialProviders.map((provider) => ({ ...provider })),
+    calls: []
+  };
+  return {
+    state,
+    listProviders: async () => state.providers.map((provider) => ({ ...provider })),
+    addProvider: async (input) => {
+      state.calls.push({ action: "add", input: { ...input } });
+      const provider = {
+        ...input,
+        mode: input.mode ?? "auto",
+        level: state.providers.length + 1,
+        model: input.model ?? "detected-model"
+      };
+      state.providers.push(provider);
+      return { ...provider };
+    },
+    updateProvider: async (providerName, patch) => {
+      state.calls.push({ action: "update", providerName, patch: { ...patch } });
+      const provider = state.providers.find((item) => item.name === providerName);
+      if (!provider) throw new Error(`Provider not found: ${providerName}`);
+      Object.assign(provider, patch);
+      return { ...provider };
+    },
+    deleteProvider: async (providerName) => {
+      state.calls.push({ action: "delete", providerName });
+      const index = state.providers.findIndex((provider) => provider.name === providerName);
+      if (index < 0) throw new Error(`Provider not found: ${providerName}`);
+      return state.providers.splice(index, 1)[0];
+    },
+    getCachedModels: async () => ["detected-model"]
+  };
+}
+
+function findInlineButton(extra, text) {
+  const button = extra.reply_markup.inline_keyboard.flat().find((item) => item.text === text);
+  assert.ok(button, `Inline button not found: ${text}`);
+  return button;
 }
