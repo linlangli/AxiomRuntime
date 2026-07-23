@@ -1,0 +1,74 @@
+name: agent-router
+
+services:
+  router:
+    image: ${AI_GATEWAY_IMAGE:-agent-router:local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: production
+    environment:
+      AI_GATEWAY_HOME: /var/lib/ai-gateway
+      AI_GATEWAY_SERVER_HOST: 0.0.0.0
+      AI_GATEWAY_SERVER_PORT: 8080
+      AI_GATEWAY_SERVER_TOKEN_FILE: /run/secrets/server-token
+      AI_GATEWAY_UPSTREAM_HEADERS_TIMEOUT_MS: ${AI_GATEWAY_UPSTREAM_HEADERS_TIMEOUT_MS:-45000}
+      AI_GATEWAY_AGENT_WORKSPACE_ROOT: /var/lib/ai-gateway/workspaces
+      AI_GATEWAY_AGENT_MAX_CONCURRENT_RUNS: ${AI_GATEWAY_AGENT_MAX_CONCURRENT_RUNS:-1}
+      AI_GATEWAY_AGENT_TIMEOUT_MS: ${AI_GATEWAY_AGENT_TIMEOUT_MS:-600000}
+    volumes:
+      - ${AI_GATEWAY_CONFIG_ROOT:-/opt/agent-router/config}:/var/lib/ai-gateway
+      - ${AI_GATEWAY_SECRETS_ROOT:-/opt/agent-router/secrets}/server-token:/run/secrets/server-token:ro
+    ports:
+      - "127.0.0.1:${AI_GATEWAY_PORT:-8020}:8080"
+    networks:
+      - ai-runtime
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health/ready').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    cpus: ${AI_GATEWAY_API_CPUS:-1.5}
+    cpu_shares: ${AI_GATEWAY_API_CPU_SHARES:-256}
+    mem_limit: ${AI_GATEWAY_API_MEMORY:-2g}
+    pids_limit: ${AI_GATEWAY_API_PIDS:-256}
+    logging:
+      driver: json-file
+      options:
+        max-size: ${AI_GATEWAY_LOG_MAX_SIZE:-10m}
+        max-file: ${AI_GATEWAY_LOG_MAX_FILES:-3}
+    restart: unless-stopped
+
+  telegram:
+    image: ${AI_GATEWAY_IMAGE:-agent-router:local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: production
+    command: ["node", "--enable-source-maps", "dist/telegram/supervisor.js"]
+    profiles: ["telegram"]
+    init: true
+    environment:
+      AI_GATEWAY_HOME: /var/lib/ai-gateway
+      HOME: /var/lib/ai-gateway
+    volumes:
+      - ${AI_GATEWAY_CONFIG_ROOT:-/opt/agent-router/config}:/var/lib/ai-gateway
+      - ${AI_GATEWAY_WORKSPACE_ROOT:-/opt/agent-router/workspaces}:/workspace
+    networks:
+      - ai-runtime
+    cpus: ${AI_GATEWAY_TELEGRAM_CPUS:-1.0}
+    cpu_shares: ${AI_GATEWAY_TELEGRAM_CPU_SHARES:-256}
+    mem_limit: ${AI_GATEWAY_TELEGRAM_MEMORY:-1536m}
+    pids_limit: ${AI_GATEWAY_TELEGRAM_PIDS:-256}
+    logging:
+      driver: json-file
+      options:
+        max-size: ${AI_GATEWAY_LOG_MAX_SIZE:-10m}
+        max-file: ${AI_GATEWAY_LOG_MAX_FILES:-3}
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+networks:
+  ai-runtime:
+    external: true

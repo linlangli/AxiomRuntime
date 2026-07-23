@@ -1,23 +1,23 @@
 import { readCache } from "../../core/config/cache-store.js";
 import { writeLog } from "../../core/logs/log-service.js";
-import { listProviders, updateProvider } from "../../core/providers/provider-service.js";
+import { deleteProvider, listProviders, updateProvider } from "../../core/providers/provider-service.js";
 import type { Provider, ProviderMode } from "../../core/types.js";
-import { promptSelect, promptText } from "../prompts/prompt.js";
+import { promptConfirm, promptSelect, promptText } from "../prompts/prompt.js";
 
 type EditableField = "name" | "baseUrl" | "apiKey" | "mode" | "level" | "model";
 
-export async function runEditCommand(): Promise<void> {
+export async function runProviderEditCommand(name?: string): Promise<void> {
   const providers = await listProviders();
   if (!providers.length) {
     console.log("No providers configured. Run `ai add` first.");
     return;
   }
 
-  const providerName = await promptSelect(
-    "Select provider",
-    providers.map((provider) => ({ label: `${provider.name} (level ${provider.level})`, value: provider.name }))
-  );
+  const providerName = name ?? await selectProviderName(providers);
   const provider = providers.find((item) => item.name === providerName)!;
+  if (!provider) {
+    throw new Error(`Provider not found: ${providerName}`);
+  }
 
   const field = await promptSelect<EditableField>("Select field", [
     { label: "name", value: "name" },
@@ -37,6 +37,42 @@ export async function runEditCommand(): Promise<void> {
     message: `Updated provider: ${updated.name}`,
     metadata: { provider: provider.name, field, renamedTo: updated.name !== provider.name ? updated.name : undefined }
   });
+}
+
+export async function runProviderDeleteCommand(name?: string): Promise<void> {
+  const providers = await listProviders();
+  if (!providers.length) {
+    console.log("No providers configured. Run `ai add` first.");
+    return;
+  }
+
+  const providerName = name ?? await selectProviderName(providers);
+  const provider = providers.find((item) => item.name === providerName);
+  if (!provider) {
+    throw new Error(`Provider not found: ${providerName}`);
+  }
+
+  const confirmed = await promptConfirm(`Delete provider ${provider.name}?`, false);
+  if (!confirmed) {
+    console.log("Delete cancelled.");
+    return;
+  }
+
+  await deleteProvider(provider.name);
+  console.log(`Deleted provider: ${provider.name}`);
+  await writeLog({
+    category: "provider",
+    action: "provider_delete",
+    message: `Deleted provider: ${provider.name}`,
+    metadata: { provider: provider.name }
+  });
+}
+
+async function selectProviderName(providers: Provider[]): Promise<string> {
+  return promptSelect(
+    "Select provider",
+    providers.map((provider) => ({ label: `${provider.name} (level ${provider.level})`, value: provider.name }))
+  );
 }
 
 async function buildPatch(provider: Provider, providers: Provider[], field: EditableField): Promise<Partial<Provider>> {

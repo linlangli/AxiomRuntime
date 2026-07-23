@@ -23,8 +23,16 @@ export function getUsagePath(): string {
   return path.join(getConfigRoot(), "usage.json");
 }
 
+export function getModelPricingPath(): string {
+  return path.join(getConfigRoot(), "model-pricing.json");
+}
+
 export function getSessionsPath(): string {
   return path.join(getConfigRoot(), "sessions.json");
+}
+
+export function getIntegrationStatePath(): string {
+  return path.join(getConfigRoot(), "integrations.json");
 }
 
 export function getReportsDir(): string {
@@ -37,6 +45,54 @@ export function getReportPath(sessionId: string): string {
 
 export function getLogPath(): string {
   return path.join(getConfigRoot(), ".ai-gateway.log");
+}
+
+export function getTelegramConfigPath(): string {
+  return path.join(getConfigRoot(), "telegram.json");
+}
+
+export function getTelegramPidPath(): string {
+  return path.join(getConfigRoot(), "telegram.pid");
+}
+
+export function getTelegramLogPath(): string {
+  return path.join(getConfigRoot(), "telegram.log");
+}
+
+export function getTelegramDbPath(): string {
+  return path.join(getConfigRoot(), "telegram.sqlite");
+}
+
+export function getTelegramBotDir(): string {
+  return path.join(getConfigRoot(), "telegram", "bots");
+}
+
+export function getTelegramBotConfigPath(name: string): string {
+  return path.join(getTelegramBotDir(), `${name}.json`);
+}
+
+export function getTelegramBotPidPath(name: string): string {
+  return path.join(getTelegramBotDir(), `${name}.pid`);
+}
+
+export function getTelegramBotLogPath(name: string): string {
+  return path.join(getTelegramBotDir(), `${name}.log`);
+}
+
+export function getTelegramBotDbPath(name: string): string {
+  return path.join(getTelegramBotDir(), `${name}.sqlite`);
+}
+
+export function getMemoryDbPath(): string {
+  return path.join(getConfigRoot(), "memory.sqlite");
+}
+
+export function getMemoryConfigPath(): string {
+  return path.join(getConfigRoot(), "memory.json");
+}
+
+export function getMemoryBackupDir(): string {
+  return path.join(getConfigRoot(), "memory.backup");
 }
 
 export function getContextDir(): string {

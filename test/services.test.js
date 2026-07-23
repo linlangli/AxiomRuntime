@@ -3,14 +3,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { addProvider, updateProvider } from "../dist/core/providers/provider-service.js";
-import { readCache, upsertProviderCache } from "../dist/core/config/cache-store.js";
+import { addProvider, deleteProvider, updateProvider } from "../dist/core/providers/provider-service.js";
+import { readCache, recordProviderRuntimeFailure, upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
 import { getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
-import { resolveProviderForTool } from "../dist/core/runner/fallback.js";
+import { resolveExactProviderForTool, resolveProviderForTool, resolveProviderCandidatesForTool } from "../dist/core/runner/fallback.js";
+import { checkAndRecordMemoryEmbeddingConfig } from "../dist/core/memory/embedding-check.js";
+import {
+  clearMemoryEmbeddingConfig,
+  getMemoryEmbeddingConfig,
+  setMemoryEmbeddingConfig
+} from "../dist/core/memory/memory-config.js";
 import { clearAllSessions, finishSession, getSession, listRecentSessions, startSession } from "../dist/core/sessions/session-service.js";
 import { generateSessionReport } from "../dist/core/reports/report-service.js";
+import {
+  getIntegrationProviderState,
+  hasPendingProviderChanges,
+  markIntegrationProvidersSynced,
+  readIntegrationState,
+  registerIntegration
+} from "../dist/core/integrations/integration-state.js";
 
 const ORIGINAL_FETCH = globalThis.fetch;
 
@@ -56,6 +69,79 @@ test("updateProvider edits mode, swaps level, and renames cache", async () => {
     assert.equal(providers.find((provider) => provider.name === "a").level, 2);
     assert.equal(cache.providers.renamed.status, "ok");
     assert.equal(cache.providers.b, undefined);
+  });
+});
+
+test("deleteProvider removes provider config and cache", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "a", baseUrl: "https://a.test/v1", apiKey: "a", mode: "auto", level: 1, model: "claude-opus-4-6" },
+      { name: "b", baseUrl: "https://b.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("a", { status: "ok", models: ["claude-opus-4-6"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("b", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+
+    const deleted = await deleteProvider("a");
+    const providers = await readProviders();
+    const cache = await readCache();
+
+    assert.equal(deleted.name, "a");
+    assert.equal(providers.length, 1);
+    assert.equal(providers[0].name, "b");
+    assert.equal(providers[0].level, 1);
+    assert.equal(cache.providers.a, undefined);
+    assert.equal(cache.providers.b.status, "ok");
+  });
+});
+
+test("memory embedding config stores dedicated vector model settings", async () => {
+  await withTempHome(async () => {
+    const config = await setMemoryEmbeddingConfig({
+      name: "jina",
+      baseUrl: "https://api.jina.ai/v1/",
+      apiKey: "jina-key",
+      model: "jina-embeddings-v3"
+    });
+
+    assert.equal(config.name, "jina");
+    assert.equal(config.baseUrl, "https://api.jina.ai/v1");
+    assert.equal(config.providerType, "jina");
+    assert.equal(config.queryTask, "retrieval.query");
+    assert.equal(config.passageTask, "retrieval.passage");
+
+    const saved = await getMemoryEmbeddingConfig();
+    assert.equal(saved.model, "jina-embeddings-v3");
+    assert.equal(saved.apiKey, "jina-key");
+
+    assert.equal(await clearMemoryEmbeddingConfig(), true);
+    assert.equal(await getMemoryEmbeddingConfig(), null);
+  });
+});
+
+test("memory embedding check records vector dimensions", async () => {
+  await withTempHome(async () => {
+    mockFetch((url, init) => {
+      assert.equal(String(url), "https://api.jina.ai/v1/embeddings");
+      const body = JSON.parse(String(init.body));
+      assert.equal(body.model, "jina-embeddings-v3");
+      assert.equal(body.task, "retrieval.query");
+      return jsonResponse({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
+    });
+    const config = await setMemoryEmbeddingConfig({
+      name: "jina",
+      baseUrl: "https://api.jina.ai/v1",
+      apiKey: "jina-key",
+      model: "jina-embeddings-v3"
+    });
+
+    const result = await checkAndRecordMemoryEmbeddingConfig(config);
+    const saved = await getMemoryEmbeddingConfig();
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.dimensions, 3);
+    assert.equal(saved.dimensions, 3);
+    assert.equal(saved.lastError, null);
+    assert.equal(typeof saved.lastCheckedAt, "string");
   });
 });
 
@@ -174,6 +260,109 @@ test("resolveProviderForTool skips unhealthy providers and falls back", async ()
   });
 });
 
+test("explicit model requests drop providers whose catalog lacks that model", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "codex", baseUrl: "https://codex.test/v1", apiKey: "codex", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "claude-only", baseUrl: "https://claude.test/v1", apiKey: "claude", mode: "auto", level: 2, model: "claude-opus-4-6" }
+    ]);
+    await upsertProviderCache("codex", { status: "ok", models: ["gpt-5.5", "gpt-5.6-sol"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("claude-only", { status: "ok", models: ["claude-opus-4-6"], lastCheckedAt: "now", lastError: null });
+
+    const candidates = await resolveProviderCandidatesForTool("codex", undefined, "gpt-5.6-sol");
+    assert.deepEqual(candidates.map((candidate) => candidate.provider.name), ["codex"]);
+    assert.equal(candidates.every((candidate) => candidate.model === "gpt-5.6-sol"), true);
+  });
+});
+
+test("expired runtime circuits become half-open candidates", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "recovering", baseUrl: "https://recovering.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.6-sol" }
+    ]);
+    await upsertProviderCache("recovering", {
+      status: "error",
+      models: ["gpt-5.6-sol"],
+      lastCheckedAt: "now",
+      lastError: "temporary upstream failure",
+      consecutiveFailures: 3,
+      circuitOpenUntil: new Date(Date.now() - 1_000).toISOString()
+    });
+
+    const candidates = await resolveProviderCandidatesForTool("codex", "recovering", "gpt-5.6-sol");
+    assert.deepEqual(candidates.map((candidate) => candidate.provider.name), ["recovering"]);
+  });
+});
+
+test("exact provider resolution ignores health routing after candidate selection", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "selected", baseUrl: "https://selected.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.6-sol" },
+      { name: "other", baseUrl: "https://other.test/v1", apiKey: "key", mode: "auto", level: 2, model: "gpt-5.6-sol" }
+    ]);
+    await upsertProviderCache("selected", {
+      status: "error",
+      models: ["gpt-5.6-sol"],
+      lastCheckedAt: "now",
+      lastError: "temporary upstream failure",
+      consecutiveFailures: 3,
+      circuitOpenUntil: new Date(Date.now() + 60_000).toISOString()
+    });
+    await upsertProviderCache("other", { status: "ok", models: ["gpt-5.6-sol"], lastCheckedAt: "now", lastError: null });
+
+    const resolved = await resolveExactProviderForTool("codex", "selected", "gpt-5.6-sol");
+    assert.equal(resolved.provider.name, "selected");
+    assert.equal(resolved.model, "gpt-5.6-sol");
+  });
+});
+
+test("runtime provider failures open a circuit breaker after repeated errors", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "flaky", baseUrl: "https://flaky.test/v1", apiKey: "bad", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "good", baseUrl: "https://good.test/v1", apiKey: "good", mode: "auto", level: 2, model: "gpt-5.4" }
+    ]);
+    await upsertProviderCache("flaky", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("good", { status: "ok", models: ["gpt-5.4"], lastCheckedAt: "now", lastError: null });
+
+    await recordProviderRuntimeFailure("flaky", "stream disconnected");
+    await recordProviderRuntimeFailure("flaky", "stream disconnected");
+    await recordProviderRuntimeFailure("flaky", "stream disconnected");
+
+    const cache = await readCache();
+    const resolved = await resolveProviderForTool("codex");
+
+    assert.equal(cache.providers.flaky.consecutiveFailures, 3);
+    assert.equal(typeof cache.providers.flaky.circuitOpenUntil, "string");
+    assert.equal(cache.providers.flaky.healthScore < 100, true);
+    assert.equal(resolved.provider.name, "good");
+  });
+});
+
+test("integration registry tracks provider revisions independently", async () => {
+  await withTempHome(async () => {
+    registerIntegration({ name: "example" });
+
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+    await deleteProvider("api");
+
+    const state = await readIntegrationState();
+    const custom = getIntegrationProviderState(state, "example");
+
+    assert.equal(await hasPendingProviderChanges("example"), true);
+    assert.equal(custom.pendingProviderChanges.length, 1);
+    assert.deepEqual(Object.keys(state.integrations), ["example"]);
+
+    await markIntegrationProvidersSynced("example");
+    const synced = await readIntegrationState();
+
+    assert.equal(await hasPendingProviderChanges("example"), false);
+    assert.equal(getIntegrationProviderState(synced, "example").pendingProviderChanges.length, 0);
+  });
+});
+
 test("session service starts, lists, and finishes sessions", async () => {
   await withTempHome(async () => {
     const provider = { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" };
@@ -287,9 +476,19 @@ async function withTempHome(fn) {
 }
 
 function mockFetchModels(models) {
-  mockFetch((url) => {
+  mockFetch((url, init) => {
     if (String(url).endsWith("/models")) {
       return jsonResponse({ data: models.map((id) => ({ id })) });
+    }
+    if (init?.method === "POST" && (String(url).endsWith("/chat/completions") || String(url).endsWith("/v1/messages"))) {
+      return jsonResponse({
+        id: "probe",
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          total_tokens: 2
+        }
+      });
     }
     return jsonResponse({}, { status: 404 });
   });

@@ -1,8 +1,11 @@
-import { readCache, renameProviderCache, upsertProviderCache } from "../config/cache-store.js";
+import { buildProviderHealthCache, deleteProviderCache, readCache, renameProviderCache, upsertProviderCache } from "../config/cache-store.js";
+import { appendUsageEvent } from "../config/usage-store.js";
+import { recordProviderChange } from "../integrations/integration-state.js";
 import { writeLog } from "../logs/log-service.js";
-import { readProviders, swapProviderLevel, writeProviders } from "../config/providers-store.js";
-import { checkProvider } from "../models/model-discovery.js";
-import type { Provider, ProviderMode } from "../types.js";
+import { readProviders, swapProviderLevel, updateProviders } from "../config/providers-store.js";
+import { checkCallableModels, checkProvider } from "../models/model-discovery.js";
+import { buildUsageEvent } from "../usage/usage-service.js";
+import type { Provider, ProviderMode, TokenUsage } from "../types.js";
 
 export type AddProviderInput = {
   name: string;
@@ -33,47 +36,57 @@ export async function addProvider(input: AddProviderInput): Promise<Provider> {
 
   const result = await checkProvider(draft);
   const model = draft.model || result.models[0] || "";
-  const provider = { ...draft, model };
-  await writeProviders([...providers, provider]);
-  await upsertProviderCache(provider.name, {
+  const normalizedProviders = await updateProviders((current) => {
+    if (current.some((provider) => provider.name === draft.name)) {
+      throw new Error(`Provider already exists: ${draft.name}`);
+    }
+    return [...current, { ...draft, level: current.length + 1, model }];
+  });
+  const provider = normalizedProviders.find((item) => item.name === draft.name);
+  if (!provider) {
+    throw new Error("Provider add failed.");
+  }
+  await upsertProviderCache(provider.name, buildProviderHealthCache(undefined, {
     status: result.status,
     models: result.models,
     lastCheckedAt: result.checkedAt,
     lastError: result.error
-  });
+  }));
+  await recordProviderChange({ type: "added", provider: provider.name });
   return provider;
 }
 
 export async function updateProvider(providerName: string, patch: Partial<Provider>): Promise<Provider> {
-  const providers = await readProviders();
-  const current = providers.find((provider) => provider.name === providerName);
-  if (!current) {
-    throw new Error(`Provider not found: ${providerName}`);
-  }
+  const targetName = patch.name?.trim() || providerName;
+  const normalizedProviders = await updateProviders((providers) => {
+    const current = providers.find((provider) => provider.name === providerName);
+    if (!current) {
+      throw new Error(`Provider not found: ${providerName}`);
+    }
+    if (targetName !== providerName && providers.some((provider) => provider.name === targetName)) {
+      throw new Error(`Provider already exists: ${targetName}`);
+    }
 
-  if (patch.name && patch.name !== providerName && providers.some((provider) => provider.name === patch.name)) {
-    throw new Error(`Provider already exists: ${patch.name}`);
-  }
+    let nextProviders = providers.map((provider) =>
+      provider.name === providerName
+        ? {
+            ...provider,
+            ...patch,
+            name: targetName,
+            baseUrl: patch.baseUrl?.trim().replace(/\/+$/, "") || provider.baseUrl,
+            apiKey: patch.apiKey?.trim() || provider.apiKey,
+            model: patch.model?.trim() ?? provider.model
+          }
+        : provider
+    );
 
-  let nextProviders = providers.map((provider) =>
-    provider.name === providerName
-      ? {
-          ...provider,
-          ...patch,
-          name: patch.name?.trim() || provider.name,
-          baseUrl: patch.baseUrl?.trim().replace(/\/+$/, "") || provider.baseUrl,
-          apiKey: patch.apiKey?.trim() || provider.apiKey,
-          model: patch.model?.trim() ?? provider.model
-        }
-      : provider
-  );
+    if (patch.level) {
+      nextProviders = swapProviderLevel(nextProviders, targetName, patch.level);
+    }
 
-  if (patch.level) {
-    nextProviders = swapProviderLevel(nextProviders, patch.name ?? providerName, patch.level);
-  }
-
-  await writeProviders(nextProviders);
-  const updated = (await readProviders()).find((provider) => provider.name === (patch.name ?? providerName));
+    return nextProviders;
+  });
+  const updated = normalizedProviders.find((provider) => provider.name === targetName);
   if (!updated) {
     throw new Error("Provider update failed.");
   }
@@ -86,32 +99,158 @@ export async function updateProvider(providerName: string, patch: Partial<Provid
     await refreshProvider(updated);
   }
 
+  await recordProviderChange({
+    type: "updated",
+    provider: updated.name,
+    previousProvider: updated.name !== providerName ? providerName : undefined
+  });
   return updated;
 }
 
-export async function refreshProvider(provider: Provider): Promise<void> {
-  const result = await checkProvider(provider);
-  await upsertProviderCache(provider.name, {
-    status: result.status,
-    models: result.models,
-    lastCheckedAt: result.checkedAt,
-    lastError: result.error
+export async function deleteProvider(providerName: string): Promise<Provider> {
+  const deleted: { value?: Provider } = {};
+  await updateProviders((providers) => {
+    deleted.value = providers.find((item) => item.name === providerName);
+    if (!deleted.value) {
+      throw new Error(`Provider not found: ${providerName}`);
+    }
+    return providers.filter((item) => item.name !== providerName);
   });
+  if (!deleted.value) {
+    throw new Error(`Provider not found: ${providerName}`);
+  }
+  await deleteProviderCache(providerName);
+  await recordProviderChange({ type: "deleted", provider: deleted.value.name });
+  return deleted.value;
+}
+
+type RefreshProviderOptions = {
+  verifyCallableModels?: boolean;
+};
+
+export async function refreshProvider(provider: Provider, options: RefreshProviderOptions = {}): Promise<void> {
+  const result = await checkProvider(provider);
+  const callable = options.verifyCallableModels && result.models.length
+    ? await filterCallableModels(provider, result.models)
+    : { models: result.models, failed: 0, attempts: 0, durationMs: 0, retryErrors: [] as string[] };
+  const models = callable.models;
+  const status = result.status === "ok" && options.verifyCallableModels && !models.length ? "error" : result.status;
+  const lastError = status === "error" && options.verifyCallableModels && !models.length
+    ? `No callable models found. ${result.error ?? ""}`.trim()
+    : result.error;
+
+  const cache = await readCache();
+  await upsertProviderCache(provider.name, buildProviderHealthCache(cache.providers[provider.name], {
+    status,
+    models,
+    lastCheckedAt: result.checkedAt,
+    lastError
+  }));
   await writeLog({
-    level: result.status === "ok" ? "info" : "error",
+    level: status === "ok" ? "info" : "error",
     category: "provider",
     action: "provider_health_check",
-    message: `${provider.name}: ${result.status}${result.error ? ` (${result.error})` : ""}`,
-    metadata: { provider: provider.name, status: result.status, models: result.models.length, checkedAt: result.checkedAt }
+    message: `${provider.name}: ${status}${lastError ? ` (${lastError})` : ""}`,
+    metadata: {
+      provider: provider.name,
+      status,
+      models: models.length,
+      discoveredModels: result.models.length,
+      failedCallableModels: callable.failed,
+      checkedAt: result.checkedAt,
+      verifyCallableModels: Boolean(options.verifyCallableModels),
+      attempts: (result.attempts ?? 0) + callable.attempts,
+      discoveryAttempts: result.attempts ?? null,
+      callableAttempts: callable.attempts,
+      durationMs: (result.durationMs ?? 0) + callable.durationMs,
+      discoveryDurationMs: result.durationMs ?? null,
+      callableDurationMs: callable.durationMs,
+      retryErrors: [...(result.retryErrors ?? []), ...callable.retryErrors].slice(-8)
+    }
   });
 }
 
-export async function refreshAllProviders(): Promise<void> {
+export async function refreshAllProviders(options: RefreshProviderOptions = {}): Promise<void> {
   const providers = await readProviders();
-  await Promise.all(providers.map((provider) => refreshProvider(provider)));
+  if (options.verifyCallableModels) {
+    await mapWithConcurrency(providers, 2, (provider) => refreshProvider(provider, options));
+    return;
+  }
+  await Promise.all(providers.map((provider) => refreshProvider(provider, options)));
 }
 
 export async function getCachedModels(providerName: string): Promise<string[]> {
   const cache = await readCache();
   return cache.providers[providerName]?.models ?? [];
+}
+
+async function filterCallableModels(provider: Provider, models: string[]): Promise<{
+  models: string[];
+  failed: number;
+  attempts: number;
+  durationMs: number;
+  retryErrors: string[];
+}> {
+  const results = await checkCallableModels(provider, models);
+  for (const result of results) {
+    if (result.status === "ok" && result.usage) {
+      await recordModelProbeUsage(provider, result.model, result.usage);
+    }
+  }
+  const callableModels = results.filter((result) => result.status === "ok").map((result) => result.model);
+  const retryErrors = results.flatMap((result) => result.retryErrors ?? []);
+  await writeLog({
+    level: callableModels.length ? "info" : "warn",
+    category: "provider",
+    action: "provider_model_probe",
+    message: `${provider.name}: ${callableModels.length}/${models.length} callable model(s).`,
+    metadata: {
+      provider: provider.name,
+      callableModels,
+      failedModels: results.filter((result) => result.status === "error").map((result) => ({
+        model: result.model,
+        error: result.error,
+        attempts: result.attempts ?? null,
+        durationMs: result.durationMs ?? null
+      })),
+      attempts: results.reduce((sum, result) => sum + (result.attempts ?? 0), 0),
+      durationMs: results.reduce((sum, result) => sum + (result.durationMs ?? 0), 0),
+      retryErrors: retryErrors.slice(-8)
+    }
+  });
+  return {
+    models: callableModels,
+    failed: results.length - callableModels.length,
+    attempts: results.reduce((sum, result) => sum + (result.attempts ?? 0), 0),
+    durationMs: results.reduce((sum, result) => sum + (result.durationMs ?? 0), 0),
+    retryErrors
+  };
+}
+
+async function recordModelProbeUsage(provider: Provider, model: string, usage: TokenUsage): Promise<void> {
+  await appendUsageEvent(buildUsageEvent({
+    provider: provider.name,
+    tool: "provider",
+    model,
+    source: "model_probe",
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens
+  }));
+}
+
+async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  mapper: (item: T) => Promise<void>
+): Promise<void> {
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      await mapper(items[currentIndex]!);
+    }
+  });
+  await Promise.all(workers);
 }

@@ -1,9 +1,9 @@
-import { readCache } from "../../core/config/cache-store.js";
+import { readCache, recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../../core/config/cache-store.js";
 import { writeLog } from "../../core/logs/log-service.js";
 import { refreshAllProviders } from "../../core/providers/provider-service.js";
-import { resolveProviderForTool } from "../../core/runner/fallback.js";
+import { resolveProviderCandidatesForTool, type ResolvedRun } from "../../core/runner/fallback.js";
 import { runTool } from "../../core/runner/tool-runner.js";
-import type { ToolType } from "../../core/types.js";
+import type { CliToolType } from "../../core/types.js";
 import { promptConfirm, promptSelect } from "../prompts/prompt.js";
 
 export async function runUseCommand(args: string[]): Promise<void> {
@@ -12,32 +12,13 @@ export async function runUseCommand(args: string[]): Promise<void> {
   const modelName = args[2];
 
   await refreshAllProviders();
-  const resolved = await resolveProviderForTool(tool, providerName, modelName);
-
-  if (resolved.fallbackFrom) {
-    console.log(`Provider ${resolved.fallbackFrom} unavailable, fallback to ${resolved.provider.name}.`);
-    await writeLog({
-      category: "strategy",
-      action: "fallback_applied",
-      message: `Provider ${resolved.fallbackFrom} unavailable, fallback to ${resolved.provider.name}.`,
-      metadata: { from: resolved.fallbackFrom, to: resolved.provider.name, tool, model: resolved.model }
-    });
+  const candidates = await resolveProviderCandidatesForTool(tool, providerName, modelName);
+  if (!candidates.length) {
+    throw new Error("No usable provider/model found. Run `ai status` or `ai doctor`.");
   }
-
-  console.log(`Using ${tool}: ${resolved.provider.name} / ${resolved.model}`);
-  await writeLog({
-    category: "usage",
-    action: "tool_start",
-    message: `Starting ${tool}: ${resolved.provider.name} / ${resolved.model}`,
-    metadata: { tool, provider: resolved.provider.name, model: resolved.model, mode: resolved.provider.mode }
-  });
-  if (resolved.provider.mode === "ask") {
-    const confirmed = await promptConfirm("Start CLI?");
-    if (!confirmed) return;
-  }
-
-  const code = await runTool(tool, resolved.provider, resolved.model, {
-    fallbackFrom: resolved.fallbackFrom ?? null
+  const code = await runResolvedProviderCandidates(tool, candidates, {
+    confirm: promptConfirm,
+    runner: (candidate, fallbackFrom) => runTool(tool, candidate.provider, candidate.model, { fallbackFrom })
   });
   process.exitCode = code;
 }
@@ -51,12 +32,105 @@ export async function runLastCommand(): Promise<void> {
   await runUseCommand([cache.lastSelection.tool, cache.lastSelection.provider, cache.lastSelection.model]);
 }
 
-async function getTool(value?: string): Promise<ToolType> {
+async function getTool(value?: string): Promise<CliToolType> {
   if (value === "claude" || value === "codex") {
     return value;
   }
-  return promptSelect<ToolType>("Select tool", [
+  return promptSelect<CliToolType>("Select tool", [
     { label: "claude", value: "claude" },
     { label: "codex", value: "codex" }
   ]);
+}
+
+export type RunResolvedProviderCandidatesOptions = {
+  confirm?: (message: string) => Promise<boolean>;
+  runner?: (candidate: ResolvedRun, fallbackFrom: string | null) => Promise<number>;
+};
+
+export async function runResolvedProviderCandidates(
+  tool: CliToolType,
+  candidates: ResolvedRun[],
+  options: RunResolvedProviderCandidatesOptions = {}
+): Promise<number> {
+  const confirm = options.confirm ?? promptConfirm;
+  const runner = options.runner ?? ((candidate, fallbackFrom) =>
+    runTool(tool, candidate.provider, candidate.model, { fallbackFrom }));
+  let lastExitCode = 1;
+  let runtimeFallbackFrom: string | null = null;
+  for (const [index, candidate] of candidates.entries()) {
+    const fallbackFrom = runtimeFallbackFrom ?? candidate.fallbackFrom ?? null;
+    if (fallbackFrom) {
+      console.log(`Provider ${fallbackFrom} unavailable, fallback to ${candidate.provider.name}.`);
+      await writeProviderFallbackLog({
+        action: "fallback_applied",
+        from: fallbackFrom,
+        to: candidate.provider.name,
+        tool,
+        model: candidate.model
+      });
+    }
+
+    console.log(`Using ${tool}: ${candidate.provider.name} / ${candidate.model}`);
+    await writeLog({
+      category: "usage",
+      action: "tool_start",
+      message: `Starting ${tool}: ${candidate.provider.name} / ${candidate.model}`,
+      metadata: { tool, provider: candidate.provider.name, model: candidate.model, mode: candidate.provider.mode }
+    });
+    if (candidate.provider.mode === "ask") {
+      const confirmed = await confirm("Start CLI?");
+      if (!confirmed) return 0;
+    }
+
+    const code = await runner(candidate, fallbackFrom);
+    if (code === 0) {
+      await recordProviderRuntimeSuccess(candidate.provider.name);
+      return 0;
+    }
+
+    lastExitCode = code;
+    await recordProviderRuntimeFailure(candidate.provider.name, `exit_code_${code}`);
+    const next = candidates[index + 1];
+    if (next) {
+      runtimeFallbackFrom = candidate.provider.name;
+      await writeProviderFallbackLog({
+        level: "warn",
+        action: "runtime_fallback_retry",
+        from: candidate.provider.name,
+        to: next.provider.name,
+        tool,
+        model: candidate.model,
+        nextModel: next.model,
+        error: `exit_code_${code}`
+      });
+      console.log(`Provider ${candidate.provider.name} failed with exit code ${code}, trying ${next.provider.name}.`);
+    }
+  }
+  return lastExitCode;
+}
+
+async function writeProviderFallbackLog(input: {
+  level?: "info" | "warn" | "error";
+  action: string;
+  from: string;
+  to: string;
+  tool: CliToolType;
+  model: string;
+  nextModel?: string;
+  error?: string;
+}): Promise<void> {
+  await writeLog({
+    level: input.level,
+    category: "strategy",
+    action: input.action,
+    message: `Provider fallback ${input.from} -> ${input.to} for ${input.tool}.`,
+    metadata: {
+      from: input.from,
+      to: input.to,
+      engine: input.tool,
+      model: input.model,
+      nextModel: input.nextModel ?? null,
+      error: input.error ?? null
+    }
+  });
 }

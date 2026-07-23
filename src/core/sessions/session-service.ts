@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { addSession, clearSessions, readSessions, updateSession } from "../config/session-store.js";
-import type { Provider, SessionRecord, ToolType } from "../types.js";
+import type { Provider, RunToolType, SessionRecord } from "../types.js";
 
 export type StartSessionInput = {
-  tool: ToolType;
+  tool: RunToolType;
   provider: Provider;
   model: string;
   projectPath: string;

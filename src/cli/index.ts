@@ -2,16 +2,21 @@
 import { runAddCommand } from "./commands/add.js";
 import { runContextCommand } from "./commands/context.js";
 import { runDoctorCommand } from "./commands/doctor.js";
-import { runEditCommand } from "./commands/edit.js";
+import { runProviderDeleteCommand, runProviderEditCommand } from "./commands/edit.js";
 import { runHelpCommand } from "./commands/help.js";
 import { runListCommand } from "./commands/list.js";
 import { runLogCommand } from "./commands/log.js";
+import { runMemoryCommand } from "./commands/memory.js";
 import { runReportCommand } from "./commands/report.js";
 import { runLastCommand, runUseCommand } from "./commands/use.js";
 import { runSessionCommand } from "./commands/session.js";
 import { runStatusCommand } from "./commands/status.js";
+import { runTelegramCommand } from "./commands/telegram.js";
 import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
+import { getCliCommand, registerCliCommand } from "./registry.js";
+
+registerBuiltInCommands();
 
 async function main(): Promise<void> {
   const [, , command, ...args] = process.argv;
@@ -23,66 +28,38 @@ async function main(): Promise<void> {
     metadata: { command: command ?? "interactive", args: safeArgs }
   });
 
-  switch (command) {
-    case undefined:
-      await runInteractive();
-      break;
-    case "help":
-      await runHelpCommand();
-      break;
-    case "add":
-      await runAddCommand(args);
-      break;
-    case "edit":
-      await runEditCommand();
-      break;
-    case "status":
-      await runStatusCommand();
-      break;
-    case "provider":
-      await runProviderCommand(args);
-      break;
-    case "session":
-      await runSessionCommand(args);
-      break;
-    case "report":
-      await runReportCommand(args);
-      break;
-    case "log":
-      await runLogCommand(args);
-      break;
-    case "context":
-      await runContextCommand(args);
-      break;
-    case "doctor":
-      await runDoctorCommand(args);
-      break;
-    case "use":
-      await runUseCommand(args);
-      break;
-    case "last":
-      await runLastCommand();
-      break;
-    case "web":
-      console.log("`ai web` is planned but not implemented in this foundation build.");
-      break;
-    default:
-      await writeLog({
-        level: "warn",
-        category: "usage",
-        action: "unknown_command",
-        message: `Unknown command: ${command}`,
-        metadata: { command, args: safeArgs }
-      });
-      console.error(`Unknown command: ${command}`);
-      console.error("Run `ai help` for usage.");
-      process.exitCode = 1;
+  if (command === undefined) {
+    await runInteractive();
+    return;
   }
+
+  const registered = getCliCommand(command);
+  if (registered) {
+    await registered.run(args);
+    return;
+  }
+
+  await writeLog({
+    level: "warn",
+    category: "usage",
+    action: "unknown_command",
+    message: `Unknown command: ${command}`,
+    metadata: { command, args: safeArgs }
+  });
+  console.error(`Unknown command: ${command}`);
+  console.error("Run `ai help` for usage.");
+  process.exitCode = 1;
 }
 
 function sanitizeArgs(command: string | undefined, args: string[]): string[] {
   if (command === "add" && args.length >= 3) {
     return [args[0]!, args[1]!, maskSecretArg(args[2]!)];
+  }
+  if (command === "provider" && args[0] === "add" && args.length >= 4) {
+    return [args[0]!, args[1]!, args[2]!, maskSecretArg(args[3]!)];
+  }
+  if (command === "memory" && (args[0] === "embedding" || args[0] === "vector") && (args[1] === "set" || args[1] === "edit")) {
+    return maskMemoryEmbeddingSetArgs(args);
   }
   return args.map((arg, index) => {
     const previous = args[index - 1]?.toLowerCase();
@@ -93,49 +70,150 @@ function sanitizeArgs(command: string | undefined, args: string[]): string[] {
   });
 }
 
+function maskMemoryEmbeddingSetArgs(args: string[]): string[] {
+  const valueOptions = new Set(["--type", "--provider-type", "--query-task", "--passage-task", "--dimensions", "--api-key", "--apikey", "--key"]);
+  const masked = [...args];
+  let positional = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg.startsWith("--")) continue;
+    const previous = args[index - 1]?.toLowerCase();
+    if (previous === "--api-key" || previous === "--apikey" || previous === "--key") {
+      masked[index] = maskSecretArg(arg);
+      continue;
+    }
+    if (previous && valueOptions.has(previous)) continue;
+    if (index >= 2) {
+      positional += 1;
+      if (positional === 3) masked[index] = maskSecretArg(arg);
+    }
+  }
+  return masked;
+}
+
 function maskSecretArg(value: string): string {
   if (value.length <= 8) return "****";
   return `${value.slice(0, 4)}****${value.slice(-4)}`;
 }
 
 async function runInteractive(): Promise<void> {
+  const interactiveCommandNames = ["use", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
-    { label: "use", value: "use" },
-    { label: "add", value: "add" },
-    { label: "edit", value: "edit" },
+    ...interactiveCommandNames
+      .flatMap((name) => {
+        const item = getCliCommand(name);
+        return item ? [{ label: item.description, value: item.name }] : [];
+      }),
     { label: "provider list", value: "provider:list" },
-    { label: "status", value: "status" },
-    { label: "session", value: "session" },
-    { label: "report", value: "report" },
-    { label: "doctor", value: "doctor" },
-    { label: "log", value: "log" },
-    { label: "context", value: "context" },
-    { label: "help", value: "help" },
-    { label: "last", value: "last" },
+    { label: "provider edit", value: "provider:edit" },
+    { label: "provider delete", value: "provider:delete" },
     { label: "exit", value: "exit" }
   ]);
 
-  if (command === "use") await runUseCommand([]);
-  if (command === "add") await runAddCommand([]);
-  if (command === "edit") await runEditCommand();
+  if (command === "exit") return;
   if (command === "provider:list") await runListCommand();
-  if (command === "status") await runStatusCommand();
-  if (command === "session") await runSessionCommand([]);
-  if (command === "report") await runReportCommand([]);
-  if (command === "doctor") await runDoctorCommand([]);
-  if (command === "log") await runLogCommand([]);
-  if (command === "context") await runContextCommand([]);
-  if (command === "help") await runHelpCommand();
-  if (command === "last") await runLastCommand();
+  if (command === "provider:edit") await runProviderEditCommand();
+  if (command === "provider:delete") await runProviderDeleteCommand();
+  const registered = getCliCommand(command);
+  if (registered) await registered.run([]);
 }
 
 async function runProviderCommand(args: string[]): Promise<void> {
-  const subcommand = args[0];
+  const [subcommand, name] = args;
+  if (subcommand === "add") {
+    await runAddCommand(args.slice(1));
+    return;
+  }
   if (subcommand === "list") {
     await runListCommand();
     return;
   }
+  if (subcommand === "edit") {
+    await runProviderEditCommand(name);
+    return;
+  }
+  if (subcommand === "delete" || subcommand === "remove") {
+    await runProviderDeleteCommand(name);
+    return;
+  }
   throw new Error(`Unknown provider command: ${subcommand ?? "(missing)"}`);
+}
+
+function registerBuiltInCommands(): void {
+  registerCliCommand({
+    name: "help",
+    description: "help",
+    run: () => runHelpCommand()
+  });
+  registerCliCommand({
+    name: "add",
+    description: "provider add",
+    run: (args) => runAddCommand(args)
+  });
+  registerCliCommand({
+    name: "status",
+    description: "status",
+    run: () => runStatusCommand()
+  });
+  registerCliCommand({
+    name: "provider",
+    description: "provider add",
+    interactive: false,
+    run: (args) => runProviderCommand(args)
+  });
+  registerCliCommand({
+    name: "session",
+    description: "session",
+    run: (args) => runSessionCommand(args)
+  });
+  registerCliCommand({
+    name: "report",
+    description: "report",
+    run: (args) => runReportCommand(args)
+  });
+  registerCliCommand({
+    name: "log",
+    description: "log",
+    run: (args) => runLogCommand(args)
+  });
+  registerCliCommand({
+    name: "context",
+    description: "context",
+    run: (args) => runContextCommand(args)
+  });
+  registerCliCommand({
+    name: "telegram",
+    description: "telegram",
+    run: (args) => runTelegramCommand(args)
+  });
+  registerCliCommand({
+    name: "memory",
+    description: "memory",
+    run: (args) => runMemoryCommand(args)
+  });
+  registerCliCommand({
+    name: "doctor",
+    description: "doctor",
+    run: (args) => runDoctorCommand(args)
+  });
+  registerCliCommand({
+    name: "use",
+    description: "use",
+    run: (args) => runUseCommand(args)
+  });
+  registerCliCommand({
+    name: "last",
+    description: "last",
+    run: () => runLastCommand()
+  });
+  registerCliCommand({
+    name: "web",
+    description: "web",
+    interactive: false,
+    run: async () => {
+      console.log("`ai web` is planned but not implemented in this foundation build.");
+    }
+  });
 }
 
 main().catch(async (error) => {

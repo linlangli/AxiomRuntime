@@ -2,15 +2,27 @@ import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import type { ToolType } from "../types.js";
+import type { RunToolType } from "../types.js";
 
-export function resolveToolCommand(tool: ToolType): string | null {
+export function resolveToolCommand(tool: RunToolType): string | null {
+  return resolveToolCommandWithOptions(tool);
+}
+
+export function resolveToolCommandWithOptions(
+  tool: RunToolType,
+  options: {
+    pathResolver?: (command: string) => string | null;
+    candidates?: string[];
+    runner?: (command: string) => boolean;
+  } = {}
+): string | null {
   const command = tool === "claude" ? "claude" : "codex";
-  const fromPath = resolveFromPath(command);
-  if (fromPath) return fromPath;
+  const runner = options.runner ?? isRunnableCommand;
+  const fromPath = (options.pathResolver ?? resolveFromPath)(command);
+  if (fromPath && runner(fromPath)) return fromPath;
 
-  for (const candidate of getKnownCandidates(tool)) {
-    if (isExecutable(candidate)) {
+  for (const candidate of options.candidates ?? getKnownCandidates(tool)) {
+    if (runner(candidate)) {
       return candidate;
     }
   }
@@ -18,7 +30,7 @@ export function resolveToolCommand(tool: ToolType): string | null {
   return null;
 }
 
-export function getKnownCandidates(tool: ToolType): string[] {
+export function getKnownCandidates(tool: RunToolType): string[] {
   if (tool === "claude") {
     return [
       path.join(os.homedir(), ".local/bin/claude"),
@@ -49,4 +61,14 @@ function isExecutable(filePath: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function isRunnableCommand(command: string): boolean {
+  if (!isExecutable(command)) return false;
+  const result = spawnSync(command, ["--version"], {
+    encoding: "utf8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  return result.status === 0;
 }

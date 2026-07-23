@@ -1,14 +1,17 @@
 {
   "name": "ai-gateway",
   "version": "0.1.0",
-  "description": "Local AI provider gateway for Claude Code and Codex CLI.",
+  "description": "CLI-first foundation for an enterprise AI Runtime with provider routing and governed execution.",
   "type": "module",
   "bin": {
     "ai": "./dist/cli/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc && chmod +x dist/cli/index.js",
     "dev": "node --enable-source-maps dist/cli/index.js",
+    "server": "node --enable-source-maps dist/server/index.js",
+    "telegram:service": "node --enable-source-maps dist/telegram/supervisor.js",
     "test": "npm run build && node --test test/*.test.js",
     "release": "node scripts/release.js",
     "prepublishOnly": "npm test"
@@ -16,14 +19,26 @@
   "files": [
     "dist",
     "docs",
+    "deploy",
+    "Dockerfile",
     "README.md",
     "package.json"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.0",
+    "@types/proper-lockfile": "^4.1.4",
     "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "gpt-tokenizer": "^3.4.0",
+    "grammy": "^1.44.0",
+    "https-proxy-agent": "^9.1.0",
+    "proper-lockfile": "^4.1.2",
+    "undici": "^8.7.0"
   }
 }

@@ -1,5 +1,6 @@
 import { getProvidersPath } from "./paths.js";
-import { readJsonFile, writeJsonFile } from "./json-store.js";
+import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
+import { readNumber, readRecord, readString } from "./schema.js";
 import type { Provider, ProviderMode } from "../types.js";
 
 const VALID_MODES = new Set<ProviderMode>(["ask", "auto"]);
@@ -14,6 +15,15 @@ export async function readProviders(): Promise<Provider[]> {
 
 export async function writeProviders(providers: Provider[]): Promise<void> {
   await writeJsonFile(getProvidersPath(), normalizeProviders(providers));
+}
+
+export async function updateProviders(updater: (providers: Provider[]) => Provider[] | Promise<Provider[]>): Promise<Provider[]> {
+  return updateJsonFile<Provider[]>(getProvidersPath(), [], async (raw) => {
+    if (!Array.isArray(raw)) {
+      throw new Error("providers.json must contain a JSON array.");
+    }
+    return normalizeProviders(await updater(normalizeProviders(raw.map(normalizeProviderShape))));
+  });
 }
 
 export function normalizeProviders(providers: Provider[]): Provider[] {
@@ -34,10 +44,19 @@ export function normalizeProviders(providers: Provider[]): Provider[] {
     }
     seenNames.add(name);
 
+    const baseUrl = provider.baseUrl.trim().replace(/\/+$/, "");
+    const apiKey = provider.apiKey.trim();
+    if (!baseUrl) {
+      throw new Error(`Provider ${name} baseUrl cannot be empty.`);
+    }
+    if (!apiKey) {
+      throw new Error(`Provider ${name} apiKey cannot be empty.`);
+    }
+
     return {
       name,
-      baseUrl: provider.baseUrl.trim().replace(/\/+$/, ""),
-      apiKey: provider.apiKey.trim(),
+      baseUrl,
+      apiKey,
       mode: VALID_MODES.has(provider.mode) ? provider.mode : "auto",
       level: index + 1,
       model: provider.model.trim()
@@ -72,13 +91,14 @@ export function swapProviderLevel(providers: Provider[], providerName: string, t
 }
 
 function normalizeProviderShape(value: unknown): Provider {
-  const provider = value as Partial<Provider>;
+  const provider = readRecord(value, "provider");
+  const mode = readString(provider, "mode");
   return {
-    name: String(provider.name ?? ""),
-    baseUrl: String(provider.baseUrl ?? ""),
-    apiKey: String(provider.apiKey ?? ""),
-    mode: provider.mode === "ask" ? "ask" : "auto",
-    level: Number(provider.level ?? Number.MAX_SAFE_INTEGER),
-    model: String(provider.model ?? "")
+    name: readString(provider, "name"),
+    baseUrl: readString(provider, "baseUrl"),
+    apiKey: readString(provider, "apiKey"),
+    mode: mode === "ask" ? "ask" : "auto",
+    level: readNumber(provider, "level", Number.MAX_SAFE_INTEGER),
+    model: readString(provider, "model")
   };
 }

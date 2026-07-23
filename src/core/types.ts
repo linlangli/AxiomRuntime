@@ -1,4 +1,6 @@
-export type ToolType = "claude" | "codex";
+export type CliToolType = "claude" | "codex";
+
+export type RunToolType = CliToolType | "provider" | "telegram";
 
 export type ProviderMode = "ask" | "auto";
 
@@ -18,12 +20,16 @@ export type ProviderCache = {
   models: string[];
   lastCheckedAt: string | null;
   lastError: string | null;
+  consecutiveFailures?: number;
+  lastFailureAt?: string | null;
+  circuitOpenUntil?: string | null;
+  healthScore?: number;
 };
 
 export type CacheFile = {
   providers: Record<string, ProviderCache>;
   lastSelection?: {
-    tool: ToolType;
+    tool: CliToolType;
     provider: string;
     model: string;
     usedAt: string;
@@ -32,12 +38,13 @@ export type CacheFile = {
 
 export type UsageEvent = {
   provider: string;
-  tool: ToolType;
+  tool: RunToolType;
   model: string;
-  source: "doctor_deep" | "proxy" | "cli";
+  source: "doctor_deep" | "model_probe" | "proxy" | "cli";
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheReadInputTokens?: number;
   createdAt: string;
 };
 
@@ -45,11 +52,32 @@ export type UsageFile = {
   events: UsageEvent[];
 };
 
+export type MemoryEmbeddingProviderType = "openai-compatible" | "jina";
+
+export type MemoryEmbeddingConfig = {
+  enabled: boolean;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  providerType: MemoryEmbeddingProviderType;
+  queryTask?: string;
+  passageTask?: string;
+  dimensions: number | null;
+  updatedAt: string;
+  lastCheckedAt: string | null;
+  lastError: string | null;
+};
+
+export type MemoryConfigFile = {
+  embedding: MemoryEmbeddingConfig | null;
+};
+
 export type SessionStatus = "running" | "completed" | "failed";
 
 export type SessionRecord = {
   id: string;
-  tool: ToolType;
+  tool: RunToolType;
   provider: string;
   model: string;
   mode: ProviderMode;
@@ -89,17 +117,21 @@ export type ConnectivityResult = {
   error: string | null;
   checkedAt: string;
   usage?: TokenUsage;
+  attempts?: number;
+  durationMs?: number;
+  retryErrors?: string[];
 };
 
 export type TokenUsage = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheReadInputTokens?: number;
 };
 
 export type LogLevel = "info" | "warn" | "error";
 
-export type LogCategory = "usage" | "error" | "strategy" | "provider" | "system";
+export type LogCategory = "usage" | "error" | "strategy" | "provider" | "system" | "telegram";
 
 export type LogEvent = {
   timestamp: string;
