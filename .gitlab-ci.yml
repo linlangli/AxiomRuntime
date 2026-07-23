@@ -47,7 +47,7 @@ build_image:
   needs:
     - test
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "develop"'
       when: on_success
     - when: never
   script:
@@ -66,7 +66,7 @@ deploy_production:
     - test
     - build_image
   rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "develop"'
       when: on_success
     - when: never
   resource_group: agent-router-production
