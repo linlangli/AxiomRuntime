@@ -2304,6 +2304,17 @@ test("claude args include verbose stream-json output", () => {
   assert.equal(args.includes("--verbose"), true);
 });
 
+test("claude read-only binds the prompt before variadic allowed tools", () => {
+  const args = buildClaudeArgs({
+    prompt: "read-only prompt",
+    model: "claude-opus-4-6",
+    settingsPath: "/tmp/settings.json",
+    permissionMode: "readOnly"
+  });
+  assert.deepEqual(args.slice(0, 2), ["-p", "read-only prompt"]);
+  assert.deepEqual(args.slice(-2), ["--allowedTools", "Read,Grep,Glob,WebFetch,WebSearch"]);
+});
+
 test("codex args attach multiple images to the prompt", () => {
   const args = buildCodexArgs(
     "分析图片",
