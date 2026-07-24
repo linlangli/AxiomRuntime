@@ -10,7 +10,7 @@ variables:
   GIT_DEPTH: "0"
   NPM_CONFIG_FUND: "false"
   NPM_CONFIG_AUDIT: "false"
-  DEPLOY_PATH: "/opt/agent-router"
+  DEPLOY_PATH: "/opt/AxiomRuntime"
   CODEX_CLI_VERSION: "0.145.0"
   CLAUDE_CODE_VERSION: "2.1.129"
 
@@ -59,7 +59,7 @@ deploy_production:
   stage: deploy
   cache: []
   tags:
-    - agent-router-prod
+    - axiomruntime-prod
   before_script:
     - docker info >/dev/null
   needs:
@@ -69,7 +69,7 @@ deploy_production:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "develop"'
       when: on_success
     - when: never
-  resource_group: agent-router-production
+  resource_group: axiomruntime-production
   environment:
     name: production
   interruptible: false

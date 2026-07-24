@@ -1,8 +1,8 @@
-name: agent-router
+name: axiomruntime
 
 services:
-  router:
-    image: ${AI_GATEWAY_IMAGE:-agent-router:local}
+  runtime:
+    image: ${AI_GATEWAY_IMAGE:-axiomruntime:local}
     build:
       context: ..
       dockerfile: Dockerfile
@@ -17,14 +17,14 @@ services:
       AI_GATEWAY_AGENT_MAX_CONCURRENT_RUNS: ${AI_GATEWAY_AGENT_MAX_CONCURRENT_RUNS:-1}
       AI_GATEWAY_AGENT_TIMEOUT_MS: ${AI_GATEWAY_AGENT_TIMEOUT_MS:-600000}
     volumes:
-      - ${AI_GATEWAY_CONFIG_ROOT:-/opt/agent-router/config}:/var/lib/ai-gateway
-      - ${AI_GATEWAY_SECRETS_ROOT:-/opt/agent-router/secrets}/server-token:/run/secrets/server-token:ro
+      - ${AI_GATEWAY_CONFIG_ROOT:-/opt/AxiomRuntime/config}:/var/lib/ai-gateway
+      - ${AI_GATEWAY_SECRETS_ROOT:-/opt/AxiomRuntime/secrets}/server-token:/run/secrets/server-token:ro
     ports:
       - "127.0.0.1:${AI_GATEWAY_PORT:-8020}:8080"
     networks:
       ai-runtime:
         aliases:
-          - agent-router
+          - axiomruntime
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health/ready').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 10s
@@ -43,7 +43,7 @@ services:
     restart: unless-stopped
 
   telegram:
-    image: ${AI_GATEWAY_IMAGE:-agent-router:local}
+    image: ${AI_GATEWAY_IMAGE:-axiomruntime:local}
     build:
       context: ..
       dockerfile: Dockerfile
@@ -55,8 +55,8 @@ services:
       AI_GATEWAY_HOME: /var/lib/ai-gateway
       HOME: /var/lib/ai-gateway
     volumes:
-      - ${AI_GATEWAY_CONFIG_ROOT:-/opt/agent-router/config}:/var/lib/ai-gateway
-      - ${AI_GATEWAY_WORKSPACE_ROOT:-/opt/agent-router/workspaces}:/workspace
+      - ${AI_GATEWAY_CONFIG_ROOT:-/opt/AxiomRuntime/config}:/var/lib/ai-gateway
+      - ${AI_GATEWAY_WORKSPACE_ROOT:-/opt/AxiomRuntime/workspaces}:/workspace
     networks:
       - ai-runtime
     cpus: ${AI_GATEWAY_TELEGRAM_CPUS:-1.0}
