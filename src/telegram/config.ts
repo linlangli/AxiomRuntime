@@ -228,6 +228,25 @@ export async function saveBotConfig(name: string, config: TelegramConfig): Promi
   return normalized;
 }
 
+export async function updateBotConfig(name: string, patch: Partial<TelegramConfig>): Promise<TelegramConfig> {
+  const configPath = getTelegramBotConfigPath(name);
+  const defaults = getDefaultBotConfig(name);
+  await fs.mkdir(getTelegramBotDir(), { recursive: true });
+  const next = await updateJsonFile(configPath, defaults, (current) => {
+    const normalized = normalizeTelegramConfig({ ...normalizeTelegramConfig(current), ...patch });
+    if (normalized.dbPath === getTelegramDbPath()) {
+      normalized.dbPath = getTelegramBotDbPath(name);
+    }
+    return normalized;
+  });
+  try {
+    await fs.chmod(configPath, 0o600);
+  } catch {
+    // Best-effort on filesystems that may not support chmod.
+  }
+  return normalizeTelegramConfig(next);
+}
+
 function getDefaultBotConfig(name: string): TelegramConfig {
   return {
     token: "",

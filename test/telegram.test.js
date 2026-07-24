@@ -5,11 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  loadBotConfig,
+  loadTelegramConfig,
   normalizePermissionMode,
   normalizeTelegramConfig,
   parseTelegramConfigValue,
+  saveBotConfig,
   saveTelegramConfig,
-  setTelegramConfigValue
+  setTelegramConfigValue,
+  updateBotConfig
 } from "../dist/telegram/config.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
@@ -103,6 +107,43 @@ test("normalizes telegram config and parses config values", async () => {
     assert.equal(updated.defaultEngine, "claude");
     const publicConfig = await setTelegramConfigValue("allowAllUsers", "true");
     assert.equal(publicConfig.allowAllUsers, true);
+  });
+});
+
+test("named bot config updates preserve its access policy and stay isolated from global config", async () => {
+  await withTempHome(async (tempDir) => {
+    const globalConfig = normalizeTelegramConfig({
+      token: "global-token",
+      allowAllUsers: false,
+      allowedUserIds: [],
+      defaultCwd: tempDir,
+      dbPath: path.join(tempDir, "telegram.sqlite")
+    });
+    await saveTelegramConfig(globalConfig);
+
+    const botConfig = normalizeTelegramConfig({
+      token: "bot-token",
+      allowAllUsers: false,
+      allowedUserIds: [7476722078],
+      defaultCwd: tempDir,
+      dbPath: path.join(tempDir, "telegram", "bots", "isolated.sqlite")
+    });
+    await saveBotConfig("isolated", botConfig);
+
+    const updated = await updateBotConfig("isolated", {
+      provider: "kunkun",
+      model: "gpt-5.5",
+      defaultEngine: "codex"
+    });
+
+    assert.deepEqual(updated.allowedUserIds, [7476722078]);
+    assert.equal(updated.allowAllUsers, false);
+    assert.equal(updated.provider, "kunkun");
+    assert.equal(updated.model, "gpt-5.5");
+    assert.equal(updated.defaultEngine, "codex");
+    assert.deepEqual((await loadBotConfig("isolated")).allowedUserIds, [7476722078]);
+    assert.deepEqual((await loadTelegramConfig()).allowedUserIds, []);
+    assert.equal((await loadTelegramConfig()).provider, undefined);
   });
 });
 

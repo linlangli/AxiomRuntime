@@ -40,6 +40,7 @@ export type SetupDeps = {
   codexEngine?: Engine;
   engines?: Partial<TelegramEngineMap>;
   memoryService?: MemoryService;
+  updateConfig?: (patch: Partial<TelegramConfig>) => Promise<TelegramConfig>;
 };
 
 export async function startSetup(ctx: Context, deps: SetupDeps): Promise<void> {
@@ -525,7 +526,9 @@ function isGptLikeModel(model: string): boolean {
 }
 
 async function updateRuntimeTelegramConfig(deps: SetupDeps, patch: Partial<TelegramConfig>): Promise<void> {
-  const updated = await updateTelegramConfig(patch);
+  const updated = deps.updateConfig
+    ? await deps.updateConfig(patch)
+    : await updateTelegramConfig(patch);
   if (deps.config) {
     Object.assign(deps.config, updated);
   }

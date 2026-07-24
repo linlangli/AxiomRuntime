@@ -167,6 +167,8 @@ Provider callback 使用 `index + provider name fingerprint` 定位目标，并�
 
 **鉴权**：白名单制——只有 `allowedUserIds` 列表内的 Telegram user ID 可用；token 存 `~/.ai-gateway/telegram.json`（权限 600）；无远程配置，只能经本机 `ai telegram config` 改。
 
+命名 Bot 的配置更新必须写回自身 `telegram/bots/<name>.json`。Provider、model、engine 或 permission mode 的交互更新不得读取全局 `telegram.json` 后整体覆盖运行时配置，尤其不得改变当前 Bot 的 `allowedUserIds` / `allowAllUsers` 鉴权边界。
+
 **危险操作强制确认**：即使 `bypassPermissions`/`full-auto` 模式，以下仍发 inline button 确认（surface 层兜底，与 ⑧ Policy 的 `require confirmation` 呼应）：
 
 ```typescript

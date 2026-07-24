@@ -100,6 +100,7 @@ ai telegram stop
 
 - 配置保存在 `~/.ai-gateway/telegram.json`，会话保存在 `~/.ai-gateway/telegram.sqlite`。
 - 默认只允许 `allowedUserIds` 里的 Telegram 用户访问；如果要开放给所有用户，显式设置 `allowAllUsers: true`。
+- 多 Bot 配置彼此隔离；在 Bot 内选择 Provider、模型或权限模式时，只更新当前 Bot 的配置，不会从全局 `telegram.json` 覆盖该 Bot 的访问白名单。
 - Telegram 远程执行 Claude Code/Codex 时复用 AI Gateway 顶层 provider；可通过 `provider` 和 `model` 配置固定 provider/model，不配置则按 `ai use` 同样的优先级自动选择。
 - 首次 `/start` 或执行 `/reset` 会进入初始化流程：先选择 Provider/Model，再选择工作路径并自动确定 Claude Code/Codex。
 - 工作路径步骤直接以按钮列出最多 8 个历史绝对路径，并在末尾提供“自定义”，不再先点击“已存在”。自定义路径固定创建或复用 `~/输入名称`。

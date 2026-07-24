@@ -1,5 +1,5 @@
 import { Bot } from "grammy";
-import { loadBotConfig, loadTelegramConfig, type TelegramConfig } from "./config.js";
+import { loadBotConfig, loadTelegramConfig, updateBotConfig, updateTelegramConfig, type TelegramConfig } from "./config.js";
 import { createTelegramEngines, type TelegramEngineMap } from "./engine/registry.js";
 import { registerCallbackHandler } from "./handlers/callback.js";
 import { registerCommands } from "./handlers/command.js";
@@ -106,7 +106,10 @@ export async function createBot(botName?: string): Promise<TelegramRuntime> {
     approvalManager,
     config,
     engines,
-    memoryService
+    memoryService,
+    updateConfig: (patch: Partial<TelegramConfig>) => botName
+      ? updateBotConfig(botName, patch)
+      : updateTelegramConfig(patch)
   };
   registerBuiltInTelegramHandlers();
   installTelegramHandlers(bot, deps);
