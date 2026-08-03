@@ -61,6 +61,9 @@ function sanitizeArgs(command: string | undefined, args: string[]): string[] {
   if (command === "memory" && (args[0] === "embedding" || args[0] === "vector") && (args[1] === "set" || args[1] === "edit")) {
     return maskMemoryEmbeddingSetArgs(args);
   }
+  if (command === "telegram") {
+    return maskTelegramConfigSecretArgs(args);
+  }
   return args.map((arg, index) => {
     const previous = args[index - 1]?.toLowerCase();
     if (previous === "--api-key" || previous === "--apikey" || previous === "--key") {
@@ -68,6 +71,28 @@ function sanitizeArgs(command: string | undefined, args: string[]): string[] {
     }
     return arg;
   });
+}
+
+function maskTelegramConfigSecretArgs(args: string[]): string[] {
+  const masked = [...args];
+  let state: "config" | "set" | "token" | "done" = "config";
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--bot") {
+      index += 1;
+      continue;
+    }
+    if (arg === "--all" || arg.startsWith("--bot=")) continue;
+    if (state === "config" && arg === "config") { state = "set"; continue; }
+    if (state === "set" && arg === "set") { state = "token"; continue; }
+    if (state === "token" && arg === "token") { state = "done"; continue; }
+    if (state === "done") {
+      masked[index] = maskSecretArg(arg);
+      break;
+    }
+  }
+  return masked;
 }
 
 function maskMemoryEmbeddingSetArgs(args: string[]): string[] {

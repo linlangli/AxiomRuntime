@@ -71,34 +71,51 @@ ai use codex 51talk gpt-5.5
 
 ## Telegram Bot
 
-配置：
+多 Bot 管理统一使用 `--bot <name>` 指定目标：
 
 ```bash
-ai telegram config
-ai telegram config show
-ai telegram config set token <bot-token>
-ai telegram config set allowAllUsers true
-ai telegram config set allowedUserIds 123456789,987654321
-ai telegram config set defaultEngine claude
-ai telegram config set defaultPermissionMode bypassPermissions
-ai telegram config set defaultCwd /path/to/project
-ai telegram config set proxyUrl http://127.0.0.1:7890
+ai telegram                 # 交互选择操作，再选择目标 Bot
+ai telegram --bot ops       # 预选 ops，再进入交互菜单
+ai telegram add ops
+ai telegram add support
+ai telegram list
+
+ai telegram config show --bot ops
+ai telegram config set token <bot-token> --bot ops
+ai telegram config set allowedUserIds 123456789,987654321 --bot ops
+ai telegram config set defaultEngine codex --bot ops
+ai telegram config set defaultCwd /workspace/ops --bot ops
+ai telegram edit --bot ops
 ```
 
-启动和管理：
+针对指定 Bot 启动、停止、检查、查看日志或删除：
 
 ```bash
-ai telegram start
-ai telegram status
-ai telegram logs
-ai telegram logs -f
-ai telegram doctor
-ai telegram stop
+ai telegram start --bot ops
+ai telegram stop --bot ops
+ai telegram status --bot ops
+ai telegram logs --bot ops
+ai telegram logs --bot ops -f
+ai telegram doctor --bot ops
+ai telegram delete --bot ops
+```
+
+批量启动、停止或查看全部命名 Bot：
+
+```bash
+ai telegram start --all
+ai telegram stop --all
+ai telegram status --all
 ```
 
 说明：
 
-- 配置保存在 `~/.ai-gateway/telegram.json`，会话保存在 `~/.ai-gateway/telegram.sqlite`。
+- `--bot=<name>` 与 `--bot <name>` 等价。旧位置参数写法（例如 `ai telegram start ops`、`ai telegram config ops`、`ai telegram remove ops`）继续兼容；推荐新脚本使用显式 `--bot`。
+- 裸 `ai telegram` 会先选择操作，再列出可操作的 Bot；启动、停止和状态菜单还提供 `all bots`，删除菜单会要求二次确认。带 `--bot` 进入交互菜单时会跳过第二次 Bot 选择。
+- `edit` 是命名 Bot 的交互式编辑入口；`delete` 会先停止目标 Bot，再删除该 Bot 的 config、PID、log 和 SQLite 文件。旧 `remove` 仍是 `delete` 的兼容别名。
+- `config set ... --bot <name>` 只写目标 Bot 的配置，不改全局配置或其他 Bot；命令日志和终端输出会脱敏 `token`。
+- 命名 Bot 配置、PID、日志和会话分别保存在 `~/.ai-gateway/telegram/bots/<name>.json|.pid|.log|.sqlite`。未指定 `--bot` 的 legacy 配置继续使用 `~/.ai-gateway/telegram.json` 和 `telegram.sqlite`。
+- 为保持兼容，存在命名 Bot 时，不带目标的 `start`、`stop`、`status` 仍作用于全部命名 Bot；自动化脚本应显式使用 `--bot` 或 `--all`。
 - 默认只允许 `allowedUserIds` 里的 Telegram 用户访问；如果要开放给所有用户，显式设置 `allowAllUsers: true`。
 - 多 Bot 配置彼此隔离；在 Bot 内选择 Provider、模型或权限模式时，只更新当前 Bot 的配置，不会从全局 `telegram.json` 覆盖该 Bot 的访问白名单。
 - Telegram 远程执行 Claude Code/Codex 时复用 AI Gateway 顶层 provider；可通过 `provider` 和 `model` 配置固定 provider/model，不配置则按 `ai use` 同样的优先级自动选择。

@@ -894,6 +894,9 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - `ai doctor` prints a diagnostic report without consuming tokens by default.
 - `ai use claude` and `ai use codex` start the matching CLI with the default provider/model.
 - `ai use codex` pins a process-scoped Codex model provider to the Runtime-selected base URL and injected API key without modifying global Codex auth/config state.
+- `ai telegram edit|delete|start|stop|status|config|logs|doctor --bot <name>` targets only the named Telegram Bot; `start|stop|status --all` is the explicit bulk form, while legacy positional forms remain compatible.
+- Interactive `ai telegram` selects an action and then a named Bot; lifecycle actions also offer `all bots`, scoped `--bot` interaction skips the second selector, and interactive deletion requires confirmation without deleting files when graceful stop times out.
+- `ai telegram config set <key> <value> --bot <name>` updates only `telegram/bots/<name>.json`, and Telegram token values never appear in command logs or terminal config output.
 - Unavailable providers trigger automatic fallback.
 - Manual changes to `providers.json` are recognized on the next command run.
 

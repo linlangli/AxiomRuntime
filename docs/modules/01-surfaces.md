@@ -90,7 +90,7 @@ Surfaces **无持久数据所有权**。会话真相属 ② Orchestration 的 Wo
 ## A. 设计原则
 
 1. **仓库内集成**——Bot 代码在 `src/telegram/`，与 `src/core/`、`src/cli/` 平级。
-2. **CLI 管理**——`ai telegram start|stop|status|config` 控制生命周期。
+2. **CLI 管理**——`ai telegram <action> --bot <name>` 对单个命名 Bot 执行 `edit/delete/start/stop/status/config/logs/doctor`；`start/stop/status --all` 显式执行批量生命周期操作。旧位置参数保持兼容。
 3. **能力完整**——100% 覆盖 Claude Code 与 Codex CLI 的工具调用、权限模式、会话管理。
 4. **交互映射**——所有 CLI 交互（权限确认、模式切换）映射为 Telegram inline button。
 5. **美观输出**——格式化模板，支持代码块、diff、进度指示、折叠长输出。
@@ -138,13 +138,20 @@ export interface ExecutionResult {
 ## C. CLI 生命周期命令
 
 ```bash
-ai telegram start          # 启动 Bot（后台 daemon，fork 子进程）
-ai telegram stop           # 停止
-ai telegram status         # 运行状态
-ai telegram config         # 交互式配置（token、白名单）
-ai telegram config set <key> <value>
-ai telegram logs [-f]      # 日志（最近 50 行 / 实时跟踪）
+ai telegram add <name>                              # 创建命名 Bot
+ai telegram list                                    # 列出 Bot 与运行状态
+ai telegram edit --bot <name>                       # 交互式编辑指定 Bot
+ai telegram config show --bot <name>                # 查看指定 Bot 配置
+ai telegram config set <key> <value> --bot <name>   # 只更新指定 Bot
+ai telegram start|stop|status --bot <name>          # 单 Bot 生命周期
+ai telegram logs|doctor --bot <name>                # 单 Bot 诊断
+ai telegram delete --bot <name>                     # 停止并删除指定 Bot 文件
+ai telegram start|stop|status --all                 # 显式批量操作
 ```
+
+命名 Bot 的 selector 是配置文件名中的 canonical `name`，格式为小写 `a-z0-9_-`、最长 32 字符。`--bot=<name>` 与 `--bot <name>` 等价；旧 `start <name>`、`config <name>`、`remove <name>` 继续兼容。命名 Bot 的 config/PID/log/SQLite 固定落在 `telegram/bots/<name>.*`，任何带 `--bot` 的 mutation 禁止回退到 legacy `telegram.json`。为兼容已有脚本，存在命名 Bot 时，无目标 `start/stop/status` 仍表示全部命名 Bot，但新脚本必须显式使用 `--bot` 或 `--all`。
+
+交互式 `ai telegram` 必须在选定 action 后展示第二层 Bot selector；`edit/delete/logs/doctor/config` 选择单 Bot，`start/stop/status` 额外提供 `all bots`。`ai telegram --bot <name>` 预绑定目标并跳过第二层 selector；legacy global config 仍由直接 `ai telegram config` 管理。交互删除必须二次确认；若停止在 5 秒内未完成，必须保留 config/PID/log/SQLite 并报错，不得留下仍运行但已失去管理文件的 Bot。
 
 Setup 引导：`/start → model(Provider/Model) → workdir(+/init) → agent_profile(画像) → ready`。`workdir` 步骤直接把最近记录的绝对路径渲染为 inline button，末尾提供“自定义”，不再经过“已存在”二级入口。同一 chat 任务经 `SessionManager.runExclusive()` 串行执行，避免并发写同一 session。
 
@@ -165,7 +172,7 @@ Provider callback 使用 `index + provider name fingerprint` 定位目标，并�
 
 ## D. 安全设计（surface 边缘鉴权）
 
-**鉴权**：白名单制——只有 `allowedUserIds` 列表内的 Telegram user ID 可用；token 存 `~/.ai-gateway/telegram.json`（权限 600）；无远程配置，只能经本机 `ai telegram config` 改。
+**鉴权**：白名单制——只有 `allowedUserIds` 列表内的 Telegram user ID 可用；legacy token 存 `~/.ai-gateway/telegram.json`，命名 Bot token 存 `~/.ai-gateway/telegram/bots/<name>.json`（权限 600）；无远程配置，只能经本机 `ai telegram config` 改。CLI 的 command log 与终端配置输出必须脱敏 token。
 
 命名 Bot 的配置更新必须写回自身 `telegram/bots/<name>.json`。Provider、model、engine 或 permission mode 的交互更新不得读取全局 `telegram.json` 后整体覆盖运行时配置，尤其不得改变当前 Bot 的 `allowedUserIds` / `allowAllUsers` 鉴权边界。
 
@@ -1436,7 +1443,7 @@ ai-gateway/
 │   ├── cli/
 │   │   ├── index.ts              # 新增 "telegram" case
 │   │   └── commands/
-│   │       └── telegram.ts       # ai telegram start|stop|status|config
+│   │       └── telegram.ts       # ai telegram 多 Bot target + lifecycle/config
 │   ├── core/                     # 现有核心逻辑（不动）
 │   └── telegram/                 # 【新增】Telegram Bot 模块
 │       ├── index.ts              # Bot 入口（可独立进程运行）
@@ -1506,7 +1513,7 @@ case "telegram":
 6. `telegram/interaction/approval.ts` — 权限请求 → inline button
 7. `telegram/handlers/callback.ts` — 按钮回调处理
 8. `telegram/templates/messages.ts` — 格式化输出
-9. `src/cli/commands/telegram.ts` — `ai telegram start|stop|status`
+9. `src/cli/commands/telegram.ts` — `ai telegram` 交互式多 Bot selector、`--bot` 单目标与 `--all` 批量生命周期
 10. 接入 CLI 入口
 
 ### Phase 2 — 引擎与会话

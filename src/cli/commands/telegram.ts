@@ -16,6 +16,7 @@ import {
   loadTelegramConfig,
   saveBotConfig,
   saveTelegramConfig,
+  setBotConfigValue,
   setTelegramConfigValue,
   type TelegramConfig,
   type TelegramEngineName,
@@ -31,69 +32,186 @@ import {
 } from "../../telegram/bot-registry.js";
 import { ensureTelegramLogFile, readRecentTelegramLogLines } from "../../telegram/log.js";
 import { checkTelegramApi, getTelegramProxyUrl } from "../../telegram/network.js";
-import { promptSelect, promptText } from "../prompts/prompt.js";
+import { promptConfirm, promptSelect, promptText } from "../prompts/prompt.js";
 
 type TelegramSubcommand = "start" | "stop" | "status" | "config" | "logs" | "doctor"
-  | "add" | "remove" | "list";
+  | "add" | "edit" | "remove" | "delete" | "list";
+
+export type TelegramTargetArgs = {
+  args: string[];
+  botName?: string;
+  all: boolean;
+};
 
 export async function runTelegramCommand(args: string[]): Promise<void> {
-  const [subcommand, ...rest] = args;
+  const target = parseTelegramTargetArgs(args);
+  const [subcommand, ...rest] = target.args;
   switch (subcommand as TelegramSubcommand | undefined) {
     case undefined:
-      await runTelegramInteractive();
+      await runTelegramInteractive(target.botName, target.all);
       return;
     case "add":
-      await addBot(rest[0]);
+      assertNotAll(target, "add");
+      await addBot(resolveBotName(target.botName, rest[0], "add"));
       return;
+    case "edit":
+      assertNotAll(target, "edit");
+      await editNamedBot(resolveBotName(target.botName, rest[0], "edit") ?? await selectNamedBot("Edit bot"));
+      return;
+    case "delete":
     case "remove":
-      await removeBot(rest[0]);
+      assertNotAll(target, subcommand);
+      {
+        const explicitName = resolveBotName(target.botName, rest[0], subcommand);
+        const name = explicitName ?? await selectNamedBot(`${subcommand === "delete" ? "Delete" : "Remove"} bot`);
+        if (!explicitName && !await promptConfirm(`Delete bot "${name}" and its config, PID, log, and session database?`)) {
+          console.log("Delete cancelled.");
+          return;
+        }
+        await removeBot(name);
+      }
       return;
     case "list":
+      assertUntargeted(target, "list");
       await listAllBots();
       return;
     case "start":
-      await startTelegramBot(rest[0]);
+      await startTelegramBot(resolveLifecycleTarget(target, rest[0], "start"));
       return;
     case "stop":
-      await stopTelegramBot(rest[0]);
+      await stopTelegramBot(resolveLifecycleTarget(target, rest[0], "stop"));
       return;
     case "status":
-      await showTelegramStatus(rest[0]);
+      await showTelegramStatus(resolveLifecycleTarget(target, rest[0], "status"));
       return;
     case "config":
-      await runTelegramConfigCommand(rest);
+      assertNotAll(target, "config");
+      await runTelegramConfigCommand(rest, target.botName);
       return;
     case "logs":
-      await showTelegramLogs(rest);
+      assertNotAll(target, "logs");
+      await showTelegramLogs(rest, target.botName);
       return;
     case "doctor":
-      await runTelegramDoctor(rest[0]);
+      assertNotAll(target, "doctor");
+      await runTelegramDoctor(resolveBotName(target.botName, rest[0], "doctor"));
       return;
     default:
       throw new Error(`Unknown telegram command: ${subcommand}`);
   }
 }
 
-async function runTelegramInteractive(): Promise<void> {
-  const command = await promptSelect("Telegram", [
-    { label: "add", value: "add" },
+export function parseTelegramTargetArgs(args: string[]): TelegramTargetArgs {
+  const remaining: string[] = [];
+  let botName: string | undefined;
+  let all = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--all") {
+      all = true;
+      continue;
+    }
+    if (arg === "--bot") {
+      const value = args[index + 1]?.trim();
+      if (!value || value.startsWith("--")) throw new Error("Usage: --bot <name>");
+      if (botName && botName !== value) throw new Error(`Conflicting bot targets: "${botName}" and "${value}".`);
+      botName = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--bot=")) {
+      const value = arg.slice("--bot=".length).trim();
+      if (!value) throw new Error("Usage: --bot=<name>");
+      if (botName && botName !== value) throw new Error(`Conflicting bot targets: "${botName}" and "${value}".`);
+      botName = value;
+      continue;
+    }
+    remaining.push(arg);
+  }
+
+  if (botName && !isValidBotName(botName)) {
+    throw new Error(`Invalid bot name: "${botName}". Use lowercase letters, digits, hyphens, underscores (max 32 chars).`);
+  }
+  if (botName && all) throw new Error("Use either --bot <name> or --all, not both.");
+  return { args: remaining, ...(botName ? { botName } : {}), all };
+}
+
+async function runTelegramInteractive(botName?: string, all = false): Promise<void> {
+  const choices: Array<{ label: string; value: string }> = [
+    ...(!botName && !all ? [{ label: "add", value: "add" }] : []),
     { label: "list", value: "list" },
+    ...(!all ? [
+      { label: "edit", value: "edit" },
+      { label: "delete", value: "delete" }
+    ] : []),
     { label: "start", value: "start" },
     { label: "stop", value: "stop" },
     { label: "status", value: "status" },
-    { label: "config", value: "config" },
-    { label: "logs", value: "logs" },
-    { label: "doctor", value: "doctor" },
+    ...(!all ? [
+      { label: "config", value: "config" },
+      { label: "logs", value: "logs" },
+      { label: "doctor", value: "doctor" }
+    ] : []),
     { label: "exit", value: "exit" }
-  ]);
-  if (command === "add") await addBot();
+  ];
+  const command = await promptSelect("Telegram", choices);
+  if (command === "add") { assertNotAll({ all }, "add"); await addBot(botName); }
   if (command === "list") await listAllBots();
-  if (command === "start") await startTelegramBot();
-  if (command === "stop") await stopTelegramBot();
-  if (command === "status") await showTelegramStatus();
-  if (command === "config") await runTelegramConfigCommand([]);
-  if (command === "logs") await showTelegramLogs([]);
-  if (command === "doctor") await runTelegramDoctor();
+  if (command === "edit") {
+    assertNotAll({ all }, "edit");
+    await editNamedBot(botName ?? await selectNamedBot("Edit bot"));
+  }
+  if (command === "delete") {
+    assertNotAll({ all }, "delete");
+    const name = botName ?? await selectNamedBot("Delete bot");
+    const confirmed = await promptConfirm(`Delete bot "${name}" and its config, PID, log, and session database?`);
+    if (confirmed) await removeBot(name);
+    else console.log("Delete cancelled.");
+  }
+  if (command === "start") await startTelegramBot(await selectLifecycleBot("Start bot", botName, all));
+  if (command === "stop") await stopTelegramBot(await selectLifecycleBot("Stop bot", botName, all));
+  if (command === "status") await showTelegramStatus(await selectLifecycleBot("Show bot status", botName, all));
+  if (command === "config") {
+    assertNotAll({ all }, "config");
+    await runTelegramConfigCommand([], botName ?? await selectOptionalBot("Edit config"));
+  }
+  if (command === "logs") {
+    assertNotAll({ all }, "logs");
+    await showTelegramLogs([], botName ?? await selectOptionalBot("Show logs"));
+  }
+  if (command === "doctor") {
+    assertNotAll({ all }, "doctor");
+    await runTelegramDoctor(botName ?? await selectOptionalBot("Diagnose bot"));
+  }
+}
+
+async function selectNamedBot(message: string): Promise<string> {
+  await migrateLegacyConfig();
+  const bots = listBots();
+  if (!bots.length) throw new Error("No bots configured. Add one with: ai telegram add <name>");
+  return promptSelect(message, bots.map((bot) => ({ label: bot.name, value: bot.name })));
+}
+
+async function selectOptionalBot(message: string): Promise<string | undefined> {
+  await migrateLegacyConfig();
+  const bots = listBots();
+  if (!bots.length) return undefined;
+  return promptSelect(message, bots.map((bot) => ({ label: bot.name, value: bot.name })));
+}
+
+async function selectLifecycleBot(message: string, botName?: string, all = false): Promise<string | undefined> {
+  if (botName) return botName;
+  if (all) return undefined;
+  await migrateLegacyConfig();
+  const bots = listBots();
+  if (!bots.length) return undefined;
+  const allTarget = "__all__";
+  const selected = await promptSelect(message, [
+    ...bots.map((bot) => ({ label: bot.name, value: bot.name })),
+    { label: "all bots", value: allTarget }
+  ]);
+  return selected === allTarget ? undefined : selected;
 }
 
 async function addBot(nameArg?: string): Promise<void> {
@@ -122,13 +240,14 @@ async function addBot(nameArg?: string): Promise<void> {
   console.log(`Bot "${name}" added. Start with: ai telegram start ${name}`);
 }
 
-async function removeBot(nameArg?: string): Promise<void> {
-  const name = requireBotName(nameArg, "remove");
+async function removeBot(name: string): Promise<void> {
   if (!botExists(name)) throw new Error(`Bot "${name}" does not exist.`);
   const { running, pid } = isBotRunning(name);
   if (running && pid) {
     process.kill(pid, "SIGTERM");
-    await waitForStop(pid, 5000);
+    if (!await waitForStop(pid, 5000)) {
+      throw new Error(`Bot "${name}" did not stop within 5 seconds; its files were kept.`);
+    }
     console.log(`Stopped bot "${name}".`);
   }
   await removeBotFiles(name);
@@ -249,6 +368,7 @@ async function stopTelegramBot(nameArg?: string): Promise<void> {
 }
 
 async function stopNamedBot(name: string): Promise<boolean> {
+  if (!botExists(name)) throw new Error(`Bot "${name}" does not exist.${availableBotsHint()}`);
   const { running, pid } = isBotRunning(name);
   if (!running) {
     if (pid) await removePidFile(getTelegramBotPidPath(name));
@@ -256,7 +376,9 @@ async function stopNamedBot(name: string): Promise<boolean> {
     return false;
   }
   process.kill(pid!, "SIGTERM");
-  await waitForStop(pid!, 5000);
+  if (!await waitForStop(pid!, 5000)) {
+    throw new Error(`Bot "${name}" did not stop within 5 seconds; its PID file was kept.`);
+  }
   await removePidFile(getTelegramBotPidPath(name));
   console.log(`Bot "${name}" stopped.`);
   return true;
@@ -271,7 +393,9 @@ async function stopLegacyBot(): Promise<void> {
     return;
   }
   process.kill(pid, "SIGTERM");
-  await waitForStop(pid, 5000);
+  if (!await waitForStop(pid, 5000)) {
+    throw new Error("Telegram bot did not stop within 5 seconds; its PID file was kept.");
+  }
   await removePidFile(getTelegramPidPath());
   console.log("Telegram bot stopped.");
 }
@@ -291,7 +415,7 @@ async function showTelegramStatus(nameArg?: string): Promise<void> {
 }
 
 async function showNamedBotStatus(name: string): Promise<void> {
-  if (!botExists(name)) { console.log(`Bot "${name}" does not exist.`); return; }
+  if (!botExists(name)) throw new Error(`Bot "${name}" does not exist.${availableBotsHint()}`);
   const config = await loadBotConfig(name);
   const { running, pid } = isBotRunning(name);
   console.log(`\n[${name}] ${running ? "running" : "stopped"}${pid ? ` (PID: ${pid})` : ""}`);
@@ -312,28 +436,39 @@ async function showLegacyStatus(): Promise<void> {
   console.log(`Default: ${config.defaultEngine} / ${config.defaultPermissionMode} / ${config.defaultCwd}`);
 }
 
-async function runTelegramConfigCommand(args: string[]): Promise<void> {
+async function runTelegramConfigCommand(args: string[], optionBotName?: string): Promise<void> {
   const [nameOrAction, ...rest] = args;
   if (nameOrAction === "set") {
     const [key, ...valueParts] = rest;
-    if (!key || !valueParts.length) throw new Error("Usage: ai telegram config set <key> <value>");
-    const config = await setTelegramConfigValue(key, valueParts.join(" "));
-    console.log(`Updated telegram config: ${key}`);
-    printTelegramConfig(config);
+    if (!key || !valueParts.length) throw new Error("Usage: ai telegram config set <key> <value> [--bot <name>]");
+    const config = optionBotName
+      ? await setNamedBotConfigValue(optionBotName, key, valueParts.join(" "))
+      : await setTelegramConfigValue(key, valueParts.join(" "));
+    console.log(`Updated ${optionBotName ? `bot "${optionBotName}"` : "telegram"} config: ${key}`);
+    printTelegramConfig(config, optionBotName);
     return;
   }
   if (nameOrAction === "show") {
-    printTelegramConfig(await loadTelegramConfig());
+    if (optionBotName) assertBotExists(optionBotName);
+    printTelegramConfig(optionBotName ? await loadBotConfig(optionBotName) : await loadTelegramConfig(), optionBotName);
     return;
   }
-  if (nameOrAction && botExists(nameOrAction)) {
-    await editBotConfigInteractive(nameOrAction);
+  const targetName = resolveBotName(optionBotName, nameOrAction, "config");
+  if (targetName) {
+    await editNamedBot(targetName);
     return;
-  }
-  if (nameOrAction) {
-    throw new Error(`Unknown config target: ${nameOrAction}. Use a bot name or "set"/"show".`);
   }
   await editTelegramConfigInteractive();
+}
+
+async function editNamedBot(name: string): Promise<void> {
+  assertBotExists(name);
+  await editBotConfigInteractive(name);
+}
+
+async function setNamedBotConfigValue(name: string, key: string, value: string): Promise<TelegramConfig> {
+  assertBotExists(name);
+  return setBotConfigValue(name, key, value);
 }
 
 async function editBotConfigInteractive(name: string): Promise<void> {
@@ -347,8 +482,12 @@ async function editBotConfigInteractive(name: string): Promise<void> {
       { label: "allowedUserIds", value: "allowedUserIds" },
       { label: "defaultEngine", value: "defaultEngine" },
       { label: "defaultCwd", value: "defaultCwd" },
+      { label: "defaultPermissionMode", value: "defaultPermissionMode" },
+      { label: "sessionTimeoutHours", value: "sessionTimeoutHours" },
+      { label: "maxOutputLength", value: "maxOutputLength" },
       { label: "provider", value: "provider" },
       { label: "model", value: "model" },
+      { label: "proxyUrl", value: "proxyUrl" },
       { label: "done", value: "done" }
     ]);
     if (field === "done") return;
@@ -360,10 +499,21 @@ async function editBotConfigInteractive(name: string): Promise<void> {
       config = await saveBotConfig(name, { ...config, defaultEngine: engine });
       continue;
     }
+    if (field === "defaultPermissionMode") {
+      const defaultPermissionMode = await promptSelect<TelegramPermissionMode>("Default permission mode", [
+        { label: "bypassPermissions", value: "bypassPermissions" },
+        { label: "acceptEdits", value: "acceptEdits" },
+        { label: "default", value: "default" },
+        { label: "readOnly", value: "readOnly" }
+      ]);
+      config = await saveBotConfig(name, { ...config, defaultPermissionMode });
+      continue;
+    }
     const current = String(config[field as keyof TelegramConfig] ?? "");
-    const value = await promptText(field, { defaultValue: current });
-    const patched = { ...config, [field]: value } as unknown as TelegramConfig;
-    config = await saveBotConfig(name, patched);
+    const value = field === "token"
+      ? await promptText("token (leave empty to keep current)") || current
+      : await promptText(field, { defaultValue: current });
+    config = await setBotConfigValue(name, field, value);
   }
 }
 
@@ -405,15 +555,16 @@ async function editTelegramConfigInteractive(): Promise<void> {
       continue;
     }
     const current = String(config[field as keyof TelegramConfig] ?? "");
-    const value = await promptText(field, { defaultValue: current });
+    const value = field === "token"
+      ? await promptText("token (leave empty to keep current)") || current
+      : await promptText(field, { defaultValue: current });
     config = await setTelegramConfigValue(field, value);
   }
 }
 
 async function runTelegramDoctor(nameArg?: string): Promise<void> {
-  const config = nameArg && botExists(nameArg)
-    ? await loadBotConfig(nameArg)
-    : await loadTelegramConfig();
+  if (nameArg) assertBotExists(nameArg);
+  const config = nameArg ? await loadBotConfig(nameArg) : await loadTelegramConfig();
   if (!config.token) throw new Error("Telegram token is not configured.");
   const proxyUrl = getTelegramProxyUrl(config);
   console.log(`Telegram API: checking getMe${proxyUrl ? ` via ${proxyUrl}` : ""}...`);
@@ -426,13 +577,15 @@ async function runTelegramDoctor(nameArg?: string): Promise<void> {
   console.log(result.error ?? "Unknown error");
 }
 
-async function showTelegramLogs(args: string[]): Promise<void> {
+async function showTelegramLogs(args: string[], optionBotName?: string): Promise<void> {
   const follow = args.includes("-f") || args.includes("--follow");
-  const nameArg = args.find((a) => !a.startsWith("-") && !/^\d+$/.test(a));
+  const positionalName = args.find((a) => !a.startsWith("-") && !/^\d+$/.test(a));
+  const nameArg = resolveBotName(optionBotName, positionalName, "logs");
   const limitArg = args.find((arg) => /^\d+$/.test(arg));
   const limit = limitArg ? Number(limitArg) : 50;
 
-  if (nameArg && botExists(nameArg)) {
+  if (nameArg) {
+    assertBotExists(nameArg);
     const logPath = getTelegramBotLogPath(nameArg);
     await showLogFile(logPath, limit, follow);
     return;
@@ -460,14 +613,39 @@ async function showLogFile(filePath: string, limit: number, follow: boolean): Pr
   if (follow) await followLogFile(filePath);
 }
 
-function printTelegramConfig(config: TelegramConfig): void {
-  console.log(`Telegram config: ${getTelegramConfigPath()}`);
+function printTelegramConfig(config: TelegramConfig, botName?: string): void {
+  console.log(`${botName ? `Telegram bot "${botName}"` : "Telegram"} config: ${botName ? getTelegramBotConfigPath(botName) : getTelegramConfigPath()}`);
   for (const line of describeTelegramConfig(config)) console.log(line);
 }
 
-function requireBotName(name: string | undefined, command: string): string {
-  if (!name?.trim()) throw new Error(`Usage: ai telegram ${command} <name>`);
-  return name.trim();
+function resolveBotName(optionName: string | undefined, positionalName: string | undefined, command: string): string | undefined {
+  const positional = positionalName?.trim() || undefined;
+  if (optionName && positional && optionName !== positional) {
+    throw new Error(`Conflicting bot targets for ${command}: "${optionName}" and "${positional}".`);
+  }
+  return optionName ?? positional;
+}
+
+function resolveLifecycleTarget(target: TelegramTargetArgs, positionalName: string | undefined, command: string): string | undefined {
+  if (target.all && positionalName) throw new Error(`Use either a bot name or --all for ${command}, not both.`);
+  return target.all ? undefined : resolveBotName(target.botName, positionalName, command);
+}
+
+function assertNotAll(target: Pick<TelegramTargetArgs, "all">, command: string): void {
+  if (target.all) throw new Error(`ai telegram ${command} does not support --all.`);
+}
+
+function assertUntargeted(target: Pick<TelegramTargetArgs, "botName" | "all">, command: string): void {
+  if (target.botName || target.all) throw new Error(`ai telegram ${command} does not accept a bot target.`);
+}
+
+function assertBotExists(name: string): void {
+  if (!botExists(name)) throw new Error(`Bot "${name}" does not exist.${availableBotsHint()}`);
+}
+
+function availableBotsHint(): string {
+  const names = listBots().map((bot) => bot.name);
+  return names.length ? ` Available bots: ${names.join(", ")}.` : " Add one with: ai telegram add <name>.";
 }
 
 async function readPid(pidPath: string): Promise<number | null> {
@@ -496,12 +674,13 @@ function isProcessRunning(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-async function waitForStop(pid: number, timeoutMs: number): Promise<void> {
+async function waitForStop(pid: number, timeoutMs: number): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (!isProcessRunning(pid)) return;
+    if (!isProcessRunning(pid)) return true;
     await new Promise((r) => setTimeout(r, 100));
   }
+  return !isProcessRunning(pid);
 }
 
 function resolveTelegramEntryPath(): string {

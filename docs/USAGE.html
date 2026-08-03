@@ -543,8 +543,8 @@
               </tr>
               <tr data-search="telegram bot start stop status config logs claude codex remote">
                 <td><span class="group-label">Telegram</span></td>
-                <td><code class="cmd">ai telegram config</code><br /><code class="cmd">ai telegram start</code><br /><code class="cmd">ai telegram status</code><br /><code class="cmd">ai telegram logs -f</code><br /><code class="cmd">ai telegram stop</code></td>
-                <td>配置并管理远程控制 Claude Code/Codex 的 Telegram Bot。</td>
+                <td><code class="cmd">ai telegram</code><br /><code class="cmd">ai telegram list</code><br /><code class="cmd">ai telegram edit --bot ops</code><br /><code class="cmd">ai telegram start --bot ops</code><br /><code class="cmd">ai telegram status --all</code></td>
+                <td>交互式或按 <code>--bot</code> 精确配置并管理多个 Telegram Bot。</td>
                 <td>复用顶层 provider。</td>
               </tr>
               <tr data-search="status health provider model token usage">
@@ -656,23 +656,36 @@ ai provider list</pre>
             <details open>
               <summary>配置和进程管理</summary>
               <div class="detail-body">
-                <pre>ai telegram config
-ai telegram config show
-ai telegram config set token &lt;bot-token&gt;
-ai telegram config set allowAllUsers true
-ai telegram config set allowedUserIds 123456789,987654321
-ai telegram config set defaultEngine claude
-ai telegram config set defaultPermissionMode bypassPermissions
-ai telegram config set defaultCwd /path/to/project
-ai telegram config set proxyUrl http://127.0.0.1:7890
-ai telegram start
-ai telegram status
-ai telegram logs
-ai telegram logs -f
-ai telegram doctor
-ai telegram stop</pre>
+                <pre>ai telegram                 # 交互选择操作，再选择目标 Bot
+ai telegram --bot ops       # 预选 ops，再进入交互菜单
+ai telegram add ops
+ai telegram add support
+ai telegram list
+
+ai telegram config show --bot ops
+ai telegram config set token &lt;bot-token&gt; --bot ops
+ai telegram config set allowedUserIds 123456789,987654321 --bot ops
+ai telegram config set defaultEngine codex --bot ops
+ai telegram config set defaultCwd /workspace/ops --bot ops
+ai telegram edit --bot ops
+
+ai telegram start --bot ops
+ai telegram stop --bot ops
+ai telegram status --bot ops
+ai telegram logs --bot ops -f
+ai telegram doctor --bot ops
+ai telegram delete --bot ops
+
+ai telegram start --all
+ai telegram stop --all
+ai telegram status --all</pre>
                 <ul>
-                  <li>配置保存在 <code>~/.ai-gateway/telegram.json</code>，会话保存在 <code>~/.ai-gateway/telegram.sqlite</code>。</li>
+                  <li><code>--bot=&lt;name&gt;</code> 与 <code>--bot &lt;name&gt;</code> 等价。旧位置参数写法继续兼容；新脚本推荐显式指定 <code>--bot</code> 或 <code>--all</code>。</li>
+                  <li>裸 <code>ai telegram</code> 会先选操作再列出 Bot；生命周期菜单可选 <code>all bots</code>，删除菜单会二次确认。带 <code>--bot</code> 进入交互菜单时会跳过 Bot 选择。</li>
+                  <li><code>edit</code> 交互式编辑指定 Bot；<code>delete</code> 先停止目标 Bot，再删除该 Bot 的 config、PID、log 和 SQLite 文件。旧 <code>remove</code> 是兼容别名。</li>
+                  <li><code>config set ... --bot &lt;name&gt;</code> 只修改指定 Bot，不影响全局或其他 Bot；token 不会出现在命令日志或终端输出中。</li>
+                  <li>命名 Bot 的配置、PID、日志和会话保存在 <code>~/.ai-gateway/telegram/bots/&lt;name&gt;.json|.pid|.log|.sqlite</code>。</li>
+                  <li>为保持兼容，存在命名 Bot 时，无目标 <code>start</code>、<code>stop</code>、<code>status</code> 仍作用于全部命名 Bot。</li>
                   <li>默认只有 <code>allowedUserIds</code> 中的 Telegram 用户可以访问 Bot；如需开放给所有用户，显式设置 <code>allowAllUsers: true</code>。</li>
                   <li>远程执行复用 AI Gateway 顶层 provider；不配置固定 provider/model 时按优先级自动选择。</li>
                   <li><code>/start</code> 或 <code>/reset</code> 先选择 Provider/Model，再直接以按钮列出历史绝对路径，末尾可选择“自定义”，不再先点击“已存在”。</li>

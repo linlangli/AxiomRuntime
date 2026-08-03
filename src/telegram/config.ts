@@ -247,6 +247,14 @@ export async function updateBotConfig(name: string, patch: Partial<TelegramConfi
   return normalizeTelegramConfig(next);
 }
 
+export async function setBotConfigValue(name: string, key: string, value: string): Promise<TelegramConfig> {
+  if (!isTelegramConfigKey(key)) {
+    throw new Error(`Unknown telegram config key: ${key}`);
+  }
+  const parsed = parseTelegramConfigValue(key, value);
+  return updateBotConfig(name, { [key]: parsed } as Partial<TelegramConfig>);
+}
+
 function getDefaultBotConfig(name: string): TelegramConfig {
   return {
     token: "",

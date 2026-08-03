@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { parseTelegramTargetArgs, runTelegramCommand } from "../dist/cli/commands/telegram.js";
 import {
   loadBotConfig,
   loadTelegramConfig,
@@ -15,6 +16,7 @@ import {
   setTelegramConfigValue,
   updateBotConfig
 } from "../dist/telegram/config.js";
+import { botExists } from "../dist/telegram/bot-registry.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
 import { requiresDangerousConfirmation } from "../dist/telegram/interaction/approval.js";
@@ -144,6 +146,94 @@ test("named bot config updates preserve its access policy and stay isolated from
     assert.deepEqual((await loadBotConfig("isolated")).allowedUserIds, [7476722078]);
     assert.deepEqual((await loadTelegramConfig()).allowedUserIds, []);
     assert.equal((await loadTelegramConfig()).provider, undefined);
+  });
+});
+
+test("telegram CLI accepts explicit bot targets and rejects ambiguous targeting", () => {
+  assert.deepEqual(parseTelegramTargetArgs(["start", "--bot", "ops"]), {
+    args: ["start"],
+    botName: "ops",
+    all: false
+  });
+  assert.deepEqual(parseTelegramTargetArgs(["--bot=ops", "status"]), {
+    args: ["status"],
+    botName: "ops",
+    all: false
+  });
+  assert.deepEqual(parseTelegramTargetArgs(["stop", "--all"]), {
+    args: ["stop"],
+    all: true
+  });
+  assert.throws(
+    () => parseTelegramTargetArgs(["start", "--bot", "ops", "--all"]),
+    /either --bot <name> or --all/
+  );
+  assert.throws(
+    () => parseTelegramTargetArgs(["start", "--bot", "Ops Bot"]),
+    /Invalid bot name/
+  );
+});
+
+test("telegram CLI updates, shows, and deletes only the explicitly targeted bot", async () => {
+  await withTempHome(async (tempDir) => {
+    await saveTelegramConfig(normalizeTelegramConfig({
+      token: "global-token",
+      defaultEngine: "claude",
+      dbPath: path.join(tempDir, "telegram.sqlite")
+    }));
+    for (const name of ["ops", "support"]) {
+      await saveBotConfig(name, normalizeTelegramConfig({
+        token: `${name}-token`,
+        allowedUserIds: [1],
+        defaultEngine: "claude",
+        dbPath: path.join(tempDir, "telegram", "bots", `${name}.sqlite`)
+      }));
+    }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await runTelegramCommand(["config", "set", "defaultEngine", "codex", "--bot", "ops"]);
+      await runTelegramCommand(["config", "show", "--bot=ops"]);
+      await runTelegramCommand(["status", "--bot", "support"]);
+      await runTelegramCommand(["delete", "--bot", "support"]);
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal((await loadBotConfig("ops")).defaultEngine, "codex");
+    assert.equal((await loadTelegramConfig()).defaultEngine, "claude");
+    assert.equal(botExists("ops"), true);
+    assert.equal(botExists("support"), false);
+    await assert.rejects(
+      () => runTelegramCommand(["status", "--bot", "missing"]),
+      /Available bots: .*ops/
+    );
+  });
+});
+
+test("telegram CLI redacts a targeted bot token from command logs and output", async () => {
+  await withTempHome(async (tempDir) => {
+    await saveBotConfig("ops", normalizeTelegramConfig({
+      token: "old-token",
+      allowedUserIds: [1],
+      dbPath: path.join(tempDir, "telegram", "bots", "ops.sqlite")
+    }));
+    const token = "123456789:super-secret-telegram-token";
+    const result = spawnSync(process.execPath, [
+      path.join(process.cwd(), "dist", "cli", "index.js"),
+      "telegram", "config", "set", "token", token, "--bot", "ops"
+    ], {
+      encoding: "utf8",
+      env: { ...process.env, AI_GATEWAY_HOME: tempDir }
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const commandLog = await fs.readFile(path.join(tempDir, ".ai-gateway.log"), "utf8");
+    assert.equal(commandLog.includes(token), false);
+    assert.equal(result.stdout.includes(token), false);
+    assert.equal(result.stderr.includes(token), false);
+    assert.equal((await loadBotConfig("ops")).token, token);
   });
 });
 
