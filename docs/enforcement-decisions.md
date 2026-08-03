@@ -892,6 +892,9 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - `ai status` lists health for all providers.
 - `ai status` shows weekly token usage from real `usage.json` events.
 - `ai doctor` prints a diagnostic report without consuming tokens by default.
+- `ai version|--version|-v` prints the installed package version without creating Runtime state or logs.
+- `ai setup` and the default `ai doctor` may create missing Runtime-home files and may back up then rebuild invalid derived cache/usage/session files. They must not read or modify project source, and must never overwrite invalid `providers.json` automatically.
+- Installing Claude Code/Codex is an external mutation and requires interactive confirmation or the explicit `ai setup --install-tools` flag; `--yes` alone is not authorization.
 - `ai use claude` and `ai use codex` start the matching CLI with the default provider/model.
 - `ai use codex` pins a process-scoped Codex model provider to the Runtime-selected base URL and injected API key without modifying global Codex auth/config state.
 - `ai telegram edit|delete|start|stop|status|config|logs|doctor --bot <name>` targets only the named Telegram Bot; `start|stop|status --all` is the explicit bulk form, while legacy positional forms remain compatible.

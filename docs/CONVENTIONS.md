@@ -57,6 +57,7 @@ Principles:
 - Keep user-facing documentation in Chinese.
 - Keep project documents under `docs/`, except the root `README.md`.
 - Keep the minimum Node.js runtime synchronized across `package.json`, `package-lock.json`, `.gitlab-ci.yml`, and user documentation. CI must execute the declared minimum version, currently `22.19.0`, so newer local runtimes cannot hide dependency incompatibilities.
+- Publish npm as `@offerpilot/axiomruntime` and treat its versioned tarball as the sole CLI distribution source. Homebrew Formulae must pin the matching registry URL and SHA256, depend on `node@22`, and pass `ai --version`; a tag pipeline may update the Tap only after npm publication and checksum verification.
 - Prefer clean core APIs over CLI-specific logic.
 - Keep `providers.json` stable and human-editable.
 - Avoid adding fields to `providers.json` unless users need to edit them directly.
@@ -137,7 +138,8 @@ Release convention:
 ```bash
 git switch main
 git merge develop
-npm version patch
+npm run release:current # only when publishing a pre-set initial version
+# npm run release      # subsequent interactive version bumps
 git push origin main --tags
 ```
 
@@ -185,7 +187,7 @@ Documentation review must appear in the task checklist or handoff summary even w
 ## Current Status
 
 - Foundation CLI implemented with no runtime third-party dependencies.
-- Implemented commands: `ai`, `ai help`, `ai add`, `ai provider list`, `ai provider edit`, `ai provider delete`, `ai session`, `ai session list`, `ai session clear`, `ai report`, `ai status`, `ai log`, `ai context`, `ai doctor`, `ai doctor --deep`, `ai use`, `ai last`, placeholder `ai web`.
+- Implemented commands: `ai`, `ai version|--version|-v`, `ai setup`, `ai help`, `ai add`, `ai provider list`, `ai provider edit`, `ai provider delete`, `ai session`, `ai session list`, `ai session clear`, `ai report`, `ai status`, `ai log`, `ai context`, actionable `ai doctor` with safe Runtime-home repair, `ai doctor --deep --tool claude|codex`, `ai use`, `ai last`, placeholder `ai web`.
 - Implemented core stores: `providers.json`, `.ai-cache.json`, `usage.json`.
 - Implemented real token usage recording for provider responses with usage data (from `ai doctor --deep`).
 - Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.

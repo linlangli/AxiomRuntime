@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
@@ -108,6 +109,42 @@ test("CLI command registry resolves commands and aliases", async () => {
   assert.equal(listInteractiveCliCommands().some((command) => command.name === "unit-test-command"), false);
   await getCliCommand("unit-test-command")?.run([]);
   assert.equal(called, true);
+});
+
+test("version command prints the package version without creating runtime state", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-version-test-"));
+  const runtimeHome = path.join(tempDir, "runtime-home");
+  const result = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "--version"], {
+    encoding: "utf8",
+    env: { ...process.env, AI_GATEWAY_HOME: runtimeHome }
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "0.0.1");
+  await assert.rejects(fs.access(runtimeHome), { code: "ENOENT" });
+  await fs.rm(tempDir, { recursive: true, force: true });
+});
+
+test("setup command initializes an empty runtime home non-interactively", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-setup-test-"));
+  const runtimeHome = path.join(tempDir, "runtime-home");
+  const result = spawnSync(process.execPath, [
+    path.resolve("dist/cli/index.js"),
+    "setup",
+    "--yes",
+    "--skip-tools",
+    "--skip-provider"
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, AI_GATEWAY_HOME: runtimeHome }
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "providers.json"), "utf8")), []);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, ".ai-cache.json"), "utf8")), { providers: {} });
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "usage.json"), "utf8")), { events: [] });
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "sessions.json"), "utf8")), { sessions: [] });
+  await fs.rm(tempDir, { recursive: true, force: true });
 });
 
 test("extracts OpenAI-compatible token usage", () => {

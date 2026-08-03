@@ -3,6 +3,7 @@ export type CliCommand = {
   aliases?: string[];
   description: string;
   interactive?: boolean;
+  logUsage?: boolean;
   run(args: string[]): Promise<void>;
 };
 

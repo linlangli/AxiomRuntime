@@ -198,19 +198,23 @@ const ALWAYS_CONFIRM_PATTERNS = [
 
 `ai`（无参进交互模式）｜`ai help`（打开 `docs/USAGE.html`）。直接命令：
 
+npm 分发包固定为 `@offerpilot/axiomruntime`，其 `bin` 契约固定注册 `ai`。`npm install --global @offerpilot/axiomruntime` 的安装验收必须在隔离 prefix 中直接执行已安装的 `ai`。Homebrew Formula 必须复用相同版本的 npm tarball、固定 SHA256、依赖 `node@22` 并以 `ai --version` 验收；不得维护第二套 Runtime 构建物。Tag pipeline 必须先发布 npm，验证 registry tarball与 Formula checksum 一致后，才能把 Formula 推送到独立 Tap。`ai doctor` 诊断 Runtime 配置、Provider 连通性和外部 CLI readiness，不承担包管理器完整性校验。
+
 ```bash
+ai version | ai --version | ai -v
+ai setup [--yes] [--install-tools] [--skip-provider] [--skip-tools]
 ai use claude | ai use codex
 ai use claude 51talk claude-opus-4-6      # tool + provider + model
 ai add 51talk https://example.com sk-xxx  # 添加 provider
 ai provider edit | list
-ai status | log | context | doctor | last | web
+ai status | log | context | doctor [--local|--no-fix|--strict|--deep --tool claude|codex] | last | web
 ai session [list|clear]
 ai report
 ```
 
 ## F. surface 职责边界（呼应本文 §2）
 
-CLI 只负责：解析命令 → 构造意图 → 呈现结果。provider 选择委托 ③（见 [03-capabilities.md](03-capabilities.md) 附 D–F），执行委托 ④，用量呈现读 ⑤ 的 `usage.json`。`ai status`/`ai doctor` 是 surface 对 ③ 健康态的只读投影，**不**在 CLI 层实现路由逻辑。
+CLI 只负责：解析命令 → 构造意图 → 获取安装外部 CLI 等显式授权 → 呈现结果。provider 选择委托 ③（见 [03-capabilities.md](03-capabilities.md) 附 D–F），执行委托 ④，用量呈现读 ⑤ 的 `usage.json`。`ai status` 是健康态投影；`ai doctor` 的诊断和安全修复由 core status/config API 实现，修复范围仅限 Runtime home，禁止读取或修改项目源码，禁止自动覆盖 `providers.json`。CLI 不实现路由或配置修复语义。
 
 ---
 

@@ -24,6 +24,35 @@ AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/AI_RUNTIME_
 - 演进中：统一 Runtime 执行上下文、自动学习与记忆治理、Skill/Capability 生命周期、插件体系。
 - 长期方向：组织与租户隔离、能力注册与共享、企业集成、Web/Desktop/API 治理界面。
 
+## 通过 npm 安装
+
+运行环境需要 Node.js `22.19.0` 或更高版本。全局安装后，npm 会把本包注册为 `ai` 命令：
+
+```bash
+npm install --global @offerpilot/axiomruntime
+ai --version
+ai setup
+```
+
+`ai --version` 用于验证 npm 包和命令安装成功；`ai setup` 初始化 Runtime 配置，并可在确认后安装缺失的 Claude Code/Codex。之后可直接运行 `ai`。
+
+## 通过 Homebrew 安装
+
+发布流程会在 npm 发布成功后把 `Formula/axiomruntime.rb` 同步到 `offerpilot/homebrew-tap`。Tap 建立后可使用：
+
+```bash
+brew tap offerpilot/tap
+brew install axiomruntime
+ai --version
+ai setup
+```
+
+如果 Tap 不托管在 GitHub，需要在首次添加时显式提供公开 Git 地址：
+
+```bash
+brew tap offerpilot/tap <homebrew-tap-public-git-url>
+```
+
 ## 安装开发依赖
 
 运行和开发需要 Node.js `22.19.0` 或更高版本。该下限与锁定依赖的运行时要求一致；Node.js 20 不受支持。
@@ -36,9 +65,10 @@ npm install
 
 AI Gateway 不内置 Claude Code 或 Codex。它们作为彼此独立的外部 CLI 使用，需要先在本机安装并能通过 `PATH` 或常见安装路径找到。
 
-可用下面的命令检查：
+可用下面的命令初始化和检查：
 
 ```bash
+ai setup
 ai doctor
 ```
 
@@ -93,6 +123,8 @@ npm link
 
 ```bash
 ai
+ai --version
+ai setup
 ai help
 ai provider add
 ai provider list

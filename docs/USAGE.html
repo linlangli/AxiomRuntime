@@ -443,6 +443,7 @@
     <div class="layout">
       <nav aria-label="页面导航">
         <div class="nav-title">分类</div>
+        <a class="nav-link" href="#install"><span>安装</span><span class="nav-count">npm</span></a>
         <a class="nav-link" href="#commands"><span>命令索引</span><span class="nav-count">常用入口</span></a>
         <a class="nav-link" href="#use"><span>使用模型</span><span class="nav-count">use / last</span></a>
         <a class="nav-link" href="#providers"><span>Provider</span><span class="nav-count">add / edit / delete</span></a>
@@ -454,6 +455,22 @@
       </nav>
 
       <main>
+        <section id="install" class="panel">
+          <h2>通过 npm 安装</h2>
+          <div class="detail-body">
+            <pre>npm install --global @offerpilot/axiomruntime
+ai --version
+ai setup</pre>
+            <p>npm 包名是 <code>@offerpilot/axiomruntime</code>，安装后注册的可执行命令是 <code>ai</code>。需要 Node.js <code>22.19.0+</code>。</p>
+            <p><code>ai --version</code> 无副作用地验证安装；<code>ai setup</code> 初始化 Runtime，并可在确认后安装缺失的 Claude Code/Codex。</p>
+            <pre>brew tap offerpilot/tap
+brew install axiomruntime
+ai --version
+ai setup</pre>
+            <p>Homebrew Formula 复用同版本 npm tarball并校验 SHA256，固定使用 Homebrew <code>node@22</code>。非 GitHub Tap 首次添加时需提供公开 Git URL。</p>
+          </div>
+        </section>
+
         <section id="commands" class="panel finder">
           <div class="finder-header">
             <div>
@@ -486,6 +503,18 @@
                 <td><code class="cmd">ai</code></td>
                 <td>进入交互模式。</td>
                 <td><span class="tag">推荐入口</span></td>
+              </tr>
+              <tr data-search="version install npm">
+                <td><span class="group-label">基础</span></td>
+                <td><code class="cmd">ai --version</code><br /><code class="cmd">ai version</code></td>
+                <td>输出当前安装版本。</td>
+                <td>不创建配置或日志。</td>
+              </tr>
+              <tr data-search="setup install repair provider claude codex">
+                <td><span class="group-label">基础</span></td>
+                <td><code class="cmd">ai setup</code><br /><code class="cmd">ai setup --yes --install-tools</code></td>
+                <td>初始化 Runtime、引导 Provider，并经授权安装缺失的外部 CLI。</td>
+                <td><code>--yes</code> 本身不授权安装第三方工具。</td>
               </tr>
               <tr data-search="help usage html docs">
                 <td><span class="group-label">基础</span></td>
@@ -553,11 +582,11 @@
                 <td>轻量刷新 provider 健康度和模型缓存。</td>
                 <td>默认不发送真实对话请求。</td>
               </tr>
-              <tr data-search="doctor deep diagnose cli provider token">
+              <tr data-search="doctor deep local strict fix diagnose cli provider token">
                 <td><span class="group-label">诊断</span></td>
-                <td><code class="cmd">ai doctor</code><br /><code class="cmd">ai doctor --deep</code></td>
-                <td>检查环境；deep 会验证真实推理链路。</td>
-                <td><span class="tag warn">deep 可能消耗 token</span></td>
+                <td><code class="cmd">ai doctor</code><br /><code class="cmd">ai doctor --local</code><br /><code class="cmd">ai doctor --deep --tool codex</code></td>
+                <td>诊断并安全修复 Runtime 环境；deep 验证真实推理链路。</td>
+                <td>不修改项目源码或自动覆盖 Provider；<span class="tag warn">deep 可能消耗 token</span></td>
               </tr>
               <tr data-search="log context project">
                 <td><span class="group-label">诊断</span></td>
@@ -741,10 +770,14 @@ ai context</pre>
                 <p><code>status</code> 会刷新 provider 健康度和模型缓存，展示 Claude/Codex 各自实际 baseUrl、兼容模型、token 使用量和使用占比。</p>
               </div>
               <div class="note">
-                <h3>深度检查</h3>
+                <h3>诊断与自动修复</h3>
                 <pre>ai doctor
-ai doctor --deep</pre>
-                <p><code>doctor --deep</code> 使用最高优先级可用 provider 验证真实推理链路，可能消耗 token；如果没有 provider 可用，会退回普通 doctor。</p>
+ai doctor --local
+ai doctor --no-fix
+ai doctor --strict
+ai doctor --deep --tool codex
+ai doctor --deep --tool claude</pre>
+                <p>默认创建缺失的 Runtime 状态文件，并备份后重建损坏的可再生文件；不会读取或修改项目源码，也不会自动覆盖 <code>providers.json</code>。<code>--deep</code> 可能消耗 token。</p>
               </div>
             </div>
           </section>

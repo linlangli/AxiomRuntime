@@ -18,6 +18,45 @@
 - 安装依赖前可运行 `node --version` 检查版本。
 - Claude Code 与 Codex 是外部 CLI，按需独立安装。
 
+## 通过 npm 安装
+
+```bash
+npm install --global @offerpilot/axiomruntime
+ai --version
+ai setup
+```
+
+npm 包名是 `@offerpilot/axiomruntime`，安装后注册的可执行命令是 `ai`。`ai --version`、`ai version`、`ai -v` 均输出当前包版本，并且不会创建 Runtime 配置或日志。
+
+## 通过 Homebrew 安装
+
+```bash
+brew tap offerpilot/tap
+brew install axiomruntime
+ai --version
+ai setup
+```
+
+Homebrew Formula 使用相同版本的公开 npm tarball作为唯一代码源，校验 SHA256 后安装到隔离的 `libexec`，并固定使用 Homebrew `node@22`。如果 Tap 不在 GitHub，首次执行 `brew tap` 时需要追加 Tap 的公开 Git URL。
+
+## 首次设置
+
+```bash
+ai setup
+```
+
+`setup` 会创建缺失的 Runtime home、`providers.json`、`.ai-cache.json`、`usage.json` 和 `sessions.json`，引导配置第一个 Provider，并在用户确认后通过 npm 安装缺失的 Claude Code/Codex。
+
+自动化用法：
+
+```bash
+ai setup --yes --skip-tools       # 只执行无交互的安全初始化
+ai setup --yes --install-tools    # 安全初始化并安装缺失的外部 CLI
+ai setup --skip-provider          # 跳过 Provider 引导
+```
+
+`--yes` 不会自行授权安装第三方 CLI；必须同时使用 `--install-tools`。Provider 凭证缺失时不会猜测或生成。
+
 ## 进入交互模式
 
 ```bash
@@ -419,7 +458,7 @@ usage.json
 ai doctor
 ```
 
-默认不消耗 token。
+默认不消耗 token，也不读取或修改项目源码。命令会自动执行安全修复：创建缺失的 Runtime home/状态文件；损坏的 `.ai-cache.json`、`usage.json`、`sessions.json` 会先备份为 `*.invalid-<timestamp>` 再重建。`providers.json` 无效时只报告问题，绝不自动覆盖凭证。
 
 检查内容：
 
@@ -427,13 +466,25 @@ ai doctor
 providers.json
 .ai-cache.json
 usage.json
+sessions.json
+Node.js 版本
+better-sqlite3 原生依赖
 Claude Code CLI
 Codex CLI
 provider 连通性
 模型探测
 配置字段是否合法
-level 是否冲突
 默认模型是否存在
+```
+
+常用诊断模式：
+
+```bash
+ai doctor --local              # 不访问 Provider 网络
+ai doctor --no-fix             # 只诊断，不自动修复
+ai doctor --strict             # 存在 error 时返回非零退出码
+ai doctor --deep --tool codex
+ai doctor --deep --tool claude
 ```
 
 如果 `codex` 不在 PATH，AI Gateway 会额外检查常见安装位置：
@@ -445,7 +496,7 @@ level 是否冲突
 深度检查：
 
 ```bash
-ai doctor --deep
+ai doctor --deep --tool codex
 ```
 
 会使用当前最高优先级可用 provider 验证真实推理链路，可能消耗 token，执行前需要确认。
@@ -454,7 +505,7 @@ ai doctor --deep
 
 - 默认从 `level` 最小的可用 provider 开始。
 - 当前 provider 不可用时，自动降级到下一个 provider。
-- 如果没有任何 provider 可用，自动回到普通 `ai doctor`，不使用大模型。
+- 如果没有任何 provider 可用，会保留普通诊断结果并说明如何配置 Provider，不使用大模型。
 - 如果 provider 返回 usage，会写入 `usage.json` 并反映到 `ai status`。
 - 如果 provider 没有返回 usage，不会估算 token。
 
