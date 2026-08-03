@@ -57,7 +57,7 @@ Principles:
 - Keep user-facing documentation in Chinese.
 - Keep project documents under `docs/`, except the root `README.md`.
 - Keep the minimum Node.js runtime synchronized across `package.json`, `package-lock.json`, `.gitlab-ci.yml`, and user documentation. CI must execute the declared minimum version, currently `22.19.0`, so newer local runtimes cannot hide dependency incompatibilities.
-- Publish npm as `@offerpilot/axiomruntime` and treat its versioned tarball as the sole CLI distribution source. Homebrew Formulae must pin the matching registry URL and SHA256, depend on `node@22`, and pass `ai --version`; a tag pipeline may update the Tap only after npm publication and checksum verification.
+- Publish npm as `@offerpilot/axiomruntime` and treat its versioned tarball as the sole CLI distribution source. Homebrew Formulae must pin the matching registry URL and SHA256, depend on `node@22`, and pass `ai --version`; the npm publish job must regenerate the Formula after building on the release runner and pass it as an artifact, because npm tarball bytes may differ across operating systems. A tag pipeline may update the Tap only after npm publication and registry checksum verification.
 - Prefer clean core APIs over CLI-specific logic.
 - Keep `providers.json` stable and human-editable.
 - Avoid adding fields to `providers.json` unless users need to edit them directly.

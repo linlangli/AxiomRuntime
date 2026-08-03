@@ -52,7 +52,7 @@ HOMEBREW_TAP_BRANCH=main
 
 `HOMEBREW_TAP_PUSH_URL` 指向独立的 `offerpilot/homebrew-tap` 仓库。推荐使用受限 deploy token/机器人凭证，不要使用个人长期凭证。Tap 仓库必须预先存在并至少包含目标分支。
 
-发布流程会先校验 npm tarball 与 `Formula/axiomruntime.rb` 的 URL/SHA256，再发布 npm，最后把 Formula 推送到 Tap：
+发布流程会在 Linux 发布 runner 完成构建后重新生成并校验 `Formula/axiomruntime.rb` 的 URL/SHA256，将 Formula 作为 artifact 传给后续 Job；npm 发布成功后再用 registry tarball 二次验证并推送到 Tap。这样不会依赖 macOS 与 Linux 的 npm tarball 字节完全一致：
 
 ```bash
 git switch main
