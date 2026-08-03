@@ -8,8 +8,16 @@ const rl = readline.createInterface({ input, output });
 async function main() {
   try {
     await ensureCleanGit();
-    const currentVersion = await npm(["pkg", "get", "version"], { capture: true });
-    console.log(`Current version: ${JSON.parse(currentVersion.trim())}`);
+    const currentVersion = JSON.parse((await npm(["pkg", "get", "version"], { capture: true })).trim());
+    console.log(`Current version: ${currentVersion}`);
+
+    if (process.argv.includes("--current")) {
+      await ensureTagAbsent(currentVersion);
+      await verifyRelease();
+      await run("git", ["tag", `v${currentVersion}`]);
+      console.log(`Prepared v${currentVersion}. Push the tag to let GitLab publish npm and Homebrew.`);
+      return;
+    }
 
     const bump = await choose("Select version bump", [
       ["patch", "bug fix, small improvement"],
@@ -17,29 +25,39 @@ async function main() {
       ["major", "breaking change"]
     ]);
 
-    await run("npm", ["test"]);
-    await run("npm", ["version", bump]);
+    await run("npm", ["version", bump, "--no-git-tag-version"]);
     const nextVersion = JSON.parse((await npm(["pkg", "get", "version"], { capture: true })).trim());
     console.log(`Next version: ${nextVersion}`);
 
-    await run("npm", ["pack", "--dry-run"]);
-    const publish = await confirm("Publish to npm now?");
-    if (!publish) {
-      console.log("Skipped npm publish. Version commit/tag has been created by `npm version`.");
-      return;
-    }
-
-    await run("npm", ["publish", "--access", "public"]);
-    console.log(`Published ${nextVersion}.`);
+    await run("npm", ["run", "homebrew:update"]);
+    await ensureTagAbsent(nextVersion);
+    await verifyRelease();
+    await run("git", ["add", "package.json", "package-lock.json", "Formula/axiomruntime.rb"]);
+    await run("git", ["commit", "-m", `chore(release): v${nextVersion}`]);
+    await run("git", ["tag", `v${nextVersion}`]);
+    console.log(`Prepared v${nextVersion}. Push the release commit and tag to let GitLab publish npm and Homebrew.`);
   } finally {
     rl.close();
   }
+}
+
+async function verifyRelease() {
+  await run("npm", ["test"]);
+  await run("npm", ["run", "homebrew:check"]);
+  await run("npm", ["pack", "--dry-run"]);
 }
 
 async function ensureCleanGit() {
   const status = await run("git", ["status", "--short"], { capture: true });
   if (status.trim()) {
     throw new Error("Git working tree is not clean. Commit or stash changes before release.");
+  }
+}
+
+async function ensureTagAbsent(version) {
+  const tags = await run("git", ["tag", "--list", version, `v${version}`], { capture: true });
+  if (tags.trim()) {
+    throw new Error(`Release tag already exists: ${tags.trim().split("\n").join(", ")}`);
   }
 }
 
@@ -57,11 +75,6 @@ async function choose(message, choices) {
     }
     console.log(`Please enter a number between 1 and ${choices.length}.`);
   }
-}
-
-async function confirm(message) {
-  const answer = (await rl.question(`${message} [y/N]: `)).trim().toLowerCase();
-  return answer === "y" || answer === "yes";
 }
 
 async function npm(args, options = {}) {

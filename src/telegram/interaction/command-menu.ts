@@ -22,6 +22,7 @@ const BASE_COMMANDS: TelegramCommandMapping[] = [
   { command: "fresh", description: "清空聊天窗口", prompt: "/fresh" },
   { command: "cwd", description: "查看或切换工作路径", prompt: "/cwd" },
   { command: "config", description: "查看或编辑 Bot 配置", prompt: "/config" },
+  { command: "provider", description: "管理 AI Provider", prompt: "/provider" },
   { command: "usage", description: "查看当前会话额度", prompt: "/usage" },
   { command: "remember", description: "保存一条 Bot 记忆", prompt: "/remember" },
   { command: "forget", description: "删除 Bot 记忆", prompt: "/forget" },

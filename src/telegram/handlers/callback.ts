@@ -23,6 +23,7 @@ import {
 } from "./setup.js";
 import { executePrompt, runCliInit, resultStore, type MessageHandlerDeps } from "./message.js";
 import { handleMemoryManageCallback, handleRememberScopeCallback, type RememberScopeMode } from "./memory.js";
+import { handleProviderAdminCallback } from "./provider.js";
 import { askUsagePrice, showUsagePanel } from "./usage.js";
 import { withTelegramNetworkRetry } from "../network-retry.js";
 
@@ -36,6 +37,8 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
       await ctx.answerCallbackQuery();
       return;
     }
+
+    if (await handleProviderAdminCallback(ctx, data)) return;
 
     if (data.startsWith("perm:")) {
       const [, action, id] = data.split(":");

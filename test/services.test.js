@@ -207,9 +207,49 @@ test("runDoctor validates config and local CLI checks without throwing", async (
     ]);
 
     const items = await runDoctor();
-    assert.equal(items.some((item) => item.group === "Config" && item.status === "ok"), true);
-    assert.equal(items.some((item) => item.group === "Providers" && item.message.includes("api: ok")), true);
+    assert.equal(items.some((item) => item.group === "Providers" && item.status === "ok" && item.message.includes("providers.json")), true);
+    assert.equal(items.some((item) => item.group === "Providers" && item.message.includes("api: reachable")), true);
     assert.equal(items.some((item) => item.group === "Local CLIs"), true);
+  });
+});
+
+test("runDoctor repairs missing runtime files with safe defaults", async () => {
+  await withTempHome(async () => {
+    const items = await runDoctor({ fix: true, checkProviders: false });
+    const runtimeHome = process.env.AI_GATEWAY_HOME;
+
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "providers.json"), "utf8")), []);
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, ".ai-cache.json"), "utf8")), { providers: {} });
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "usage.json"), "utf8")), { events: [] });
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "sessions.json"), "utf8")), { sessions: [] });
+    assert.equal(items.filter((item) => item.fixed).length >= 4, true);
+  });
+});
+
+test("runDoctor backs up and rebuilds invalid derived state", async () => {
+  await withTempHome(async () => {
+    const runtimeHome = process.env.AI_GATEWAY_HOME;
+    await fs.writeFile(path.join(runtimeHome, ".ai-cache.json"), "not-json", "utf8");
+
+    const items = await runDoctor({ fix: true, checkProviders: false });
+    const cache = JSON.parse(await fs.readFile(path.join(runtimeHome, ".ai-cache.json"), "utf8"));
+    const names = await fs.readdir(runtimeHome);
+
+    assert.deepEqual(cache, { providers: {} });
+    assert.equal(names.some((name) => name.startsWith(".ai-cache.json.invalid-")), true);
+    assert.equal(items.some((item) => item.group === "Cache" && item.fixed), true);
+  });
+});
+
+test("runDoctor never overwrites invalid provider configuration", async () => {
+  await withTempHome(async () => {
+    const providersPath = path.join(process.env.AI_GATEWAY_HOME, "providers.json");
+    await fs.writeFile(providersPath, "not-json", "utf8");
+
+    const items = await runDoctor({ fix: true, checkProviders: false });
+
+    assert.equal(await fs.readFile(providersPath, "utf8"), "not-json");
+    assert.equal(items.some((item) => item.group === "Providers" && item.status === "error"), true);
   });
 });
 

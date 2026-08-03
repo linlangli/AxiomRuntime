@@ -443,6 +443,7 @@
     <div class="layout">
       <nav aria-label="页面导航">
         <div class="nav-title">分类</div>
+        <a class="nav-link" href="#install"><span>安装</span><span class="nav-count">npm</span></a>
         <a class="nav-link" href="#commands"><span>命令索引</span><span class="nav-count">常用入口</span></a>
         <a class="nav-link" href="#use"><span>使用模型</span><span class="nav-count">use / last</span></a>
         <a class="nav-link" href="#providers"><span>Provider</span><span class="nav-count">add / edit / delete</span></a>
@@ -454,6 +455,22 @@
       </nav>
 
       <main>
+        <section id="install" class="panel">
+          <h2>通过 npm 安装</h2>
+          <div class="detail-body">
+            <pre>npm install --global @offerpilot/axiomruntime
+ai --version
+ai setup</pre>
+            <p>npm 包名是 <code>@offerpilot/axiomruntime</code>，安装后注册的可执行命令是 <code>ai</code>。需要 Node.js <code>22.19.0+</code>。</p>
+            <p><code>ai --version</code> 无副作用地验证安装；<code>ai setup</code> 初始化 Runtime，并可在确认后安装缺失的 Claude Code/Codex。</p>
+            <pre>brew tap offerpilot/tap
+brew install axiomruntime
+ai --version
+ai setup</pre>
+            <p>Homebrew Formula 复用同版本 npm tarball并校验 SHA256，固定使用 Homebrew <code>node@22</code>。非 GitHub Tap 首次添加时需提供公开 Git URL。</p>
+          </div>
+        </section>
+
         <section id="commands" class="panel finder">
           <div class="finder-header">
             <div>
@@ -486,6 +503,18 @@
                 <td><code class="cmd">ai</code></td>
                 <td>进入交互模式。</td>
                 <td><span class="tag">推荐入口</span></td>
+              </tr>
+              <tr data-search="version install npm">
+                <td><span class="group-label">基础</span></td>
+                <td><code class="cmd">ai --version</code><br /><code class="cmd">ai version</code></td>
+                <td>输出当前安装版本。</td>
+                <td>不创建配置或日志。</td>
+              </tr>
+              <tr data-search="setup install repair provider claude codex">
+                <td><span class="group-label">基础</span></td>
+                <td><code class="cmd">ai setup</code><br /><code class="cmd">ai setup --yes --install-tools</code></td>
+                <td>初始化 Runtime、引导 Provider，并经授权安装缺失的外部 CLI。</td>
+                <td><code>--yes</code> 本身不授权安装第三方工具。</td>
               </tr>
               <tr data-search="help usage html docs">
                 <td><span class="group-label">基础</span></td>
@@ -543,8 +572,8 @@
               </tr>
               <tr data-search="telegram bot start stop status config logs claude codex remote">
                 <td><span class="group-label">Telegram</span></td>
-                <td><code class="cmd">ai telegram config</code><br /><code class="cmd">ai telegram start</code><br /><code class="cmd">ai telegram status</code><br /><code class="cmd">ai telegram logs -f</code><br /><code class="cmd">ai telegram stop</code></td>
-                <td>配置并管理远程控制 Claude Code/Codex 的 Telegram Bot。</td>
+                <td><code class="cmd">ai telegram</code><br /><code class="cmd">ai telegram list</code><br /><code class="cmd">ai telegram edit --bot ops</code><br /><code class="cmd">ai telegram start --bot ops</code><br /><code class="cmd">ai telegram status --all</code></td>
+                <td>交互式或按 <code>--bot</code> 精确配置并管理多个 Telegram Bot。</td>
                 <td>复用顶层 provider。</td>
               </tr>
               <tr data-search="status health provider model token usage">
@@ -553,11 +582,11 @@
                 <td>轻量刷新 provider 健康度和模型缓存。</td>
                 <td>默认不发送真实对话请求。</td>
               </tr>
-              <tr data-search="doctor deep diagnose cli provider token">
+              <tr data-search="doctor deep local strict fix diagnose cli provider token">
                 <td><span class="group-label">诊断</span></td>
-                <td><code class="cmd">ai doctor</code><br /><code class="cmd">ai doctor --deep</code></td>
-                <td>检查环境；deep 会验证真实推理链路。</td>
-                <td><span class="tag warn">deep 可能消耗 token</span></td>
+                <td><code class="cmd">ai doctor</code><br /><code class="cmd">ai doctor --local</code><br /><code class="cmd">ai doctor --deep --tool codex</code></td>
+                <td>诊断并安全修复 Runtime 环境；deep 验证真实推理链路。</td>
+                <td>不修改项目源码或自动覆盖 Provider；<span class="tag warn">deep 可能消耗 token</span></td>
               </tr>
               <tr data-search="log context project">
                 <td><span class="group-label">诊断</span></td>
@@ -656,29 +685,42 @@ ai provider list</pre>
             <details open>
               <summary>配置和进程管理</summary>
               <div class="detail-body">
-                <pre>ai telegram config
-ai telegram config show
-ai telegram config set token &lt;bot-token&gt;
-ai telegram config set allowAllUsers true
-ai telegram config set allowedUserIds 123456789,987654321
-ai telegram config set defaultEngine claude
-ai telegram config set defaultPermissionMode bypassPermissions
-ai telegram config set defaultCwd /path/to/project
-ai telegram config set proxyUrl http://127.0.0.1:7890
-ai telegram start
-ai telegram status
-ai telegram remove
-ai telegram remove &lt;bot-name&gt;
-ai telegram logs
-ai telegram logs -f
-ai telegram doctor
-ai telegram stop</pre>
+                <pre>ai telegram                 # 交互选择操作，再选择目标 Bot
+ai telegram --bot ops       # 预选 ops，再进入交互菜单
+ai telegram add ops
+ai telegram add support
+ai telegram list
+
+ai telegram config show --bot ops
+ai telegram config set token &lt;bot-token&gt; --bot ops
+ai telegram config set allowedUserIds 123456789,987654321 --bot ops
+ai telegram config set defaultEngine codex --bot ops
+ai telegram config set defaultCwd /workspace/ops --bot ops
+ai telegram edit --bot ops
+
+ai telegram start --bot ops
+ai telegram stop --bot ops
+ai telegram status --bot ops
+ai telegram logs --bot ops -f
+ai telegram doctor --bot ops
+ai telegram delete --bot ops
+
+ai telegram start --all
+ai telegram stop --all
+ai telegram status --all</pre>
                 <ul>
-                  <li>配置保存在 <code>~/.ai-gateway/telegram.json</code>，会话保存在 <code>~/.ai-gateway/telegram.sqlite</code>。</li>
-                  <li><code>ai telegram</code> 的交互菜单会显示 <code>remove</code>。<code>ai telegram remove</code> 会列出已绑定 Bot 供选择，并删除选中 Bot 的本地配置、进程记录、日志和会话数据库；不会删除 BotFather 中的 Bot。</li>
+                  <li><code>--bot=&lt;name&gt;</code> 与 <code>--bot &lt;name&gt;</code> 等价。旧位置参数写法继续兼容；新脚本推荐显式指定 <code>--bot</code> 或 <code>--all</code>。</li>
+                  <li>裸 <code>ai telegram</code> 会先选操作再列出 Bot；生命周期菜单可选 <code>all bots</code>，删除菜单会二次确认。带 <code>--bot</code> 进入交互菜单时会跳过 Bot 选择。</li>
+                  <li><code>edit</code> 交互式编辑指定 Bot；<code>delete</code> 先停止目标 Bot，再删除该 Bot 的 config、PID、log 和 SQLite 文件。旧 <code>remove</code> 是兼容别名。</li>
+                  <li>删除迁移得到的 <code>default</code> Bot 时，同时清理 legacy <code>telegram.json</code> 与数据库，避免后续迁移重新创建绑定。</li>
+                  <li><code>config set ... --bot &lt;name&gt;</code> 只修改指定 Bot，不影响全局或其他 Bot；token 不会出现在命令日志或终端输出中。</li>
+                  <li>命名 Bot 的配置、PID、日志和会话保存在 <code>~/.ai-gateway/telegram/bots/&lt;name&gt;.json|.pid|.log|.sqlite</code>。</li>
+                  <li>为保持兼容，存在命名 Bot 时，无目标 <code>start</code>、<code>stop</code>、<code>status</code> 仍作用于全部命名 Bot。</li>
                   <li>默认只有 <code>allowedUserIds</code> 中的 Telegram 用户可以访问 Bot；如需开放给所有用户，显式设置 <code>allowAllUsers: true</code>。</li>
                   <li>远程执行复用 AI Gateway 顶层 provider；不配置固定 provider/model 时按优先级自动选择。</li>
                   <li><code>/start</code> 或 <code>/reset</code> 先选择 Provider/Model，再直接以按钮列出历史绝对路径，末尾可选择“自定义”，不再先点击“已存在”。</li>
+                  <li><code>/provider</code> 以按钮列出全部 AI Provider，可编辑名称、Base URL、API Key、默认模型、模式和优先级，二次确认后删除，或从列表底部添加。操作复用 <code>ai provider</code> 的核心 CRUD 和检查逻辑。</li>
+                  <li>Provider API Key 在详情中只显示“已配置”，不会写入 Bot 应用日志；输入后 Bot 会尽力立即删除该 Telegram 消息。未完成表单在 Bot 重启后需要重新开始。</li>
                   <li>Telegram Codex 执行会自动走本地 OpenAI 兼容代理记录 provider usage；<code>/usage</code> 有 provider cost 时直接展示，否则按 <code>model-pricing.json</code> 估算。</li>
                   <li>如果本机不能直连 <code>api.telegram.org</code>，设置 <code>proxyUrl</code> 或环境变量 <code>HTTPS_PROXY</code> / <code>ALL_PROXY</code>。</li>
                 </ul>
@@ -693,6 +735,7 @@ ai telegram stop</pre>
 /fresh
 /cwd /path/to/project
 /config
+/provider
 /usage
 /pin
 /unpin
@@ -728,10 +771,14 @@ ai context</pre>
                 <p><code>status</code> 会刷新 provider 健康度和模型缓存，展示 Claude/Codex 各自实际 baseUrl、兼容模型、token 使用量和使用占比。</p>
               </div>
               <div class="note">
-                <h3>深度检查</h3>
+                <h3>诊断与自动修复</h3>
                 <pre>ai doctor
-ai doctor --deep</pre>
-                <p><code>doctor --deep</code> 使用最高优先级可用 provider 验证真实推理链路，可能消耗 token；如果没有 provider 可用，会退回普通 doctor。</p>
+ai doctor --local
+ai doctor --no-fix
+ai doctor --strict
+ai doctor --deep --tool codex
+ai doctor --deep --tool claude</pre>
+                <p>默认创建缺失的 Runtime 状态文件，并备份后重建损坏的可再生文件；不会读取或修改项目源码，也不会自动覆盖 <code>providers.json</code>。<code>--deep</code> 可能消耗 token。</p>
               </div>
             </div>
           </section>

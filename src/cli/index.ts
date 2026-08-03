@@ -10,8 +10,10 @@ import { runMemoryCommand } from "./commands/memory.js";
 import { runReportCommand } from "./commands/report.js";
 import { runLastCommand, runUseCommand } from "./commands/use.js";
 import { runSessionCommand } from "./commands/session.js";
+import { runSetupCommand } from "./commands/setup.js";
 import { runStatusCommand } from "./commands/status.js";
 import { runTelegramCommand } from "./commands/telegram.js";
+import { runVersionCommand } from "./commands/version.js";
 import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
 import { getCliCommand, registerCliCommand } from "./registry.js";
@@ -20,6 +22,12 @@ registerBuiltInCommands();
 
 async function main(): Promise<void> {
   const [, , command, ...args] = process.argv;
+  const registered = command === undefined ? undefined : getCliCommand(command);
+  if (registered?.logUsage === false) {
+    await registered.run(args);
+    return;
+  }
+
   const safeArgs = sanitizeArgs(command, args);
   await writeLog({
     category: "usage",
@@ -33,7 +41,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  const registered = getCliCommand(command);
   if (registered) {
     await registered.run(args);
     return;
@@ -61,6 +68,9 @@ function sanitizeArgs(command: string | undefined, args: string[]): string[] {
   if (command === "memory" && (args[0] === "embedding" || args[0] === "vector") && (args[1] === "set" || args[1] === "edit")) {
     return maskMemoryEmbeddingSetArgs(args);
   }
+  if (command === "telegram") {
+    return maskTelegramConfigSecretArgs(args);
+  }
   return args.map((arg, index) => {
     const previous = args[index - 1]?.toLowerCase();
     if (previous === "--api-key" || previous === "--apikey" || previous === "--key") {
@@ -68,6 +78,28 @@ function sanitizeArgs(command: string | undefined, args: string[]): string[] {
     }
     return arg;
   });
+}
+
+function maskTelegramConfigSecretArgs(args: string[]): string[] {
+  const masked = [...args];
+  let state: "config" | "set" | "token" | "done" = "config";
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--bot") {
+      index += 1;
+      continue;
+    }
+    if (arg === "--all" || arg.startsWith("--bot=")) continue;
+    if (state === "config" && arg === "config") { state = "set"; continue; }
+    if (state === "set" && arg === "set") { state = "token"; continue; }
+    if (state === "token" && arg === "token") { state = "done"; continue; }
+    if (state === "done") {
+      masked[index] = maskSecretArg(arg);
+      break;
+    }
+  }
+  return masked;
 }
 
 function maskMemoryEmbeddingSetArgs(args: string[]): string[] {
@@ -97,7 +129,7 @@ function maskSecretArg(value: string): string {
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["use", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["setup", "use", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -140,6 +172,19 @@ async function runProviderCommand(args: string[]): Promise<void> {
 }
 
 function registerBuiltInCommands(): void {
+  registerCliCommand({
+    name: "version",
+    aliases: ["--version", "-v", "-V"],
+    description: "version",
+    interactive: false,
+    logUsage: false,
+    run: () => runVersionCommand()
+  });
+  registerCliCommand({
+    name: "setup",
+    description: "setup",
+    run: (args) => runSetupCommand(args)
+  });
   registerCliCommand({
     name: "help",
     description: "help",

@@ -63,7 +63,7 @@ env_args+=(--env-file "$deploy_env")
 candidate=(docker compose "${env_args[@]}" -f "$candidate_compose")
 
 rollback() {
-  echo "Deployment failed; restoring the previous agent-router release." >&2
+  echo "Deployment failed; restoring the previous AxiomRuntime release." >&2
   if [[ -f "$previous_env" && -f "$active_compose" ]]; then
     mv "$previous_env" "$deploy_env"
     previous=(docker compose "${env_args[@]}" -f "$active_compose")
@@ -73,10 +73,10 @@ rollback() {
   fi
 }
 
-wait_for_router() {
+wait_for_runtime() {
   local container_id status
   for _ in {1..60}; do
-    container_id=$("${candidate[@]}" ps -q router)
+    container_id=$("${candidate[@]}" ps -q runtime)
     if [[ -n "$container_id" ]]; then
       status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id")
       if [[ "$status" == "healthy" ]]; then
@@ -98,7 +98,7 @@ deploy_candidate() {
     -v "$deploy_dir/config:/var/lib/ai-gateway" \
     "$image" -r /var/lib/ai-gateway/providers.json
   "${candidate[@]}" up -d --remove-orphans
-  wait_for_router
+  wait_for_runtime
 
   if "${candidate[@]}" config --services | grep -qx telegram; then
     local telegram_id

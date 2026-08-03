@@ -4,13 +4,19 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { parseTelegramTargetArgs, runTelegramCommand } from "../dist/cli/commands/telegram.js";
 import {
+  loadBotConfig,
+  loadTelegramConfig,
   normalizePermissionMode,
   normalizeTelegramConfig,
   parseTelegramConfigValue,
+  saveBotConfig,
   saveTelegramConfig,
-  setTelegramConfigValue
+  setTelegramConfigValue,
+  updateBotConfig
 } from "../dist/telegram/config.js";
+import { botExists } from "../dist/telegram/bot-registry.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
 import { requiresDangerousConfirmation } from "../dist/telegram/interaction/approval.js";
@@ -62,6 +68,12 @@ import {
   handleRememberScopeCallback
 } from "../dist/telegram/handlers/memory.js";
 import { executePrompt, registerMessageHandler, runCliInit, startTypingStatus } from "../dist/telegram/handlers/message.js";
+import {
+  handleProviderAdminCallback,
+  handleProviderAdminInput,
+  isProviderSecretInput,
+  showProviderAdminPanel
+} from "../dist/telegram/handlers/provider.js";
 import { completeAgentProfile, inferEngineFromModel, setWorkdir } from "../dist/telegram/handlers/setup.js";
 import { parseModelPriceInput } from "../dist/telegram/handlers/usage.js";
 import { SessionManager } from "../dist/telegram/session/manager.js";
@@ -100,41 +112,103 @@ test("normalizes telegram config and parses config values", async () => {
   });
 });
 
-test("telegram remove interactively unbinds the selected bot and removes local data", async () => {
+test("named bot config updates preserve its access policy and stay isolated from global config", async () => {
   await withTempHome(async (tempDir) => {
-    const botDir = path.join(tempDir, "telegram", "bots");
-    const configPath = path.join(botDir, "alpha.json");
-    const dbPath = path.join(botDir, "alpha.sqlite");
-    await fs.mkdir(botDir, { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify({ dbPath }), "utf8");
-    await Promise.all([
-      fs.writeFile(dbPath, "db"),
-      fs.writeFile(`${dbPath}-shm`, "shm"),
-      fs.writeFile(`${dbPath}-wal`, "wal")
-    ]);
-
-    const menuResult = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "telegram"], {
-      cwd: path.resolve("."),
-      env: process.env,
-      input: "10\n",
-      encoding: "utf8"
+    const globalConfig = normalizeTelegramConfig({
+      token: "global-token",
+      allowAllUsers: false,
+      allowedUserIds: [],
+      defaultCwd: tempDir,
+      dbPath: path.join(tempDir, "telegram.sqlite")
     });
-    assert.equal(menuResult.status, 0, menuResult.stderr);
-    assert.match(menuResult.stdout, /Telegram[\s\S]*2\. remove/);
+    await saveTelegramConfig(globalConfig);
 
-    const result = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "telegram", "remove"], {
-      cwd: path.resolve("."),
-      env: process.env,
-      input: "1\n",
-      encoding: "utf8"
+    const botConfig = normalizeTelegramConfig({
+      token: "bot-token",
+      allowAllUsers: false,
+      allowedUserIds: [7476722078],
+      defaultCwd: tempDir,
+      dbPath: path.join(tempDir, "telegram", "bots", "isolated.sqlite")
     });
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Remove Telegram bot/);
-    assert.match(result.stdout, /1\. alpha/);
-    assert.match(result.stdout, /Bot "alpha" removed with its local data/);
-    for (const filePath of [configPath, dbPath, `${dbPath}-shm`, `${dbPath}-wal`]) {
-      await assert.rejects(fs.access(filePath), { code: "ENOENT" });
+    await saveBotConfig("isolated", botConfig);
+
+    const updated = await updateBotConfig("isolated", {
+      provider: "kunkun",
+      model: "gpt-5.5",
+      defaultEngine: "codex"
+    });
+
+    assert.deepEqual(updated.allowedUserIds, [7476722078]);
+    assert.equal(updated.allowAllUsers, false);
+    assert.equal(updated.provider, "kunkun");
+    assert.equal(updated.model, "gpt-5.5");
+    assert.equal(updated.defaultEngine, "codex");
+    assert.deepEqual((await loadBotConfig("isolated")).allowedUserIds, [7476722078]);
+    assert.deepEqual((await loadTelegramConfig()).allowedUserIds, []);
+    assert.equal((await loadTelegramConfig()).provider, undefined);
+  });
+});
+
+test("telegram CLI accepts explicit bot targets and rejects ambiguous targeting", () => {
+  assert.deepEqual(parseTelegramTargetArgs(["start", "--bot", "ops"]), {
+    args: ["start"],
+    botName: "ops",
+    all: false
+  });
+  assert.deepEqual(parseTelegramTargetArgs(["--bot=ops", "status"]), {
+    args: ["status"],
+    botName: "ops",
+    all: false
+  });
+  assert.deepEqual(parseTelegramTargetArgs(["stop", "--all"]), {
+    args: ["stop"],
+    all: true
+  });
+  assert.throws(
+    () => parseTelegramTargetArgs(["start", "--bot", "ops", "--all"]),
+    /either --bot <name> or --all/
+  );
+  assert.throws(
+    () => parseTelegramTargetArgs(["start", "--bot", "Ops Bot"]),
+    /Invalid bot name/
+  );
+});
+
+test("telegram CLI updates, shows, and deletes only the explicitly targeted bot", async () => {
+  await withTempHome(async (tempDir) => {
+    await saveTelegramConfig(normalizeTelegramConfig({
+      token: "global-token",
+      defaultEngine: "claude",
+      dbPath: path.join(tempDir, "telegram.sqlite")
+    }));
+    for (const name of ["ops", "support"]) {
+      await saveBotConfig(name, normalizeTelegramConfig({
+        token: `${name}-token`,
+        allowedUserIds: [1],
+        defaultEngine: "claude",
+        dbPath: path.join(tempDir, "telegram", "bots", `${name}.sqlite`)
+      }));
     }
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await runTelegramCommand(["config", "set", "defaultEngine", "codex", "--bot", "ops"]);
+      await runTelegramCommand(["config", "show", "--bot=ops"]);
+      await runTelegramCommand(["status", "--bot", "support"]);
+      await runTelegramCommand(["delete", "--bot", "support"]);
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal((await loadBotConfig("ops")).defaultEngine, "codex");
+    assert.equal((await loadTelegramConfig()).defaultEngine, "claude");
+    assert.equal(botExists("ops"), true);
+    assert.equal(botExists("support"), false);
+    await assert.rejects(
+      () => runTelegramCommand(["status", "--bot", "missing"]),
+      /Available bots: .*ops/
+    );
   });
 });
 
@@ -147,15 +221,41 @@ test("telegram remove default clears the legacy binding so it cannot be migrated
     await fs.writeFile(namedConfigPath, "{}", "utf8");
     await fs.writeFile(legacyConfigPath, "{}", "utf8");
 
-    const result = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "telegram", "remove", "default"], {
-      cwd: path.resolve("."),
-      env: process.env,
-      encoding: "utf8"
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await runTelegramCommand(["remove", "default"]);
+    } finally {
+      console.log = originalLog;
+    }
+
+    await assert.rejects(fs.access(namedConfigPath), { code: "ENOENT" });
+    await assert.rejects(fs.access(legacyConfigPath), { code: "ENOENT" });
+  });
+});
+
+test("telegram CLI redacts a targeted bot token from command logs and output", async () => {
+  await withTempHome(async (tempDir) => {
+    await saveBotConfig("ops", normalizeTelegramConfig({
+      token: "old-token",
+      allowedUserIds: [1],
+      dbPath: path.join(tempDir, "telegram", "bots", "ops.sqlite")
+    }));
+    const token = "123456789:super-secret-telegram-token";
+    const result = spawnSync(process.execPath, [
+      path.join(process.cwd(), "dist", "cli", "index.js"),
+      "telegram", "config", "set", "token", token, "--bot", "ops"
+    ], {
+      encoding: "utf8",
+      env: { ...process.env, AI_GATEWAY_HOME: tempDir }
     });
 
     assert.equal(result.status, 0, result.stderr);
-    await assert.rejects(fs.access(namedConfigPath), { code: "ENOENT" });
-    await assert.rejects(fs.access(legacyConfigPath), { code: "ENOENT" });
+    const commandLog = await fs.readFile(path.join(tempDir, ".ai-gateway.log"), "utf8");
+    assert.equal(commandLog.includes(token), false);
+    assert.equal(result.stdout.includes(token), false);
+    assert.equal(result.stderr.includes(token), false);
+    assert.equal((await loadBotConfig("ops")).token, token);
   });
 });
 
@@ -1221,6 +1321,7 @@ test("telegram command menu maps selected CLI slash commands", () => {
     "fresh",
     "cwd",
     "config",
+    "provider",
     "usage",
     "remember",
     "forget",
@@ -1236,6 +1337,7 @@ test("telegram command menu maps selected CLI slash commands", () => {
   assert.equal(getBaseBotCommands().find((item) => item.command === "reset")?.description, "重置会话信息");
   assert.equal(getBaseBotCommands().find((item) => item.command === "fresh")?.description, "清空聊天窗口");
   assert.equal(getBaseBotCommands().find((item) => item.command === "config")?.description, "查看或编辑 Bot 配置");
+  assert.equal(getBaseBotCommands().find((item) => item.command === "provider")?.description, "管理 AI Provider");
   assert.equal(getBaseBotCommands().find((item) => item.command === "usage")?.description, "查看当前会话额度");
   assert.equal(getBaseBotCommands().find((item) => item.command === "memories")?.description, "查看 Bot 记忆");
   const claudeCommands = getChatBotCommands("claude").map((item) => item.command);
@@ -1250,6 +1352,98 @@ test("telegram command menu maps selected CLI slash commands", () => {
   assert.equal(resolveMappedCommand("claude", "help_claude")?.prompt, "/help");
   assert.deepEqual(parseTelegramCommand("/model opus"), { command: "model", args: "opus" });
   assert.deepEqual(parseTelegramCommand("/model@my_bot opus"), { command: "model", args: "opus" });
+});
+
+test("telegram provider panel lists providers and never reveals API keys", async () => {
+  const service = createFakeProviderAdminService([{
+    name: "primary",
+    baseUrl: "https://api.example.com/v1",
+    apiKey: "super-secret-key",
+    mode: "auto",
+    level: 1,
+    model: "gpt-test"
+  }]);
+  const { ctx, events } = createProviderAdminContext(701);
+
+  await showProviderAdminPanel(ctx, {}, service);
+  const listEvent = events.at(-1);
+  assert.match(listEvent.text, /AI Providers/);
+  const providerButton = findInlineButton(listEvent.extra, "1. primary · auto");
+  assert.ok(providerButton.callback_data.startsWith("pa:view:0:"));
+
+  await handleProviderAdminCallback(ctx, providerButton.callback_data, service);
+  const detailsEvent = events.at(-1);
+  assert.match(detailsEvent.text, /API Key：<code>已配置<\/code>/);
+  assert.equal(JSON.stringify(events).includes("super-secret-key"), false);
+  assert.ok(findInlineButton(detailsEvent.extra, "API Key").callback_data.includes(":apiKey"));
+  assert.ok(findInlineButton(detailsEvent.extra, "删除").callback_data.startsWith("pa:delete:"));
+});
+
+test("telegram provider flow adds, edits, and deletes through provider service", async () => {
+  const service = createFakeProviderAdminService([]);
+  const { ctx, events, state } = createProviderAdminContext(702);
+
+  await handleProviderAdminCallback(ctx, "pa:add", service);
+  await handleProviderAdminInput(ctx, "new-provider", service);
+  await handleProviderAdminInput(ctx, "https://new.example.com/v1", service);
+  assert.equal(isProviderSecretInput(702), true);
+  await handleProviderAdminInput(ctx, "new-secret-key", service);
+
+  assert.equal(state.deletedMessages, 1);
+  assert.equal(isProviderSecretInput(702), false);
+  assert.equal(service.state.calls[0].action, "add");
+  assert.equal(service.state.calls[0].input.apiKey, "new-secret-key");
+  assert.equal(JSON.stringify(events).includes("new-secret-key"), false);
+  assert.equal(service.state.providers.length, 1);
+
+  const detailsEvent = events.at(-1);
+  const apiKeyCallback = findInlineButton(detailsEvent.extra, "API Key").callback_data;
+  await handleProviderAdminCallback(ctx, apiKeyCallback, service);
+  assert.equal(isProviderSecretInput(702), true);
+  await handleProviderAdminInput(ctx, "rotated-secret-key", service);
+  assert.equal(state.deletedMessages, 2);
+  assert.equal(service.state.providers[0].apiKey, "rotated-secret-key");
+  assert.equal(JSON.stringify(events).includes("rotated-secret-key"), false);
+
+  const updatedDetails = events.at(-1);
+  const deleteCallback = findInlineButton(updatedDetails.extra, "删除").callback_data;
+  await handleProviderAdminCallback(ctx, deleteCallback, service);
+  const confirmCallback = findInlineButton(events.at(-1).extra, "确认删除").callback_data;
+  await handleProviderAdminCallback(ctx, confirmCallback, service);
+  assert.equal(service.state.providers.length, 0);
+  assert.match(events.at(-1).text, /已删除/);
+});
+
+test("telegram provider callbacks reject stale provider indexes", async () => {
+  const service = createFakeProviderAdminService([
+    { name: "alpha", baseUrl: "https://a.example/v1", apiKey: "a", mode: "auto", level: 1, model: "a-model" },
+    { name: "beta", baseUrl: "https://b.example/v1", apiKey: "b", mode: "ask", level: 2, model: "b-model" }
+  ]);
+  const { ctx, events } = createProviderAdminContext(703);
+  await showProviderAdminPanel(ctx, {}, service);
+  const staleCallback = findInlineButton(events.at(-1).extra, "2. beta · ask").callback_data;
+
+  service.state.providers.splice(0, 1);
+  await handleProviderAdminCallback(ctx, staleCallback, service);
+
+  assert.match(events.at(-1).text, /AI Providers/);
+  assert.equal(service.state.calls.length, 0);
+});
+
+test("telegram provider errors redact the submitted API key", async () => {
+  const service = createFakeProviderAdminService([]);
+  service.addProvider = async (input) => {
+    throw new Error(`upstream rejected ${input.apiKey}`);
+  };
+  const { ctx, events } = createProviderAdminContext(704);
+
+  await handleProviderAdminCallback(ctx, "pa:add", service);
+  await handleProviderAdminInput(ctx, "failing-provider", service);
+  await handleProviderAdminInput(ctx, "https://failure.example/v1", service);
+  await handleProviderAdminInput(ctx, "must-not-leak", service);
+
+  assert.equal(JSON.stringify(events).includes("must-not-leak"), false);
+  assert.match(events.at(-1).text, /\[REDACTED\]/);
 });
 
 test("telegram custom commands remain executable beyond the menu limit", () => {
@@ -2363,6 +2557,17 @@ test("claude args include verbose stream-json output", () => {
   assert.equal(args.includes("--verbose"), true);
 });
 
+test("claude read-only binds the prompt before variadic allowed tools", () => {
+  const args = buildClaudeArgs({
+    prompt: "read-only prompt",
+    model: "claude-opus-4-6",
+    settingsPath: "/tmp/settings.json",
+    permissionMode: "readOnly"
+  });
+  assert.deepEqual(args.slice(0, 2), ["-p", "read-only prompt"]);
+  assert.deepEqual(args.slice(-2), ["--allowedTools", "Read,Grep,Glob,WebFetch,WebSearch"]);
+});
+
 test("codex args attach multiple images to the prompt", () => {
   const args = buildCodexArgs(
     "分析图片",
@@ -2518,4 +2723,64 @@ async function withTempHome(fn) {
     }
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+}
+
+function createProviderAdminContext(chatId) {
+  const events = [];
+  const state = { deletedMessages: 0 };
+  return {
+    events,
+    state,
+    ctx: {
+      chat: { id: chatId },
+      reply: async (text, extra) => events.push({ kind: "reply", text, extra }),
+      editMessageText: async (text, extra) => events.push({ kind: "edit", text, extra }),
+      answerCallbackQuery: async () => undefined,
+      deleteMessage: async () => {
+        state.deletedMessages += 1;
+      }
+    }
+  };
+}
+
+function createFakeProviderAdminService(initialProviders) {
+  const state = {
+    providers: initialProviders.map((provider) => ({ ...provider })),
+    calls: []
+  };
+  return {
+    state,
+    listProviders: async () => state.providers.map((provider) => ({ ...provider })),
+    addProvider: async (input) => {
+      state.calls.push({ action: "add", input: { ...input } });
+      const provider = {
+        ...input,
+        mode: input.mode ?? "auto",
+        level: state.providers.length + 1,
+        model: input.model ?? "detected-model"
+      };
+      state.providers.push(provider);
+      return { ...provider };
+    },
+    updateProvider: async (providerName, patch) => {
+      state.calls.push({ action: "update", providerName, patch: { ...patch } });
+      const provider = state.providers.find((item) => item.name === providerName);
+      if (!provider) throw new Error(`Provider not found: ${providerName}`);
+      Object.assign(provider, patch);
+      return { ...provider };
+    },
+    deleteProvider: async (providerName) => {
+      state.calls.push({ action: "delete", providerName });
+      const index = state.providers.findIndex((provider) => provider.name === providerName);
+      if (index < 0) throw new Error(`Provider not found: ${providerName}`);
+      return state.providers.splice(index, 1)[0];
+    },
+    getCachedModels: async () => ["detected-model"]
+  };
+}
+
+function findInlineButton(extra, text) {
+  const button = extra.reply_markup.inline_keyboard.flat().find((item) => item.text === text);
+  assert.ok(button, `Inline button not found: ${text}`);
+  return button;
 }

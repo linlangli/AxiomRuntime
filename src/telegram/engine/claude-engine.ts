@@ -108,6 +108,7 @@ export function buildClaudeArgs(options: {
   const permissionMode = options.permissionMode === "readOnly" ? "default" : options.permissionMode;
   const args = [
     "-p",
+    options.prompt,
     "--output-format",
     "stream-json",
     "--verbose",
@@ -132,7 +133,6 @@ export function buildClaudeArgs(options: {
   if (options.permissionMode === "readOnly") {
     args.push("--allowedTools", "Read,Grep,Glob,WebFetch,WebSearch");
   }
-  args.push(options.prompt);
   return args;
 }
 

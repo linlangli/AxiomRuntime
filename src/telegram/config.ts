@@ -228,6 +228,33 @@ export async function saveBotConfig(name: string, config: TelegramConfig): Promi
   return normalized;
 }
 
+export async function updateBotConfig(name: string, patch: Partial<TelegramConfig>): Promise<TelegramConfig> {
+  const configPath = getTelegramBotConfigPath(name);
+  const defaults = getDefaultBotConfig(name);
+  await fs.mkdir(getTelegramBotDir(), { recursive: true });
+  const next = await updateJsonFile(configPath, defaults, (current) => {
+    const normalized = normalizeTelegramConfig({ ...normalizeTelegramConfig(current), ...patch });
+    if (normalized.dbPath === getTelegramDbPath()) {
+      normalized.dbPath = getTelegramBotDbPath(name);
+    }
+    return normalized;
+  });
+  try {
+    await fs.chmod(configPath, 0o600);
+  } catch {
+    // Best-effort on filesystems that may not support chmod.
+  }
+  return normalizeTelegramConfig(next);
+}
+
+export async function setBotConfigValue(name: string, key: string, value: string): Promise<TelegramConfig> {
+  if (!isTelegramConfigKey(key)) {
+    throw new Error(`Unknown telegram config key: ${key}`);
+  }
+  const parsed = parseTelegramConfigValue(key, value);
+  return updateBotConfig(name, { [key]: parsed } as Partial<TelegramConfig>);
+}
+
 function getDefaultBotConfig(name: string): TelegramConfig {
   return {
     token: "",

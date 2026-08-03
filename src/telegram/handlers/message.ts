@@ -23,6 +23,7 @@ import { withTelegramNetworkRetry } from "../network-retry.js";
 import { handleMemoryManageInput, handleRememberInput } from "./memory.js";
 import { completeAgentProfile, remindSetup, setWorkdir, showReadyCard } from "./setup.js";
 import { handleUsagePriceInput } from "./usage.js";
+import { handleProviderAdminInput } from "./provider.js";
 
 export type MessageHandlerDeps = {
   sessionManager: SessionManager;
@@ -103,6 +104,7 @@ export function registerMessageHandler(bot: Bot, deps: MessageHandlerDeps): void
     const chatId = ctx.chat?.id;
     if (!chatId) return;
     const session = deps.sessionManager.getOrCreate(chatId);
+    if (await handleProviderAdminInput(ctx, text)) return;
     if (text.startsWith("/")) {
       void writeTelegramLog({ action: "slash_command_received", message: `cmd=${text.split(/\s/)[0]} setupStep=${session.setupStep} chatId=${chatId}` });
       if (session.setupStep === "command_name") {

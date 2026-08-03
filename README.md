@@ -24,6 +24,35 @@ AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/AI_RUNTIME_
 - 演进中：统一 Runtime 执行上下文、自动学习与记忆治理、Skill/Capability 生命周期、插件体系。
 - 长期方向：组织与租户隔离、能力注册与共享、企业集成、Web/Desktop/API 治理界面。
 
+## 通过 npm 安装
+
+运行环境需要 Node.js `22.19.0` 或更高版本。全局安装后，npm 会把本包注册为 `ai` 命令：
+
+```bash
+npm install --global @offerpilot/axiomruntime
+ai --version
+ai setup
+```
+
+`ai --version` 用于验证 npm 包和命令安装成功；`ai setup` 初始化 Runtime 配置，并可在确认后安装缺失的 Claude Code/Codex。之后可直接运行 `ai`。
+
+## 通过 Homebrew 安装
+
+发布流程会在 npm 发布成功后把 `Formula/axiomruntime.rb` 同步到 `offerpilot/homebrew-tap`。Tap 建立后可使用：
+
+```bash
+brew tap offerpilot/tap
+brew install axiomruntime
+ai --version
+ai setup
+```
+
+如果 Tap 不托管在 GitHub，需要在首次添加时显式提供公开 Git 地址：
+
+```bash
+brew tap offerpilot/tap <homebrew-tap-public-git-url>
+```
+
 ## 安装开发依赖
 
 运行和开发需要 Node.js `22.19.0` 或更高版本。该下限与锁定依赖的运行时要求一致；Node.js 20 不受支持。
@@ -36,9 +65,10 @@ npm install
 
 AI Gateway 不内置 Claude Code 或 Codex。它们作为彼此独立的外部 CLI 使用，需要先在本机安装并能通过 `PATH` 或常见安装路径找到。
 
-可用下面的命令检查：
+可用下面的命令初始化和检查：
 
 ```bash
+ai setup
 ai doctor
 ```
 
@@ -71,17 +101,17 @@ AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 
 ### GitLab 自动部署
 
-默认分支提交通过测试后，GitLab CI 会构建以 commit SHA 标记的镜像，并由锁定当前项目的受保护 Runner（标签 `agent-router-prod`）部署到 `154.201.73.41:/opt/agent-router`。部署只操作 `agent-router` Compose 项目；健康检查失败时恢复上一镜像，不清理服务器上的其他容器或镜像。
+默认分支提交通过测试后，GitLab CI 会构建以 commit SHA 标记的镜像，并由锁定当前项目的受保护 Runner（标签 `axiomruntime-prod`）部署到 `154.201.73.41:/opt/AxiomRuntime`。部署只操作 `axiomruntime` Compose 项目；健康检查失败时恢复上一镜像，不清理服务器上的其他容器或镜像。
 
-首次部署前，服务器必须已有 `/opt/agent-router/config/providers.json` 和 `/opt/agent-router/secrets/server-token`，且容器用户 `10001:10001` 可以读写配置目录。CI 只校验这些文件，不生成或覆盖凭据。
+首次部署前，服务器必须已有 `/opt/AxiomRuntime/config/providers.json` 和 `/opt/AxiomRuntime/secrets/server-token`，且容器用户 `10001:10001` 可以读写配置目录。CI 只校验这些文件，不生成或覆盖凭据。
 
-Telegram 容器默认不启动，以免与现有 long polling 进程争抢消息。完成迁移并停止旧 Bot 后，在服务器 `/opt/agent-router/.env` 中设置：
+Telegram 容器默认不启动，以免与现有 long polling 进程争抢消息。完成迁移并停止旧 Bot 后，在服务器 `/opt/AxiomRuntime/.env` 中设置：
 
 ```dotenv
 COMPOSE_PROFILES=telegram
 ```
 
-启用前还要把各 Bot 的 `defaultCwd` 改为容器内的 `/workspace/...`，对应宿主机 `/opt/agent-router/workspaces/...`。之后的自动部署会同时更新 Runtime API 和所有位于 `config/telegram/bots/*.json` 的 Telegram Bot。资源上限和工作目录可参考 `.env.server.example` 调整。
+启用前还要把各 Bot 的 `defaultCwd` 改为容器内的 `/workspace/...`，对应宿主机 `/opt/AxiomRuntime/workspaces/...`。之后的自动部署会同时更新 Runtime API 和所有位于 `config/telegram/bots/*.json` 的 Telegram Bot。资源上限和工作目录可参考 `.env.server.example` 调整。
 
 ## 本机注册 `ai` 命令
 
@@ -93,15 +123,17 @@ npm link
 
 ```bash
 ai
+ai --version
+ai setup
 ai help
 ai provider add
 ai provider list
 ai provider edit
 ai provider delete
 ai telegram
-ai telegram remove
-ai telegram start
-ai telegram status
+ai telegram list
+ai telegram start --bot ops
+ai telegram status --bot ops
 ai status
 ai log
 ai log --print
@@ -138,10 +170,10 @@ ai doctor
 
 Telegram Bot 集成说明：
 
-- `ai telegram config` 配置 Bot token、访问用户、默认引擎、默认目录和权限模式；如需所有用户可访问，执行 `ai telegram config set allowAllUsers true`。
-- `ai telegram start|stop|status|logs` 管理后台轮询进程；`ai telegram` 菜单中的 `remove` 可交互选择并解绑一个 Bot，同时删除其本地会话数据。
-- 如果本机不能直连 Telegram API，可设置 `ai telegram config set proxyUrl http://127.0.0.1:7890`。
-- Bot 首次 `/start` 或 `/reset` 会先选择 Provider/Model，再选择工作路径并自动确定 Claude Code/Codex。
+- 多 Bot 使用 `ai telegram add <name>` 创建，并以统一的 `--bot <name>` 选择目标；例如 `ai telegram edit --bot ops`、`start|stop|status --bot ops`、`delete --bot ops`。裸 `ai telegram` 会先选操作再选 Bot，删除有二次确认；批量生命周期操作使用 `--all`。
+- `ai telegram config set <key> <value> --bot <name>` 只修改指定 Bot；旧位置参数写法继续兼容。
+- 如果本机不能直连 Telegram API，可设置 `ai telegram config set proxyUrl http://127.0.0.1:7890 --bot <name>`。
+- Bot 首次 `/start` 或 `/reset` 会先选择工作路径，再选择 Claude Code/Codex，并展示当前会话、provider 和模型卡片。
 - Bot 会记录选择过的工作路径；自定义路径会按 `~/输入名称` 创建或复用。
 - Telegram 默认命令菜单只保留 `/claude`、`/codex`、`/reset`、`/cwd` 和 `/help`；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射。
 - Telegram 远程执行复用 AI Gateway 顶层 provider，不维护另一套 provider 配置。

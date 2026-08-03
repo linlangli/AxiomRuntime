@@ -1,7 +1,15 @@
 {
-  "name": "ai-gateway",
-  "version": "0.1.0",
+  "name": "@offerpilot/axiomruntime",
+  "version": "0.0.1",
   "description": "CLI-first foundation for an enterprise AI Runtime with provider routing and governed execution.",
+  "homepage": "https://gitlab.com/linlangli/agent-router",
+  "repository": {
+    "type": "git",
+    "url": "git+https://gitlab.com/linlangli/agent-router.git"
+  },
+  "bugs": {
+    "url": "https://gitlab.com/linlangli/agent-router/-/issues"
+  },
   "type": "module",
   "bin": {
     "ai": "./dist/cli/index.js"
@@ -14,16 +22,21 @@
     "telegram:service": "node --enable-source-maps dist/telegram/supervisor.js",
     "test": "npm run build && node --test test/*.test.js",
     "release": "node scripts/release.js",
-    "prepublishOnly": "npm test"
+    "release:current": "node scripts/release.js --current",
+    "release:check": "npm test && npm run homebrew:check",
+    "homebrew:update": "node scripts/update-homebrew-formula.js --write",
+    "homebrew:check": "node scripts/update-homebrew-formula.js",
+    "prepublishOnly": "npm run release:check"
   },
   "files": [
     "dist",
-    "docs",
-    "deploy",
-    "Dockerfile",
+    "docs/USAGE.html",
     "README.md",
     "package.json"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.19.0"
   },

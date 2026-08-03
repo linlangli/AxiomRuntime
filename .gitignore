@@ -11,6 +11,7 @@ hermes-state.json
 exports/
 .ai-gateway.log
 .ai-gateway/
+.codegraph/
 .omc/
 
 .DS_Store
