@@ -5,6 +5,12 @@ import { createJsonLineAccumulator, extractJsonLines, spawnCapture, stripAnsi, t
 import { requiresDangerousConfirmation } from "../interaction/approval.js";
 import { writeTelegramLog } from "../log.js";
 import { isRecord } from "../../core/utils/is-record.js";
+import {
+  CLAUDE_ROOT_PERMISSION_WARNING,
+  resolveClaudePermissionMode,
+  type ClaudePermissionMode,
+  type ProcessIdentityOptions
+} from "../../core/runner/claude-permission-policy.js";
 
 export class ClaudeEngine implements Engine {
   readonly name = "claude" as const;
@@ -12,8 +18,9 @@ export class ClaudeEngine implements Engine {
   private controllers = new Map<number, AbortController>();
 
   async execute(params: EngineExecuteParams): Promise<ExecutionResult> {
-    const permissionMode = params.permissionMode ?? "default";
-    const runtime = await prepareEngineRuntime("claude", params.providerName, params.modelName, permissionMode);
+    const requestedPermissionMode = params.permissionMode ?? "default";
+    const runtime = await prepareEngineRuntime("claude", params.providerName, params.modelName, requestedPermissionMode);
+    const permissionMode = runtime.claudePermission?.effectiveMode ?? requestedPermissionMode;
     const controller = new AbortController();
     this.controllers.set(params.chatId, controller);
     const signal = params.signal ?? controller.signal;
@@ -36,11 +43,25 @@ export class ClaudeEngine implements Engine {
       allowedTools: params.allowedTools
     });
 
-    await params.onProgress?.({ phase: "thinking", message: "Claude started" });
+    const permissionWarning = runtime.claudePermission?.constrained ? CLAUDE_ROOT_PERMISSION_WARNING : null;
+    await params.onProgress?.({ phase: "thinking", message: permissionWarning ?? "Claude started" });
+    if (permissionWarning) {
+      await writeTelegramLog({
+        level: "warn",
+        action: "claude_permission_constrained",
+        message: permissionWarning,
+        metadata: { requestedPermissionMode, effectivePermissionMode: permissionMode, reason: runtime.claudePermission?.reason }
+      });
+    }
     await writeTelegramLog({
       action: "claude_start",
       message: `Starting Claude for Telegram chat ${params.chatId}`,
-      metadata: { ...summarizeRuntime(runtime.provider, runtime.model, "claude"), cwd: params.cwd }
+      metadata: {
+        ...summarizeRuntime(runtime.provider, runtime.model, "claude"),
+        cwd: params.cwd,
+        requestedPermissionMode,
+        effectivePermissionMode: permissionMode
+      }
     });
 
     try {
@@ -101,11 +122,13 @@ export function buildClaudeArgs(options: {
   prompt: string;
   model: string;
   settingsPath?: string | null;
-  permissionMode: string;
+  permissionMode: ClaudePermissionMode;
   resume?: string | null;
   allowedTools?: string[];
+  uid?: ProcessIdentityOptions["uid"];
 }): string[] {
-  const permissionMode = options.permissionMode === "readOnly" ? "default" : options.permissionMode;
+  const resolution = resolveClaudePermissionMode(options.permissionMode, { uid: options.uid });
+  const permissionMode = resolution.effectiveMode === "readOnly" ? "default" : resolution.effectiveMode;
   const args = [
     "-p",
     options.prompt,
@@ -127,7 +150,7 @@ export function buildClaudeArgs(options: {
   if (options.allowedTools?.length) {
     args.push("--allowedTools", options.allowedTools.join(","));
   }
-  if (options.permissionMode === "bypassPermissions") {
+  if (resolution.effectiveMode === "bypassPermissions") {
     args.push("--dangerously-skip-permissions");
   }
   if (options.permissionMode === "readOnly") {

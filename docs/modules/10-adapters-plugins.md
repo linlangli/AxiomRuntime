@@ -306,7 +306,12 @@ registerEngine({
   buildArgs: (provider, model, settingsPath) => {
     const args = ["--model", model];
     if (settingsPath) args.push("--settings", settingsPath);
-    if (provider.mode === "auto") args.push("--dangerously-skip-permissions");
+    const permission = resolveClaudePermissionMode(
+      provider.mode === "auto" ? "bypassPermissions" : "default"
+    );
+    if (permission.effectiveMode === "bypassPermissions") {
+      args.push("--dangerously-skip-permissions");
+    }
     return args;
   },
   normalizeBaseUrl: (url) => url.replace(/\/+$/, "").replace(/\/v1$/i, "")

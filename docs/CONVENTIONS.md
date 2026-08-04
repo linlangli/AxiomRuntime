@@ -91,6 +91,7 @@ Required implementation behavior:
 - Preserve Tool/Workflow/Agent boundaries: a Tool is one typed side effect, a Workflow is a recoverable state machine, and an Agent is an adapter whose tool proposals return to the Kernel for authorization. Hidden retries, permissions, provider switches, or side effects in adapters are forbidden.
 - Meet the numeric release gates in `service-level-objectives.md`; hard safety regressions override availability error budgets.
 - Provider-specific behavior stays in adapters.
+- Treat package-install privilege separately from Runtime execution privilege. Claude launch paths must detect UID 0 before building arguments or temporary settings, must never forward `--dangerously-skip-permissions` from a privileged process, and must record any policy constraint from configured `bypassPermissions` to effective `default`; long-lived Runtime services should use a dedicated non-root OS identity.
 - Resolve provider fallback candidates once per execution attempt. After selection, engine adapters execute the exact provider/model and never perform hidden second-stage routing.
 - Treat expired runtime circuits as half-open probes. Do not let stale `status: error` metadata permanently disable a provider after its cooldown.
 - Keep protocol compatibility distinct from transient upstream failure: native Responses may fall back to Chat only for explicit protocol incompatibility, never for Cloudflare `52x` or similar timeouts.

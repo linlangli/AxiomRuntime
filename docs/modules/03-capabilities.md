@@ -136,11 +136,11 @@ CLI 命令注册表、runner 引擎注册表（`EngineDescriptor{buildEnv/buildA
 |---|---|
 | `name` | 唯一 provider 名 |
 | `baseUrl` / `apiKeyRef` | provider API 基址 / `SecretStore` 引用；配置文件不保存明文密钥 |
-| `mode` | 权限模式 `ask`\|`auto`；Claude Code `auto` 加 `--dangerously-skip-permissions`，`ask` 启动前提示且不加该 flag |
+| `mode` | 权限模式 `ask`\|`auto`；非 root 下 Claude Code `auto` 加 `--dangerously-skip-permissions`，`ask` 启动前提示且不加该 flag；UID 0 下 Adapter 将 effective mode 约束为 `default` |
 | `level` | 优先级，数字越小越高，`level:1` 为默认 provider |
 | `model` | 该 provider 默认模型 |
 
-规则：`name` 唯一；model 候选来自内部 cache（`.ai-cache.json`），**不**来自 `providers.json`；手改须下次命令运行时生效；运行时数据**不得**污染 `providers.json`；写入用 temp-file + rename；JSON store 须容忍完整 JSON 后跟随的意外尾部重复内容，下次保存时重写为干净 JSON。legacy `apiKey` 只允许作为一次性 migration input：读取后立即写入 `SecretStore`、改写为 `apiKeyRef`，不得进入日志、export、cache 或新保存结果。SecretStore 不可用时拒绝持久化新密钥，禁止退回明文。
+规则：`name` 唯一；model 候选来自内部 cache（`.ai-cache.json`），**不**来自 `providers.json`；手改须下次命令运行时生效；运行时数据**不得**污染 `providers.json`；写入用 temp-file + rename；JSON store 须容忍完整 JSON 后跟随的意外尾部重复内容，下次保存时重写为干净 JSON。legacy `apiKey` 只允许作为一次性 migration input：读取后立即写入 `SecretStore`、改写为 `apiKeyRef`，不得进入日志、export、cache 或新保存结果。SecretStore 不可用时拒绝持久化新密钥，禁止退回明文。`mode` 是 configured intent，不能覆盖 R23；执行日志与 session 必须反映 effective mode。
 
 ## E. 自动 fallback（选择 + 运行时）
 

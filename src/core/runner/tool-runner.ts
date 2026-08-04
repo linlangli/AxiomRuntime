@@ -8,6 +8,11 @@ import type { CliToolType, Provider } from "../types.js";
 import { isRecord } from "../utils/is-record.js";
 import { resolveToolCommand } from "./command-resolver.js";
 import { getRunnerEngine } from "./engine-registry.js";
+import {
+  CLAUDE_ROOT_PERMISSION_WARNING,
+  resolveClaudePermissionMode,
+  type ProcessIdentityOptions
+} from "./claude-permission-policy.js";
 import { finishSession, startSession } from "../sessions/session-service.js";
 
 export async function runTool(tool: CliToolType, provider: Provider, model: string, options: { fallbackFrom?: string | null } = {}): Promise<number> {
@@ -17,12 +22,19 @@ export async function runTool(tool: CliToolType, provider: Provider, model: stri
     throw new Error(`Failed to find ${tool} CLI. Run \`ai doctor\` to check local CLI installation.`);
   }
   const engine = getRunnerEngine(tool);
-  const env = buildRunnerEnv(tool, provider, model);
+  const launchPolicy = resolveRunnerLaunchPolicy(tool, provider);
+  if (launchPolicy.warning) {
+    console.warn(`Warning: ${launchPolicy.warning}`);
+  }
+  const effectiveProvider = launchPolicy.provider;
+  const env = buildRunnerEnv(tool, effectiveProvider, model);
   const temporaryFiles: string[] = [];
-  const claudeSettingsPath = engine.requiresSettingsFile ? writeTemporaryClaudeSettings(provider) : null;
+  const claudeSettingsPath = engine.requiresSettingsFile
+    ? writeTemporaryClaudeSettings(effectiveProvider, { permissionMode: launchPolicy.claudeSettingsPermissionMode })
+    : null;
   if (claudeSettingsPath) temporaryFiles.push(claudeSettingsPath);
-  const args = buildRunnerArgs(tool, provider, model, claudeSettingsPath);
-  const effectiveBaseUrl = getToolBaseUrl(tool, provider);
+  const args = buildRunnerArgs(tool, effectiveProvider, model, claudeSettingsPath);
+  const effectiveBaseUrl = getToolBaseUrl(tool, effectiveProvider);
   await writeLog({
     category: "usage",
     action: "tool_spawn",
@@ -31,7 +43,9 @@ export async function runTool(tool: CliToolType, provider: Provider, model: stri
       tool,
       provider: provider.name,
       model,
-      mode: provider.mode,
+      mode: effectiveProvider.mode,
+      configuredMode: provider.mode,
+      permissionConstraint: launchPolicy.reason,
       baseUrl: effectiveBaseUrl,
       configuredBaseUrl: provider.baseUrl,
       apiKeyFingerprint: getSecretFingerprint(provider.apiKey),
@@ -42,7 +56,7 @@ export async function runTool(tool: CliToolType, provider: Provider, model: stri
   });
   const session = await startSession({
     tool,
-    provider,
+    provider: effectiveProvider,
     model,
     projectPath: process.cwd(),
     fallbackFrom: options.fallbackFrom ?? null
@@ -74,8 +88,45 @@ export function getSecretFingerprint(value: string): string {
   return `${value.slice(0, 8)}...${value.slice(-6)} len=${value.length}`;
 }
 
-export function buildRunnerArgs(tool: CliToolType, provider: Provider, model: string, claudeSettingsPath: string | null): string[] {
-  return getRunnerEngine(tool).buildArgs({ provider, model, settingsPath: claudeSettingsPath });
+export function buildRunnerArgs(
+  tool: CliToolType,
+  provider: Provider,
+  model: string,
+  claudeSettingsPath: string | null,
+  identity: ProcessIdentityOptions = {}
+): string[] {
+  const launchPolicy = resolveRunnerLaunchPolicy(tool, provider, identity);
+  return getRunnerEngine(tool).buildArgs({
+    provider: launchPolicy.provider,
+    model,
+    settingsPath: claudeSettingsPath,
+    uid: identity.uid
+  });
+}
+
+export type RunnerLaunchPolicy = {
+  provider: Provider;
+  claudeSettingsPermissionMode: "provider" | "safeDefault";
+  warning: string | null;
+  reason: "root_bypass_permissions_unsupported" | null;
+};
+
+export function resolveRunnerLaunchPolicy(
+  tool: CliToolType,
+  provider: Provider,
+  identity: ProcessIdentityOptions = {}
+): RunnerLaunchPolicy {
+  if (tool !== "claude") {
+    return { provider, claudeSettingsPermissionMode: "provider", warning: null, reason: null };
+  }
+  const requestedMode = provider.mode === "auto" ? "bypassPermissions" : "default";
+  const resolution = resolveClaudePermissionMode(requestedMode, identity);
+  return {
+    provider: resolution.constrained ? { ...provider, mode: "ask" } : provider,
+    claudeSettingsPermissionMode: resolution.privileged ? "safeDefault" : "provider",
+    warning: resolution.constrained ? CLAUDE_ROOT_PERMISSION_WARNING : null,
+    reason: resolution.reason
+  };
 }
 
 const AUTO_PERMISSIONS = {
@@ -101,9 +152,15 @@ const READ_ONLY_PERMISSIONS = {
   deny: ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"]
 };
 
+const SAFE_DEFAULT_PERMISSIONS = {
+  defaultMode: "default",
+  allow: [],
+  deny: []
+};
+
 export function writeTemporaryClaudeSettings(
   provider: Provider,
-  options: { permissionMode?: "provider" | "readOnly" } = {}
+  options: { permissionMode?: "provider" | "readOnly" | "safeDefault" } = {}
 ): string {
   const userSettingsPath = path.join(os.homedir(), ".claude", "settings.json");
   const settings = readClaudeSettings(userSettingsPath);
@@ -115,7 +172,9 @@ export function writeTemporaryClaudeSettings(
     ANTHROPIC_BASE_URL: baseUrl
   };
 
-  if (options.permissionMode === "readOnly") {
+  if (options.permissionMode === "safeDefault") {
+    settings.permissions = { ...SAFE_DEFAULT_PERMISSIONS };
+  } else if (options.permissionMode === "readOnly") {
     settings.permissions = { ...READ_ONLY_PERMISSIONS };
   } else if (provider.mode === "auto") {
     settings.permissions = { ...AUTO_PERMISSIONS };

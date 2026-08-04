@@ -51,7 +51,7 @@
 
 **部分存在、待收敛**。当前脱敏与凭证处理散落 Transport/Memory；本层将其收敛为统一 Security，明确四子责任边界。
 
-常驻 Runtime 服务使用独立 Bearer Token，在 constant-time comparison 后才允许访问 `/v1/*`。生产 Token 与 provider credentials 通过只读/持久化挂载注入，不进入镜像。Agent Run 禁止任意 cwd，只接受规范化 `workspace_id`；默认 `read_only`，服务 API 不暴露 `bypassPermissions`，并设置请求体、并发与执行超时上限。
+常驻 Runtime 服务使用独立 Bearer Token，在 constant-time comparison 后才允许访问 `/v1/*`。生产 Token 与 provider credentials 通过只读/持久化挂载注入，不进入镜像。Agent Run 禁止任意 cwd，只接受规范化 `workspace_id`；默认 `read_only`，服务 API 不暴露 `bypassPermissions`，并设置请求体、并发与执行超时上限。包安装可使用管理员权限，但 Agent 与常驻 Runtime 应使用专用非 root OS identity；Claude Adapter 检测到 UID 0 时必须在构造 args/settings 前把 `bypassPermissions` 约束为 `default`，清除 execution-scoped settings 中的 inherited bypass，并写入 configured/effective mode 与 reason。
 
 ## 10. 验收标准
 
@@ -60,6 +60,7 @@
 - 持久执行证据**不含**原始 authorization/system prompt/reasoning/raw tool 参数。
 - 递归脱敏 + persist allowlist **强制**生效（只扫响应文本不合规）。
 - 互不信任租户拥有真实 OS/容器/网络隔离，非仅端口区隔。
+- UID 0 启动 Claude 的 fixture 必须证明 args 不含 `--dangerously-skip-permissions`、临时 settings 不含 inherited bypass，且 configured/effective mode 与 constraint reason 可观测。
 - OIDC/SAML 登录、SCIM provisioning、delegated admin 与 break-glass 流程必须通过签名/issuer/audience/nonce/session 校验；role 或 group 变化不能直接生成 capability，仍需 Policy 与执行期权限检查。
 - break-glass 必须 time-bound、reason-bound、单独审批/告警/审计；禁止绕过 tenant isolation、legal hold、secret handling 或审计写入。
 - residency、retention 与 legal hold 的执行状态必须可证明；边界不确定时阻止数据移动或物理删除，禁止以“稍后补审计”继续。

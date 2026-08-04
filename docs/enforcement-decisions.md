@@ -772,6 +772,7 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - capability handle 必须签名、短时有效并绑定 user/execution/domain/operation；跨 execution 和跨 Agent 复用失败。
 - Memory、Profile、Skill、网页、文件和模型输出均无权创建或扩权 capability；只有 Broker/Policy Kernel 可以签发。
 - redirect、data egress、confirmation 和 action risk 在工具执行时验证，不能只依赖 prompt 中的 capability 描述。
+- 安装身份与执行身份必须分离：管理员可安装 Runtime 包，但 Claude Agent 与常驻 Runtime 应使用专用非 root OS identity。检测到 UID 0 时，`bypassPermissions` 必须在 args/settings 构造前约束为 effective `default`，清除 inherited bypass，并记录 configured/effective mode 与 constraint reason；任何 Surface/Adapter 禁止传递 `--dangerously-skip-permissions`。
 
 ### R24 Shadow、完整性与可逆编译（Phase 11-13）
 

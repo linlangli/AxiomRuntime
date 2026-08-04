@@ -84,6 +84,7 @@
 - Agent 权限：每个 `tool_request` 重新经 Kernel/Policy；Agent 更换 provider、扩大 scope、自签 capability 或绕过 confirmation 的 fixture 必须失败
 - Coding Agent 分层：Telegram/CLI/API 对同一 `claude-code-agent` 或 `codex-cli-agent` descriptor 产生一致的 provider pin、permission、budget、retry owner、Usage 与 terminal event；Telegram `Engine` facade 不得直接 spawn Tool 或绕过 Orchestration
 - CLI enforcement capability：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 按版本声明 tool interception、confirmation、resume、cancel 与 isolation 支持；未知版本或不可拦截模式必须触发 descriptor/Policy 收窄，且不得伪报逐 Tool 强制授权已生效
+- Privileged Claude launch：以 UID 0 fixture 请求 `bypassPermissions` 时，CLI/Telegram effective mode 必须为 `default`，args 禁止出现 `--dangerously-skip-permissions`，execution-scoped settings 必须移除 inherited bypass；非 root fixture 保持现有 `auto` 行为。
 - Adapter replacement：local 与至少一个替换 Tool/Workflow/Agent adapter 通过相同 contract/error/cancel/idempotency/recovery suite
 - Durable boundary：Agent reasoning、raw tool args/output、provider run payload 不进入 RuntimeEvent、checkpoint、audit、crash dump 或 fixture
 

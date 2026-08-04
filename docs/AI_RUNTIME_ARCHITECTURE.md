@@ -81,6 +81,8 @@ Telegram / CLI / API Surface
 
 Native Claude Code or Codex tool requests are untrusted Agent proposals. The adapter normalizes them to `AgentRunEvent.tool_request`; the Kernel authorizes the corresponding `ToolPort` invocation at execution time. If a CLI version cannot expose an interceptable tool-request/confirmation boundary, its descriptor must declare that limitation and Policy must constrain it to an isolation and permission mode appropriate to the resulting risk. Telegram approval callbacks only submit a decision for the bound request; they never execute the tool directly.
 
+Installation privilege and execution privilege are separate. Package installation may require an administrator, but Agent processes and long-lived Runtime services should run under a dedicated non-root OS identity. A Claude adapter must detect UID 0 before argument and temporary-settings construction; `bypassPermissions` is then constrained to `default`, inherited bypass settings are removed from the execution-scoped settings, and the configured versus effective mode plus reason are observable. No Surface or adapter may forward `--dangerously-skip-permissions` from a privileged process.
+
 ## 3. Capability Evolution
 
 ```text

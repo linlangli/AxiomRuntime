@@ -7,7 +7,7 @@ import { addProvider, deleteProvider, updateProvider } from "../dist/core/provid
 import { readCache, recordProviderRuntimeFailure, upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
 import { getProviderStatuses } from "../dist/core/status/status-service.js";
-import { runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
+import { getExecutionUserDoctorItem, runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveExactProviderForTool, resolveProviderForTool, resolveProviderCandidatesForTool } from "../dist/core/runner/fallback.js";
 import { checkAndRecordMemoryEmbeddingConfig } from "../dist/core/memory/embedding-check.js";
 import {
@@ -26,6 +26,14 @@ import {
 } from "../dist/core/integrations/integration-state.js";
 
 const ORIGINAL_FETCH = globalThis.fetch;
+
+test("doctor reports privileged execution with an actionable non-root recommendation", () => {
+  const item = getExecutionUserDoctorItem({ uid: 0 });
+  assert.equal(item?.status, "warn");
+  assert.match(item?.message ?? "", /constrained to default permissions/);
+  assert.match(item?.suggestion ?? "", /dedicated non-root account/);
+  assert.equal(getExecutionUserDoctorItem({ uid: 1000 }), null);
+});
 
 test("addProvider writes provider config and model cache", async () => {
   await withTempHome(async () => {

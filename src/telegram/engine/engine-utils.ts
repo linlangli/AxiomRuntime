@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { CliToolType, Provider } from "../../core/types.js";
 import { resolveExactProviderForTool, resolveProviderForTool } from "../../core/runner/fallback.js";
 import { buildRunnerEnv, cleanupTemporaryFiles, getToolBaseUrl, writeTemporaryClaudeSettings } from "../../core/runner/tool-runner.js";
+import { resolveClaudePermissionMode, type ClaudePermissionResolution } from "../../core/runner/claude-permission-policy.js";
 import { resolveToolCommand } from "../../core/runner/command-resolver.js";
 import type { TelegramPermissionMode } from "../config.js";
 import type { PermissionRequest } from "./types.js";
@@ -13,6 +14,7 @@ export type RuntimeSelection = {
   command: string;
   temporaryFiles: string[];
   claudeSettingsPath: string | null;
+  claudePermission: ClaudePermissionResolution | null;
 };
 
 export async function prepareEngineRuntime(
@@ -32,16 +34,26 @@ export async function prepareEngineRuntime(
     throw new Error(`Failed to find ${tool} CLI. Run \`ai doctor\` to check local CLI installation.`);
   }
 
+  const claudePermission = tool === "claude"
+    ? resolveClaudePermissionMode(permissionMode ?? "default")
+    : null;
+  const effectiveProvider = claudePermission?.constrained ? { ...provider, mode: "ask" as const } : provider;
   const env = {
-    ...buildRunnerEnv(tool, provider, model),
+    ...buildRunnerEnv(tool, effectiveProvider, model),
     AI_GATEWAY_SOURCE: "telegram"
   };
   const temporaryFiles: string[] = [];
   const claudeSettingsPath = tool === "claude"
-    ? writeTemporaryClaudeSettings(provider, { permissionMode: permissionMode === "readOnly" ? "readOnly" : "provider" })
+    ? writeTemporaryClaudeSettings(provider, {
+        permissionMode: permissionMode === "readOnly"
+          ? "readOnly"
+          : claudePermission?.privileged
+            ? "safeDefault"
+            : "provider"
+      })
     : null;
   if (claudeSettingsPath) temporaryFiles.push(claudeSettingsPath);
-  return { provider, model, env, command, temporaryFiles, claudeSettingsPath };
+  return { provider, model, env, command, temporaryFiles, claudeSettingsPath, claudePermission };
 }
 
 export function cleanupRuntime(runtime: RuntimeSelection): void {

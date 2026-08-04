@@ -2535,6 +2535,32 @@ test("claude args include verbose stream-json output", () => {
   assert.equal(args.includes("--verbose"), true);
 });
 
+test("claude args never request bypass permissions as root", () => {
+  const args = buildClaudeArgs({
+    prompt: "hello",
+    model: "claude-opus-4-6",
+    settingsPath: "/tmp/settings.json",
+    permissionMode: "bypassPermissions",
+    uid: 0
+  });
+  assert.deepEqual(args.slice(args.indexOf("--permission-mode"), args.indexOf("--permission-mode") + 2), [
+    "--permission-mode",
+    "default"
+  ]);
+  assert.equal(args.includes("--dangerously-skip-permissions"), false);
+});
+
+test("claude args retain bypass permissions for non-root users", () => {
+  const args = buildClaudeArgs({
+    prompt: "hello",
+    model: "claude-opus-4-6",
+    settingsPath: "/tmp/settings.json",
+    permissionMode: "bypassPermissions",
+    uid: 1000
+  });
+  assert.equal(args.includes("--dangerously-skip-permissions"), true);
+});
+
 test("claude read-only binds the prompt before variadic allowed tools", () => {
   const args = buildClaudeArgs({
     prompt: "read-only prompt",

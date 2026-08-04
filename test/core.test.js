@@ -10,9 +10,10 @@ import { normalizeProviders, swapProviderLevel } from "../dist/core/config/provi
 import { checkProvider, extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
 import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
+import { isPrivilegedProcess, resolveClaudePermissionMode } from "../dist/core/runner/claude-permission-policy.js";
 import { getRunnerEngine, listRunnerEngines } from "../dist/core/runner/engine-registry.js";
 import { startOpenAiUsageProxy } from "../dist/core/runner/openai-usage-proxy.js";
-import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl, writeTemporaryClaudeSettings } from "../dist/core/runner/tool-runner.js";
+import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl, resolveRunnerLaunchPolicy, writeTemporaryClaudeSettings } from "../dist/core/runner/tool-runner.js";
 import { estimateTokenCostUsd } from "../dist/core/usage/pricing.js";
 import { runResolvedProviderCandidates } from "../dist/cli/commands/use.js";
 import { getCliCommand, listInteractiveCliCommands, registerCliCommand } from "../dist/cli/registry.js";
@@ -71,6 +72,11 @@ test("runner engine registry exposes built-in engines", () => {
   const codex = getRunnerEngine("codex");
   assert.equal(claude.normalizeBaseUrl("https://api.test/v1"), "https://api.test");
   assert.equal(codex.normalizeBaseUrl("https://api.test"), "https://api.test/v1");
+  assert.equal(claude.buildArgs({
+    provider: { name: "api", baseUrl: "https://api.test", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" },
+    model: "claude-opus-4-6",
+    uid: 0
+  }).includes("--dangerously-skip-permissions"), false);
   assert.deepEqual(codex.buildArgs({
     provider: { name: "api", baseUrl: "https://api.test", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" },
     model: "gpt-5.5"
@@ -797,7 +803,7 @@ test("json store serializes concurrent read modify write updates", async () => {
   }
 });
 
-test("maps Claude auto mode to bypass permissions + dangerously skip", () => {
+test("maps Claude auto mode to bypass permissions + dangerously skip for non-root users", () => {
   const provider = {
     name: "api",
     baseUrl: "https://icode.51talk.biz/v1/",
@@ -807,7 +813,7 @@ test("maps Claude auto mode to bypass permissions + dangerously skip", () => {
     model: "claude-sonnet-4-6"
   };
 
-  assert.deepEqual(buildRunnerArgs("claude", provider, "claude-sonnet-4-6", "/tmp/settings.json"), [
+  assert.deepEqual(buildRunnerArgs("claude", provider, "claude-sonnet-4-6", "/tmp/settings.json", { uid: 1000 }), [
     "--model",
     "claude-sonnet-4-6",
     "--settings",
@@ -815,6 +821,34 @@ test("maps Claude auto mode to bypass permissions + dangerously skip", () => {
     "--permission-mode",
     "bypassPermissions",
     "--dangerously-skip-permissions"
+  ]);
+});
+
+test("constrains Claude auto mode to safe defaults for root", () => {
+  const provider = {
+    name: "api",
+    baseUrl: "https://api.test/v1",
+    apiKey: "key",
+    mode: "auto",
+    level: 1,
+    model: "claude-sonnet-4-6"
+  };
+
+  const resolution = resolveClaudePermissionMode("bypassPermissions", { uid: 0 });
+  assert.equal(isPrivilegedProcess({ uid: 0 }), true);
+  assert.equal(resolution.effectiveMode, "default");
+  assert.equal(resolution.constrained, true);
+  assert.equal(resolution.reason, "root_bypass_permissions_unsupported");
+
+  const policy = resolveRunnerLaunchPolicy("claude", provider, { uid: 0 });
+  assert.equal(policy.provider.mode, "ask");
+  assert.equal(policy.claudeSettingsPermissionMode, "safeDefault");
+  assert.match(policy.warning, /non-root user/);
+  assert.deepEqual(buildRunnerArgs("claude", provider, "claude-sonnet-4-6", "/tmp/settings.json", { uid: 0 }), [
+    "--model",
+    "claude-sonnet-4-6",
+    "--settings",
+    "/tmp/settings.json"
   ]);
 });
 
@@ -964,6 +998,40 @@ test("writeTemporaryClaudeSettings preserves user permissions in ask mode", asyn
 
     assert.deepEqual(written.permissions, userPerms);
 
+    await fs.unlink(settingsPath);
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    await fs.rm(tempHome, { recursive: true, force: true });
+  }
+});
+
+test("writeTemporaryClaudeSettings removes inherited bypass permissions for privileged execution", async () => {
+  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "ai-gateway-claude-home-"));
+  const previousHome = process.env.HOME;
+  process.env.HOME = tempHome;
+  try {
+    await fs.mkdir(path.join(tempHome, ".claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempHome, ".claude", "settings.json"),
+      `${JSON.stringify({ permissions: { defaultMode: "bypassPermissions", allow: ["Bash", "Write"], deny: [] } }, null, 2)}\n`,
+      { mode: 0o600 }
+    );
+    const provider = {
+      name: "root-safe",
+      baseUrl: "https://api.test",
+      apiKey: "sk-test",
+      mode: "ask",
+      level: 1,
+      model: "claude-opus-4-8"
+    };
+
+    const settingsPath = writeTemporaryClaudeSettings(provider, { permissionMode: "safeDefault" });
+    const written = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    assert.deepEqual(written.permissions, { defaultMode: "default", allow: [], deny: [] });
     await fs.unlink(settingsPath);
   } finally {
     if (previousHome === undefined) {
