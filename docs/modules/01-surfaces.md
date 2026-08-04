@@ -198,7 +198,9 @@ const ALWAYS_CONFIRM_PATTERNS = [
 
 `ai`（无参进交互模式）｜`ai help`（打开 `docs/USAGE.html`）。直接命令：
 
-npm 分发包固定为 `@offerpilot/axiomruntime`，其 `bin` 契约固定注册 `ai`。`npm install --global @offerpilot/axiomruntime` 的安装验收必须在隔离 prefix 中直接执行已安装的 `ai`。Homebrew Formula 必须复用相同版本的 npm tarball、固定 SHA256、依赖 `node@22` 并以 `ai --version` 验收；不得维护第二套 Runtime 构建物。Tag pipeline 必须先发布 npm，验证 registry tarball与 Formula checksum 一致后，才能把 Formula 推送到独立 Tap。`ai doctor` 诊断 Runtime 配置、Provider 连通性和外部 CLI readiness，不承担包管理器完整性校验。
+npm 分发包固定为 `@offerpilot/axiomruntime`，其 `bin` 契约固定注册 `ai`。`npm install --global @offerpilot/axiomruntime` 的安装验收必须在隔离 prefix 中直接执行已安装的 `ai`。Homebrew Formula 必须复用相同版本的 npm tarball、固定 SHA256、依赖 `node@22` 并以 `ai --version` 验收；不得维护第二套 Runtime 构建物。Tag pipeline 必须先发布 npm，验证 registry tarball 与 Formula checksum 一致后，才能把 Formula 推送到配置的 Tap；同项目 Tap 只允许使用短期 `CI_JOB_TOKEN` 回写，不保存长期仓库 Token。`ai doctor` 诊断 Runtime 配置、Provider 连通性和外部 CLI readiness，不承担包管理器完整性校验。
+
+全局安装身份与 Runtime 执行身份分离：管理员可安装 npm 包，但 `ai` 与 Telegram 常驻服务应以专用非 root 用户执行。Surface 只展示 configured/effective permission mode 与约束原因；UID 0 下 Claude `bypassPermissions -> default` 的裁决由共享 core policy 完成，CLI 与 Telegram 禁止各自绕过或重复实现。
 
 ```bash
 ai version | ai --version | ai -v
@@ -1487,7 +1489,7 @@ ai-gateway/
 {
   "dependencies": {
     "grammy": "^1.30.0",
-    "better-sqlite3": "^11.0.0"
+    "better-sqlite3": "^13.0.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0"

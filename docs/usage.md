@@ -21,6 +21,7 @@
 ## 通过 npm 安装
 
 ```bash
+node --version
 npm install --global @offerpilot/axiomruntime
 ai --version
 ai setup
@@ -28,11 +29,15 @@ ai setup
 
 npm 包名是 `@offerpilot/axiomruntime`，安装后注册的可执行命令是 `ai`。`ai --version`、`ai version`、`ai -v` 均输出当前包版本，并且不会创建 Runtime 配置或日志。
 
+如果 npm 显示 `EBADENGINE`，当前 Node.js 版本不满足运行要求。请先升级到 `22.19.0+`，再重新安装；不要把该警告当作可忽略的普通提示。
+
+全局安装可以由 root 完成，但 `ai`、Telegram 和其他常驻 Runtime 进程应由专用非 root 用户运行。`ai doctor` 会提示 root 执行风险；若 root 下仍请求 Claude `auto`/`bypassPermissions`，Runtime 会把本次执行约束为默认权限、重写临时 settings，并记录 configured/effective mode，不会把 `--dangerously-skip-permissions` 传给 Claude Code。
+
 ## 通过 Homebrew 安装
 
 ```bash
-brew tap offerpilot/tap
-brew install axiomruntime
+brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
+brew install linlangli/axiom/axiomruntime
 ai --version
 ai setup
 ```
@@ -103,7 +108,7 @@ ai use codex 51talk gpt-5.5
 - Codex 兼容 `gpt`、`codex`、`grok`、`o` 系列和 `openai` 模型名。
 - 当前 provider 不可用时，按 `level` 自动降级。
 - 启动 Claude Code 时，AI Gateway 会生成临时 `--settings` 文件，把 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 写入 settings 的 `env` 后启动；不会修改 `~/.claude/settings.json`，也不会使用 `--bare`。
-- provider 的 `mode` 为 `auto` 时，启动 Claude Code 会追加 `--dangerously-skip-permissions`；`ask` 模式不会追加该参数，并会在启动前确认。
+- provider 的 `mode` 为 `auto` 时，非 root 执行 Claude Code 会追加 `--dangerously-skip-permissions`；`ask` 模式不会追加该参数，并会在启动前确认。root 下请求 `auto` 会被安全约束为默认权限，并输出如何改用非 root 用户的告警。
 - 启动 Codex 时，AI Gateway 会通过本次子进程的 `-c model_provider=...` 参数固定所选 provider，并用 `env_key = "OPENAI_API_KEY"` 读取本次注入的 API Key。Codex 全局 `auth.json`、`config.toml` 和直接执行 `codex` 的流程不会被修改。
 - 如果 provider 的 `baseUrl` 是 OpenAI 兼容地址，例如 `https://icode.51talk.biz/v1`，启动 Claude Code 时会自动注入 `https://icode.51talk.biz`；启动 Codex 时仍使用 `/v1`。
 - 启动记录会写入日志，包含 provider、baseUrl、模型、启动参数和 API Key 指纹，不包含完整 API Key。

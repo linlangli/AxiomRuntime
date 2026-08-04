@@ -458,13 +458,16 @@
         <section id="install" class="panel">
           <h2>通过 npm 安装</h2>
           <div class="detail-body">
-            <pre>npm install --global @offerpilot/axiomruntime
+            <pre>node --version
+npm install --global @offerpilot/axiomruntime
 ai --version
 ai setup</pre>
             <p>npm 包名是 <code>@offerpilot/axiomruntime</code>，安装后注册的可执行命令是 <code>ai</code>。需要 Node.js <code>22.19.0+</code>。</p>
+            <p>如果 npm 显示 <code>EBADENGINE</code>，请先升级 Node.js 再重新安装，不要继续使用警告状态下安装的 CLI。</p>
             <p><code>ai --version</code> 无副作用地验证安装；<code>ai setup</code> 初始化 Runtime，并可在确认后安装缺失的 Claude Code/Codex。</p>
-            <pre>brew tap offerpilot/tap
-brew install axiomruntime
+            <p>全局安装可以由 root 完成，但日常执行和常驻服务应使用专用非 root 用户。root 下请求 Claude <code>auto</code>/<code>bypassPermissions</code> 时，Runtime 会安全约束为默认权限并告警，不会传递 <code>--dangerously-skip-permissions</code>。</p>
+            <pre>brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
+brew install linlangli/axiom/axiomruntime
 ai --version
 ai setup</pre>
             <p>Homebrew Formula 复用同版本 npm tarball并校验 SHA256，固定使用 Homebrew <code>node@22</code>。非 GitHub Tap 首次添加时需提供公开 Git URL。</p>
@@ -629,7 +632,7 @@ ai use codex 51talk gpt-5.5</pre>
                   <li>provider 不可用时按 <code>level</code> 自动降级。</li>
                   <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings。</li>
                   <li>Codex 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
-                  <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。</li>
+                  <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，非 root 执行 Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。root 下请求 <code>auto</code> 会被安全约束为默认权限，临时 settings 中继承的 bypass 配置也会被清除。</li>
                   <li>OpenAI 兼容地址用于 Codex 时会使用 <code>/v1</code>，用于 Claude 时会去掉 <code>/v1</code>。</li>
                   <li>日志只记录 Key 指纹，不记录完整 API Key。</li>
                 </ul>

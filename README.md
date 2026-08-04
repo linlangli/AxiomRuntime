@@ -26,31 +26,30 @@ AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/AI_RUNTIME_
 
 ## 通过 npm 安装
 
-运行环境需要 Node.js `22.19.0` 或更高版本。全局安装后，npm 会把本包注册为 `ai` 命令：
+运行环境需要 Node.js `22.19.0` 或更高版本。先确认版本，再执行全局安装；npm 会把本包注册为 `ai` 命令：
 
 ```bash
+node --version
 npm install --global @offerpilot/axiomruntime
 ai --version
 ai setup
 ```
 
+如果 npm 显示 `EBADENGINE`，说明当前 Node.js 版本不受支持。请先升级到 `22.19.0+`，不要继续使用警告状态下安装的 CLI。
+
 `ai --version` 用于验证 npm 包和命令安装成功；`ai setup` 初始化 Runtime 配置，并可在确认后安装缺失的 Claude Code/Codex。之后可直接运行 `ai`。
+
+可用 root 完成全局安装，但日常执行 `ai` 和常驻服务应使用专用非 root 用户。若仍以 root 启动 Claude，Runtime 会把 `auto`/`bypassPermissions` 安全约束为默认权限、输出告警，并且绝不会传递 Claude Code 禁止 root 使用的 `--dangerously-skip-permissions`。
 
 ## 通过 Homebrew 安装
 
-发布流程会在 npm 发布成功后把 `Formula/axiomruntime.rb` 同步到 `offerpilot/homebrew-tap`。Tap 建立后可使用：
+发布流程会在 npm 发布成功后把 `Formula/axiomruntime.rb` 同步到 GitLab 项目 `linlangli/axiom`。首次安装需要显式提供 GitLab 地址：
 
 ```bash
-brew tap offerpilot/tap
-brew install axiomruntime
+brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
+brew install linlangli/axiom/axiomruntime
 ai --version
 ai setup
-```
-
-如果 Tap 不托管在 GitHub，需要在首次添加时显式提供公开 Git 地址：
-
-```bash
-brew tap offerpilot/tap <homebrew-tap-public-git-url>
 ```
 
 ## 安装开发依赖

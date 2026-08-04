@@ -46,11 +46,11 @@ npm pack --dry-run
 
 ```text
 NPM_TOKEN=<你的 npm automation token>
-HOMEBREW_TAP_PUSH_URL=<带写权限且设为 masked 的 Tap Git URL>
+HOMEBREW_TAP_PUSH_URL=https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/linlangli/axiom.git
 HOMEBREW_TAP_BRANCH=main
 ```
 
-`HOMEBREW_TAP_PUSH_URL` 指向独立的 `offerpilot/homebrew-tap` 仓库。推荐使用受限 deploy token/机器人凭证，不要使用个人长期凭证。Tap 仓库必须预先存在并至少包含目标分支。
+当前 GitLab 同项目 Tap 使用展开后的 `CI_JOB_TOKEN` URL 指向 `linlangli/axiom`，该变量需要启用变量引用展开，并在项目设置中启用 Job Token 仓库推送；URL 本身不保存长期秘密。若改用独立 Tap，目标仓库必须预先存在并至少包含目标分支，并使用受限、masked 的写入凭证。
 
 发布流程会在 Linux 发布 runner 完成构建后重新生成并校验 `Formula/axiomruntime.rb` 的 URL/SHA256，将 Formula 作为 artifact 传给后续 Job；npm 发布成功后再用 registry tarball 二次验证并推送到 Tap。这样不会依赖 macOS 与 Linux 的 npm tarball 字节完全一致：
 
