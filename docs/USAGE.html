@@ -559,7 +559,7 @@ ai setup</pre>
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider edit</code><br /><code class="cmd">ai provider edit 51talk</code></td>
                 <td>修改 name、baseUrl、凭证、mode、level、model。</td>
-                <td>凭证写入 SecretStore，配置只保存 apiKeyRef；编辑时不回显原值。</td>
+                <td>当前 apiKey 以明文保存在 providers.json，编辑时会回显当前值。SecretStore + apiKeyRef 是目标态，尚未实现。</td>
               </tr>
               <tr data-search="provider delete remove fallback">
                 <td><span class="group-label">Provider</span></td>
@@ -811,7 +811,8 @@ ai session clear</pre>
                 <pre>~/.ai-gateway/providers.json
 ~/.ai-gateway/memory.json
 ~/.ai-gateway/model-pricing.json</pre>
-                <p><code>providers.json</code> 保存聊天 provider 与 <code>apiKeyRef</code>；<code>memory.json</code> 保存记忆检索 embedding 模型与 secret ref；实际凭证进入 SecretStore。<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格。</p>
+                <p><code>providers.json</code> 保存聊天 provider；<code>memory.json</code> 保存记忆检索 embedding 模型。<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格。</p>
+                <p><strong>注意：</strong>这两个文件当前都以明文保存 <code>apiKey</code>。请限制文件权限并且不要提交到仓库。凭证改由 SecretStore 管理、配置只留 <code>apiKeyRef</code> 是目标架构，尚未实现。</p>
               </div>
             </details>
             <details>

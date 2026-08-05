@@ -277,6 +277,7 @@ Memory 不是独立产品，而是 AI Runtime 的**学习与知识子系统**。
 > | Runtime Transport Proxy 单一数据平面 | 未实现 | `src/core/transport-proxy/` 目录不存在 |
 > | 版本化 migrations | 未实现，`create table if not exists` 直建 | 无 migrations 目录 |
 > | 凭证加密 | 未启用，credential 类直接抛错 | `memory-service.ts` |
+> | `SecretStore` + `apiKeyRef` | 未实现，`providers.json` 明文存 `apiKey` | `src/core/config/providers-store.ts` |
 
 ## C. 非目标
 
@@ -555,7 +556,8 @@ flowchart LR
 
 ```typescript
 // === Core 全局类型 ===
-Provider          // 服务商配置 (name, baseUrl, apiKeyRef, model, mode, level)
+Provider          // 服务商配置 (name, baseUrl, apiKey, model, mode, level)
+                  // 现状：apiKey 为明文字段；目标态是 apiKeyRef + SecretStore（未实现）
 ProviderCache     // 缓存状态 (status: HealthStatus, models[], lastCheckedAt, lastError)
 UsageEvent        // 用量事件 (tokens, provider, model, source)
 TokenUsage        // Token 统计 (inputTokens, outputTokens, totalTokens, cacheReadInputTokens)

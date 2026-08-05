@@ -222,7 +222,9 @@ level
 model
 ```
 
-`apiKey` 是交互式凭证输入，不是 `providers.json` 的持久化字段。命令将凭证写入 `SecretStore`，配置只保存 `apiKeyRef`；编辑时不回显原值，留空表示保持现有凭证。
+> **当前实现：`apiKey` 以明文保存在 `providers.json`。** 目标架构要求凭证写入 `SecretStore`、配置只保留 `apiKeyRef`（见 [modules/03-capabilities.md](modules/03-capabilities.md)），但 `SecretStore` 尚未实现。因此当前必须自行保护 `providers.json` 的文件权限，且不要提交到仓库。
+>
+> 选择 `apiKey` 编辑时，当前值会作为输入默认值显示；这同样是尚未收敛到目标行为的已知差异。
 
 规则：
 
@@ -243,12 +245,12 @@ ai provider list
 level
 name
 baseUrl
-credentialStatus
+API Key
 mode
 model
 ```
 
-列表只显示 `configured/missing/unavailable` 等凭证状态，禁止显示 API Key 或可用于解析 secret 的内部信息。
+> **当前实现显示掩码后的 API Key**（保留首末各 4 位，例如 `sk-d****0000`），不是完整值。目标态是只显示 `configured/missing/unavailable` 凭证状态、不泄露任何 secret 片段；录屏或截图分享前请注意这一差异。
 
 `ai provider list` 只展示配置，不刷新健康度。
 
@@ -278,7 +280,7 @@ ai memory embedding clear
 - 参数顺序为 `name baseUrl apiKey model`；`--type` 取 `jina` 或 `openai-compatible`。
 - `--type jina` 会默认写入 `retrieval.query` 和 `retrieval.passage`，可用 `--query-task` / `--passage-task` 覆盖；`--dimensions` 指定向量维度。
 - `set` 后会调用 embeddings 接口做一次轻量验证；加 `--skip-test` 可跳过。
-- 配置只保存在本机 `~/.ai-gateway/memory.json`，日志会脱敏 API Key。
+- 配置只保存在本机 `~/.ai-gateway/memory.json`，日志会脱敏 API Key。但配置文件本身当前以明文保存 `apiKey`（与 `providers.json` 同样待迁移到 `SecretStore`），请限制文件权限。
 
 ## 查看状态
 
@@ -312,6 +314,8 @@ token 使用量
 ```
 
 `ai status` 是轻量检查：它验证 provider 连通性、模型列表、Claude/Codex 各自的有效 baseUrl 和兼容模型，不发送真实对话请求。
+
+`apiKey` 与 `ai provider list` 一样显示掩码值（保留首末各 4 位）。
 
 token 使用量来自 `usage.json` 中真实记录的 provider usage。AI Gateway 自己发起且 provider 返回 usage 的请求会累计，例如 `ai doctor --deep`；Telegram Codex 执行也会通过本地代理记录 provider usage。
 
@@ -546,7 +550,7 @@ ai web
   {
     "name": "51talk",
     "baseUrl": "https://example.com",
-    "apiKeyRef": "secret://provider/51talk",
+    "apiKey": "sk-xxx",
     "mode": "auto",
     "level": 1,
     "model": "claude-opus-4-6"
@@ -554,7 +558,9 @@ ai web
 ]
 ```
 
-`apiKeyRef` 由 CLI/SecretStore 管理。手工编辑配置时可修改已有 ref，但不得把明文 API Key 写入 JSON；新增或轮换凭证使用 `ai provider add/edit`。
+新增或轮换凭证使用 `ai provider add/edit`，不要手工编辑 `apiKey`。
+
+> **当前 `apiKey` 是明文字段。** 目标架构为 `apiKeyRef` + `SecretStore`（`"apiKeyRef": "secret://provider/<name>"`），迁移完成后 legacy `apiKey` 只作一次性 migration input。在此之前请确保 `providers.json` 权限受限，且绝不提交到仓库。
 
 `model-pricing.json` 用于给只返回 token usage、不返回 cost 的模型估算费用。单位是美元 / 百万 token，可按模型名或 `provider/model` 配置：
 
