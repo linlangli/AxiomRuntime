@@ -187,6 +187,8 @@ Profile 只替换 backend，不改变 `MemoryService`、Claim/Evidence、PolicyD
 
 引入成熟组件前必须记录 ADR，至少包括：能力契约、数据分类与出境、开源许可证、维护活跃度、已知 CVE、资源占用、锁定版本、升级/回滚、离线能力、托管与自托管差异、替换 fixture 和数据导出格式。CI 生成 SBOM 并执行依赖与许可证扫描。
 
+包含 Node 原生 addon 的容器部署必须在一次性 build stage 中提供锁定依赖所需的编译工具链，随后裁掉 development dependency，并把 production dependency tree 复制到使用相同 Node.js patch release 的最终镜像。最终镜像不携带编译器，也不得在缺少工具链的 stage 中再次执行会触发源码编译的 `npm ci`。当前 `better-sqlite3` 属于该约束范围。
+
 每个 adapter 必须提供：
 
 1. contract test 和固定 golden fixture；

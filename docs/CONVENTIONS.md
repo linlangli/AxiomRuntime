@@ -128,6 +128,8 @@ The project includes a GitLab CI pipeline in `.gitlab-ci.yml`.
 CI rules:
 
 - Normal branch and merge request pipelines run `npm test`.
+- Docker dependency stages must provide the native build toolchain required by locked Node addons. Compile those addons in a disposable build stage, prune development dependencies there, and copy the resulting production dependency tree into an ABI-compatible final image; do not repeat `npm ci` in a toolchain-free final stage.
+- Pin build and final Docker stages to the same declared minimum Node.js patch release so native addons are compiled and executed with the same Node ABI.
 - Tag pipelines publish to npm.
 - npm publishing requires the GitLab CI/CD variable `NPM_TOKEN`.
 - A release tag must point to a commit contained in `origin/main`.

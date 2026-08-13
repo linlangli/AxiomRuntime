@@ -102,6 +102,8 @@ AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 
 默认分支提交通过测试后，GitLab CI 会构建以 commit SHA 标记的镜像，并由锁定当前项目的受保护 Runner（标签 `axiomruntime-prod`）部署到 `154.201.73.41:/opt/AxiomRuntime`。部署只操作 `axiomruntime` Compose 项目；健康检查失败时恢复上一镜像，不清理服务器上的其他容器或镜像。
 
+镜像构建会在一次性 build stage 中编译 `better-sqlite3` 原生 addon，再把裁掉开发依赖后的 production dependency tree 复制到相同 Node.js 版本的最终镜像；最终镜像不包含编译器。
+
 首次部署前，服务器必须已有 `/opt/AxiomRuntime/config/providers.json` 和 `/opt/AxiomRuntime/secrets/server-token`，且容器用户 `10001:10001` 可以读写配置目录。CI 只校验这些文件，不生成或覆盖凭据。
 
 Telegram 容器默认不启动，以免与现有 long polling 进程争抢消息。完成迁移并停止旧 Bot 后，在服务器 `/opt/AxiomRuntime/.env` 中设置：
