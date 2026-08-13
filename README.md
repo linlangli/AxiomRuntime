@@ -43,7 +43,9 @@ ai setup
 
 ## 通过 Homebrew 安装
 
-发布流程会在 npm 发布成功后把 `Formula/axiomruntime.rb` 同步到 GitLab 项目 `linlangli/axiom`。首次安装需要显式提供 GitLab 地址：
+维护者发布新版本时可直接双击仓库根目录的 `发布.command`，交互选择 npm、Homebrew 或发布条件检查，无需记发布命令。npm 发布成功后，再选择 Homebrew；助手会读取 npm Registry 的真实 tarball 与 SHA256，并把 `Formula/axiomruntime.rb` 同步到 GitLab 项目 `linlangli/axiom`。
+
+用户首次安装需要显式提供 GitLab 地址：
 
 ```bash
 brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git

@@ -61,7 +61,7 @@ Principles:
 - Keep user-facing documentation in Chinese.
 - Keep project documents under `docs/`, except the root `README.md`.
 - Keep the minimum Node.js runtime synchronized across `package.json`, `package-lock.json`, `.gitlab-ci.yml`, and user documentation. CI must execute the declared minimum version, currently `22.19.0`, so newer local runtimes cannot hide dependency incompatibilities.
-- Publish npm as `@offerpilot/axiomruntime` and treat its versioned tarball as the sole CLI distribution source. Homebrew Formulae must pin the matching registry URL and SHA256, depend on `node@22`, and pass `ai --version`; the npm publish job must regenerate the Formula after building on the release runner and pass it as an artifact, because npm tarball bytes may differ across operating systems. A tag pipeline may update the Tap only after npm publication and registry checksum verification.
+- Publish npm as `@offerpilot/axiomruntime` and treat its versioned registry tarball as the sole CLI distribution source. Homebrew Formulae must pin the matching registry URL and SHA256, depend on `node@22`, and pass `ai --version`. npm and Homebrew are explicit, independently selected release actions: the npm action creates and pushes a release tag for GitLab CI; the Homebrew action may run only after that version exists in npm Registry and must derive its checksum from the downloaded registry tarball before updating the Tap.
 - Prefer clean core APIs over CLI-specific logic.
 - Keep `providers.json` stable and human-editable.
 - Avoid adding fields to `providers.json` unless users need to edit them directly.
@@ -139,16 +139,12 @@ CI rules:
 - A release tag must point to a commit contained in `origin/main`.
 - The tag version must match `package.json` version. Both `v0.1.1` and `0.1.1` tag formats are accepted.
 - The publish job runs `npm test` and `npm pack --dry-run` before `npm publish --access public`.
+- Homebrew publication is a separate explicit maintainer action. It must read an already-published npm Registry version, calculate SHA256 from the downloaded registry tarball, preserve Formula installation logic, show the diff, and require confirmation before pushing the Tap.
+- The interactive release assistant must fail closed on a dirty worktree, merge conflicts, missing GitLab authentication, missing `NPM_TOKEN`, duplicate npm versions, or a missing npm version for Homebrew. It may guide or launch prerequisite setup but must never expose tokens or resolve source conflicts automatically.
 
 Release convention:
 
-```bash
-git switch main
-git merge develop
-npm run release:current # only when publishing a pre-set initial version
-# npm run release      # subsequent interactive version bumps
-git push origin main --tags
-```
+On macOS, maintainers double-click the repository-root `发布.command` and choose npm, Homebrew, or status checks. `npm run release` opens the same menu as a cross-platform compatibility entry. Maintainers are not required to remember branch, version, tag, push, or Homebrew update commands.
 
 ## Progress Sync Rules
 

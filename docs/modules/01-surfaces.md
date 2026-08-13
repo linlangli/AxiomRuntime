@@ -198,7 +198,7 @@ const ALWAYS_CONFIRM_PATTERNS = [
 
 `ai`（无参进交互模式）｜`ai help`（打开 `docs/USAGE.html`）。直接命令：
 
-npm 分发包固定为 `@offerpilot/axiomruntime`，其 `bin` 契约固定注册 `ai`。`npm install --global @offerpilot/axiomruntime` 的安装验收必须在隔离 prefix 中直接执行已安装的 `ai`。Homebrew Formula 必须复用相同版本的 npm tarball、固定 SHA256、依赖 `node@22` 并以 `ai --version` 验收；不得维护第二套 Runtime 构建物。Tag pipeline 必须先发布 npm，验证 registry tarball 与 Formula checksum 一致后，才能把 Formula 推送到配置的 Tap；同项目 Tap 只允许使用短期 `CI_JOB_TOKEN` 回写，不保存长期仓库 Token。`ai doctor` 诊断 Runtime 配置、Provider 连通性和外部 CLI readiness，不承担包管理器完整性校验。
+npm 分发包固定为 `@offerpilot/axiomruntime`，其 `bin` 契约固定注册 `ai`。`npm install --global @offerpilot/axiomruntime` 的安装验收必须在隔离 prefix 中直接执行已安装的 `ai`。Homebrew Formula 必须复用 npm Registry 中已发布版本的 tarball、固定实际下载内容的 SHA256、依赖 `node@22` 并以 `ai --version` 验收；不得维护第二套 Runtime 构建物。维护者通过根目录 `发布.command` 交互选择 npm、Homebrew 或 status check：npm action 在临时 main 中完成 version/test/tag/push 并等待 GitLab pipeline，Homebrew action 只接受 Registry 已存在版本、保留 Formula 安装逻辑、展示 diff 并经确认后推送 Tap。两个 action 禁止隐式连带触发；工作区不干净、合并冲突、缺少 GitLab auth/`NPM_TOKEN`、npm 版本重复或 Homebrew 来源版本不存在时必须 fail-closed，并提供不暴露 secret 的中文引导。`ai doctor` 诊断 Runtime 配置、Provider 连通性和外部 CLI readiness，不承担包管理器完整性校验。
 
 全局安装身份与 Runtime 执行身份分离：管理员可安装 npm 包，但 `ai` 与 Telegram 常驻服务应以专用非 root 用户执行。Surface 只展示 configured/effective permission mode 与约束原因；UID 0 下 Claude `bypassPermissions -> default` 的裁决由共享 core policy 完成，CLI 与 Telegram 禁止各自绕过或重复实现。
 
