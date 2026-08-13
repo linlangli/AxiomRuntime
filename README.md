@@ -131,6 +131,10 @@ ai provider add
 ai provider list
 ai provider edit
 ai provider delete
+ai set codex chatgpt
+ai set codex provider 51talk-cq gpt-5.6-sol
+ai set codex provider 51talk-cq
+ai set codex proxy 127.0.0.1:7890
 ai telegram
 ai telegram list
 ai telegram start --bot ops

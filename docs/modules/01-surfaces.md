@@ -66,7 +66,7 @@ Surfaces **无持久数据所有权**。会话真相属 ② Orchestration 的 Wo
 
 ## 9. 现状映射
 
-`src/cli/`（18 文件）、`src/telegram/`（37 文件）已存在，保持为 adapter；`telegram/session|memory|interaction` 中的可复用策略**应当**上移 ② Orchestration。`server/`、`web/`、`scheduler/` 待建。
+`src/cli/`、`src/telegram/` 已存在并保持为 adapter；`ai set codex` 仅读取 provider/model candidates、呈现 provider→model selector 并调用 `src/core/integrations/codex-provider-config.ts`，不在 Surface 内实现 GPT filtering/ordering、凭据/TOML、desktop environment 写入或重启语义。`telegram/session|memory|interaction` 中的可复用策略**应当**上移 ② Orchestration。`server/`、`web/`、`scheduler/` 待建。
 
 ## 10. 验收标准
 
@@ -207,6 +207,9 @@ ai version | ai --version | ai -v
 ai setup [--yes] [--install-tools] [--skip-provider] [--skip-tools]
 ai use claude | ai use codex
 ai use claude 51talk claude-opus-4-6      # tool + provider + model
+ai set codex chatgpt
+ai set codex provider [provider-name] [model-id]
+ai set codex proxy <host:port|url|off>
 ai add 51talk https://example.com sk-xxx  # 添加 provider
 ai provider edit | list
 ai status | log | context | doctor [--local|--no-fix|--strict|--deep --tool claude|codex] | last | web
@@ -216,7 +219,7 @@ ai report
 
 ## F. surface 职责边界（呼应本文 §2）
 
-CLI 只负责：解析命令 → 构造意图 → 获取安装外部 CLI 等显式授权 → 呈现结果。provider 选择委托 ③（见 [03-capabilities.md](03-capabilities.md) 附 D–F），执行委托 ④，用量呈现读 ⑤ 的 `usage.json`。`ai status` 是健康态投影；`ai doctor` 的诊断和安全修复由 core status/config API 实现，修复范围仅限 Runtime home，禁止读取或修改项目源码，禁止自动覆盖 `providers.json`。CLI 不实现路由或配置修复语义。
+CLI 只负责：解析命令 → 构造意图 → 获取安装外部 CLI 或持久切换 Codex client provider/proxy 等显式授权 → 呈现结果。provider/model 候选读取 ③ 的 provider cache，GPT-only 校验与 newest ordering 由 core integration policy 完成；Surface 只呈现 provider→model 两级 selector。执行委托 ④，用量呈现读 ⑤ 的 `usage.json`。`ai set codex` 的 ChatGPT OAuth、`CODEX_HOME/config.toml`/`auth.json` 事务写入、macOS user launchd proxy environment 同步和 app restart 委托 ⑩ 的 core integration service。`ai status` 是健康态投影；`ai doctor` 的诊断和安全修复由 core status/config API 实现，修复范围仅限 Runtime home，禁止读取或修改项目源码，禁止自动覆盖 `providers.json`。CLI 不实现路由、凭据写入或配置修复语义。
 
 ---
 

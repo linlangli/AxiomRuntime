@@ -27,6 +27,8 @@ R0 保留完整目标，但拆成三个可以独立演示、验收和回滚的�
 
 Increment gate：前一 Increment 的 contract/version/error 语义冻结并通过 replacement fixture 后才进入下一项；后续项可在 feature flag 后开发，但禁止反向修改已经发布的外部契约，除非走版本升级与 migration。R0.1/R0.2/R0.3 全部通过才可对外称为 `Release R0`。
 
+当前 Foundation 已交付一个受限的本地兼容增量：`ai set codex chatgpt|provider [name] [model-id]|proxy <endpoint|off>` 通过 core integration service 显式同步 Codex 用户级 provider/auth/proxy 配置，并在成功后重启 desktop client。Provider path 只接受 discovered cache 中的 GPT models，支持 explicit、deterministic newest 与 provider→model interactive selection；整体具备 atomic write、provider/auth failure rollback、proxy config + macOS environment rollback、credential `0600` 和 secret-free credential log fixture；不代表 `SecretStore`、统一 Admin mutation/audit 或完整 `Release R0` gate 已完成。
+
 ## 关键交付风险与应对闭环
 
 以下六项是当前目标方案的首要交付风险。应对措施、降级路径和退出门槛属于 Release gate；困难能力可以分阶段、Shadow 或切换 Adapter，但不得被静默删除。

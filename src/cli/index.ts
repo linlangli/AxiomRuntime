@@ -10,6 +10,7 @@ import { runMemoryCommand } from "./commands/memory.js";
 import { runReportCommand } from "./commands/report.js";
 import { runLastCommand, runUseCommand } from "./commands/use.js";
 import { runSessionCommand } from "./commands/session.js";
+import { runSetCommand } from "./commands/set.js";
 import { runSetupCommand } from "./commands/setup.js";
 import { runStatusCommand } from "./commands/status.js";
 import { runTelegramCommand } from "./commands/telegram.js";
@@ -17,6 +18,7 @@ import { runVersionCommand } from "./commands/version.js";
 import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
 import { getCliCommand, registerCliCommand } from "./registry.js";
+import { redactCodexProxyCommandArgs } from "./sanitize-args.js";
 
 registerBuiltInCommands();
 
@@ -59,6 +61,8 @@ async function main(): Promise<void> {
 }
 
 function sanitizeArgs(command: string | undefined, args: string[]): string[] {
+  const redactedProxyArgs = redactCodexProxyCommandArgs(command, args);
+  if (redactedProxyArgs) return redactedProxyArgs;
   if (command === "add" && args.length >= 3) {
     return [args[0]!, args[1]!, maskSecretArg(args[2]!)];
   }
@@ -129,7 +133,7 @@ function maskSecretArg(value: string): string {
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["setup", "use", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["setup", "use", "set", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -245,6 +249,11 @@ function registerBuiltInCommands(): void {
     name: "use",
     description: "use",
     run: (args) => runUseCommand(args)
+  });
+  registerCliCommand({
+    name: "set",
+    description: "set Codex provider or proxy",
+    run: (args) => runSetCommand(args)
   });
   registerCliCommand({
     name: "last",

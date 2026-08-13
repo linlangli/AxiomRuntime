@@ -51,11 +51,15 @@
 
 **部分存在、待收敛**。当前脱敏与凭证处理散落 Transport/Memory；本层将其收敛为统一 Security，明确四子责任边界。
 
+`ai set codex` 是当前受限的 vendor credential/config compatibility path：ChatGPT token 只能由 `codex login` OAuth 生成；自定义 provider 的 API key 只写入 `CODEX_HOME/auth.json`，权限固定为 `0600`，`config.toml` 只保存 provider metadata 与已验证的 cached GPT model id。Provider/model validation failure 必须发生在 credential/config mutation 前。两文件更新使用 snapshot、atomic rename 与 failure rollback，日志和终端不输出 secret；这是迁移到统一 `SecretStore` 前的本地兼容实现，不改变目标态的 Security ownership。Proxy 子命令只接受无 credential 的 HTTP(S) origin，command usage log 对 endpoint 整体脱敏，并管理 `shell_environment_policy.set` 中固定 allowlist 的 proxy env keys；macOS user launchd environment 的部分更新失败时必须 best-effort 还原已改变量，并恢复原 `config.toml`，禁止重启到半配置状态。
+
 常驻 Runtime 服务使用独立 Bearer Token，在 constant-time comparison 后才允许访问 `/v1/*`。生产 Token 与 provider credentials 通过只读/持久化挂载注入，不进入镜像。Agent Run 禁止任意 cwd，只接受规范化 `workspace_id`；默认 `read_only`，服务 API 不暴露 `bypassPermissions`，并设置请求体、并发与执行超时上限。包安装可使用管理员权限，但 Agent 与常驻 Runtime 应使用专用非 root OS identity；Claude Adapter 检测到 UID 0 时必须在构造 args/settings 前把 `bypassPermissions` 约束为 `default`，清除 execution-scoped settings 中的 inherited bypass，并写入 configured/effective mode 与 reason。
 
 ## 10. 验收标准
 
 - 凭证/会话态**不出现**在任何 prompt 或 memory 中。
+- Codex provider 切换 fixture 必须证明 ChatGPT OAuth 不由 Runtime 伪造、自定义 provider key 不进入 TOML/日志、`auth.json` 为 `0600`、仅 cached `gpt-*` model 可被选择、无 GPT/invalid model 在 mutation 前失败，且任一步失败恢复原 `config.toml` 与 `auth.json`。
+- Codex proxy fixture 必须证明 URL validation、managed-key-only TOML 更新、无关 shell env/table 保留、清除语义、environment failure config rollback 与 no-restart；测试禁止修改真实 user launchd environment。
 - 普通配置、普通 export、日志和 cache **不含**明文 secret；跨设备 secret 迁移只能使用接收方绑定、显式确认、可审计且有有效期的 `ProtectedPayloadCodec` envelope，导入目标只能是 `SecretStore`。
 - 持久执行证据**不含**原始 authorization/system prompt/reasoning/raw tool 参数。
 - 递归脱敏 + persist allowlist **强制**生效（只扫响应文本不合规）。

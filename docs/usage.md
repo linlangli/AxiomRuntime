@@ -113,6 +113,47 @@ ai use codex 51talk gpt-5.5
 - 如果 provider 的 `baseUrl` 是 OpenAI 兼容地址，例如 `https://icode.51talk.biz/v1`，启动 Claude Code 时会自动注入 `https://icode.51talk.biz`；启动 Codex 时仍使用 `/v1`。
 - 启动记录会写入日志，包含 provider、baseUrl、模型、启动参数和 API Key 指纹，不包含完整 API Key。
 
+## 设置 Codex App 的持久 Provider
+
+切换到 ChatGPT 账号：
+
+```bash
+ai set codex chatgpt
+```
+
+命令会调用 `codex login` 打开浏览器，由 Codex 完成 ChatGPT OAuth；成功后把用户级 `model_provider` 设置为内建 `openai`，并更新 `CODEX_HOME/auth.json`。默认 `CODEX_HOME` 是 `~/.codex`。
+
+切换到 AI Runtime 已添加的 provider：
+
+```bash
+ai set codex provider 51talk-cq gpt-5.6-sol  # 显式选择 GPT 模型
+ai set codex provider 51talk-cq              # 自动选择最新的可用 GPT 模型
+ai set codex provider                         # 依次交互选择 provider 和 GPT 模型
+```
+
+也可以运行 `ai set codex`，再交互选择 `ChatGPT account`、`Configured provider` 或 `Proxy`。Provider 规则如下：
+
+- 自定义 provider 必须已经通过 `ai provider add` 添加；命令复用它的 `name`、`baseUrl` 和 `apiKey`，模型候选只来自该 provider 已探测并缓存的 `gpt-*` 列表。
+- 指定 provider 但省略 model 时，按 GPT 数字版本从新到旧选择；同版本优先 `sol`、`pro`、无 tier alias、`codex`、`terra`、`mini`、`luna`、`nano`，并优先滚动 alias 而不是日期快照。没有任何 GPT 模型时提示先运行 `ai status` 刷新模型列表，不修改 Codex 配置。
+- 显式 model 必须是该 provider 列表中的 `gpt-*` id；`ai set codex provider` 则先选择 provider，再从排序后的 GPT 列表选择模型。
+- `config.toml` 只写 `model_provider`、provider metadata 和本次选中的模型，不写 API Key；原有 project、MCP、plugin、feature 等无关设置会保留。
+- 自定义 provider 的 Key 按 Codex 兼容格式写入 `auth.json`，权限强制为 `0600`。切换到自定义 provider 会替换当前 ChatGPT token；以后切回 ChatGPT 需要再次完成浏览器登录。
+- `config.toml` 与 `auth.json` 使用临时文件原子替换；登录取消、认证结果无效或写入失败时恢复两份原文件。
+- 两份文件一致后，macOS 会延迟重启已安装的 `Codex.app`；当前客户端名为 `ChatGPT.app` 时会重启该应用。找不到应用或在其他平台运行时，配置仍然成功，但需按提示手动重启。
+- 日志只记录 provider 名、provider id 和是否已安排重启，不记录 API Key 或 ChatGPT token。
+
+设置 Codex App 的 HTTP 代理：
+
+```bash
+ai set codex proxy 127.0.0.1:7890
+ai set codex proxy http://127.0.0.1:7890
+ai set codex proxy off                    # 清除本命令管理的代理变量
+```
+
+也可以运行 `ai set codex` 后选择 `Proxy`。裸 `host:port` 会规范化为 `http://host:port`；仅接受不含账号密码、path、query 或 fragment 的 `http://` / `https://` origin。命令只更新 `config.toml` 的 `[shell_environment_policy.set]` 中大小写 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`，保留该 table 的其他变量以及其余 Codex 设置，不修改 `auth.json`。macOS 还会同步当前登录会话的 user launchd environment，让重启后的 `Codex.app` / `ChatGPT.app` 继承代理；同步失败会恢复原 config 且不重启，注销或重启 macOS 后需重新运行本命令。其他平台仍会写入 Codex 子进程环境配置，但 Codex App 自身的桌面环境需由用户设置后手动重启。代理地址在 command usage log 中整体脱敏。
+
+`ai set codex` 与 `ai use codex` 的作用域不同：前者显式修改 Codex App 的持久用户配置；后者只为本次子进程注入 provider，不修改全局 Codex 配置。
+
 ## Telegram Bot
 
 多 Bot 管理统一使用 `--bot <name>` 指定目标：

@@ -48,6 +48,10 @@ Principles:
 - Writes should use temp-file plus rename semantics to reduce corruption from concurrent CLI processes.
 - Validate configuration at read time.
 - Preserve user edits.
+- Explicit commands that persist configuration into another client home must snapshot and roll back every affected file as one operation, preserve unrelated settings, and use that client's supported authentication flow rather than synthesizing OAuth credentials.
+- Codex credentials written to `CODEX_HOME/auth.json` must use mode `0600`; API keys must not be copied into `config.toml`, command output, or logs.
+- Persistent custom Codex provider selection must use the provider's discovered model cache, accept only available `gpt-*` ids, and fail without mutation when no GPT model is available. Automatic selection must be deterministic: newer numeric GPT family first, then the documented tier order, with rolling aliases preferred over dated snapshots.
+- Codex proxy persistence must manage only `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and their lowercase equivalents in `shell_environment_policy.set`. Proxy URLs supplied on the command line must not contain credentials. A macOS desktop-environment update must roll back both its changed launchd variables and `config.toml` before reporting failure.
 
 ## Development Conventions
 
@@ -190,7 +194,7 @@ Documentation review must appear in the task checklist or handoff summary even w
 ## Current Status
 
 - Foundation CLI implemented with no runtime third-party dependencies.
-- Implemented commands: `ai`, `ai version|--version|-v`, `ai setup`, `ai help`, `ai add`, `ai provider list`, `ai provider edit`, `ai provider delete`, `ai session`, `ai session list`, `ai session clear`, `ai report`, `ai status`, `ai log`, `ai context`, actionable `ai doctor` with safe Runtime-home repair, `ai doctor --deep --tool claude|codex`, `ai use`, `ai last`, placeholder `ai web`.
+- Implemented commands: `ai`, `ai version|--version|-v`, `ai setup`, `ai help`, `ai add`, `ai provider list`, `ai provider edit`, `ai provider delete`, `ai set codex`, `ai session`, `ai session list`, `ai session clear`, `ai report`, `ai status`, `ai log`, `ai context`, actionable `ai doctor` with safe Runtime-home repair, `ai doctor --deep --tool claude|codex`, `ai use`, `ai last`, placeholder `ai web`.
 - Implemented core stores: `providers.json`, `.ai-cache.json`, `usage.json`.
 - Implemented real token usage recording for provider responses with usage data (from `ai doctor --deep`).
 - Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.

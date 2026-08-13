@@ -52,7 +52,7 @@
 
 `src/core/integrations/` 已提供通用集成状态注册；`plugins/` 目录和完整插件生命周期仍待建设。
 
-Claude Code/Codex 的具体 CLI 封装目标态属于本层：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 实现 `AgentAdapterPort`。它们拥有二进制发现、启动参数、临时 vendor 配置、进程生命周期、stream event parsing、session cursor 和 vendor error mapping；不拥有 Agent capability 激活、provider/model 选择、tool permission、retry policy、Memory、Usage 或 Learning。当前 CLI runner 对 `ai use codex` 使用 process-scoped `model_provider` override，把 `env_key` 固定为本次子进程的 `OPENAI_API_KEY`，禁止回落到用户全局 Codex credential；该 override 不写入全局 `auth.json` 或 `config.toml`。Telegram `Engine` wrapper 是 ① 的兼容 facade，不是另一个 Agent Adapter 权威入口。
+Claude Code/Codex 的具体 CLI 封装目标态属于本层：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 实现 `AgentAdapterPort`。它们拥有二进制发现、启动参数、临时 vendor 配置、进程生命周期、stream event parsing、session cursor 和 vendor error mapping；不拥有 Agent capability 激活、provider/model 选择、tool permission、retry policy、Memory、Usage 或 Learning。当前 CLI runner 对 `ai use codex` 使用 process-scoped `model_provider` override，把 `env_key` 固定为本次子进程的 `OPENAI_API_KEY`，禁止回落到用户全局 Codex credential；该 override 不写入全局 `auth.json` 或 `config.toml`。显式 `ai set codex` 则调用独立的 `codex-provider-config` integration service，按用户意图持久切换 vendor client 或 proxy：ChatGPT 认证委托 `codex login`；自定义 provider 由 Runtime provider record 与 discovered model cache 生成 Codex provider table、GPT-only selected model 与兼容 `auth.json`；proxy 更新 fixed env-key allowlist 并在 macOS 同步 user launchd environment；成功后调度 desktop restart。该 integration service 不替代 Runtime Transport Proxy；它只配置外部 vendor client 的 upstream network environment。执行路径与持久 mutation 禁止混用。Telegram `Engine` wrapper 是 ① 的兼容 facade，不是另一个 Agent Adapter 权威入口。
 
 ## 10. 验收标准
 
@@ -63,6 +63,7 @@ Claude Code/Codex 的具体 CLI 封装目标态属于本层：`ClaudeCodeCliAgen
 - Workflow/Agent provider 的 checkpoint、event cursor、SDK error 与 provider run id 只在 adapter 内部存在，对外转换为 Runtime canonical state/event/error。
 - Adapter 声称 cancel/compensation/resume 时必须有故障注入证明；不支持时 descriptor 明确声明，Registry/Policy 禁止把它用于要求该能力的 workflow。
 - Claude Code/Codex adapter fixture 覆盖 CLI version fingerprint、spawn failure、event sequence/dedup、tool proposal、confirmation round-trip、resume/cancel、unknown terminal、provider route 固定和 secret/reasoning 不落盘；无法拦截的 native tool mode 必须在 descriptor 中显式降级。
+- Codex persistent-config fixture 覆盖 ChatGPT login success/cancel、provider + explicit/automatic/interactive GPT model selection、no-GPT failure、proxy validation/set/clear、TOML unrelated-table preservation、credential mode、multi-file/environment rollback、reserved provider id 和 desktop restart unavailable；该能力只能由显式 `ai set codex` 调用。
 - 本地 profile 无托管服务仍可用；每个可选 provider 有独立测试的 fallback。
 - JSONL、OpenTelemetry 与企业 OTLP/APM Adapter 消费同一 `CapabilityObservation`；Adapter 可采样、聚合、脱敏和导出，但不得发明第二套 action、把 telemetry 变成审计真相或把 exporter 故障传播到 Runtime 主链。
 
