@@ -16,7 +16,7 @@ import {
   setTelegramConfigValue,
   updateBotConfig
 } from "../dist/telegram/config.js";
-import { botExists } from "../dist/telegram/bot-registry.js";
+import { botExists, migrateLegacyConfig } from "../dist/telegram/bot-registry.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
 import { requiresDangerousConfirmation } from "../dist/telegram/interaction/approval.js";
@@ -209,6 +209,30 @@ test("telegram CLI updates, shows, and deletes only the explicitly targeted bot"
       () => runTelegramCommand(["status", "--bot", "missing"]),
       /Available bots: .*ops/
     );
+  });
+});
+
+test("deleting a migrated default bot does not recreate it from legacy config", async () => {
+  await withTempHome(async (tempDir) => {
+    await saveTelegramConfig(normalizeTelegramConfig({
+      token: "legacy-token",
+      allowedUserIds: [1],
+      dbPath: path.join(tempDir, "telegram.sqlite")
+    }));
+    await migrateLegacyConfig();
+    assert.equal(botExists("default"), true);
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await runTelegramCommand(["delete", "--bot", "default"]);
+      await runTelegramCommand(["list"]);
+    } finally {
+      console.log = originalLog;
+    }
+
+    assert.equal(botExists("default"), false);
+    assert.equal((await loadTelegramConfig()).token, "legacy-token");
   });
 });
 

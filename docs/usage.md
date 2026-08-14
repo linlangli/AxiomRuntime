@@ -198,6 +198,7 @@ ai telegram status --all
 - `--bot=<name>` 与 `--bot <name>` 等价。旧位置参数写法（例如 `ai telegram start ops`、`ai telegram config ops`、`ai telegram remove ops`）继续兼容；推荐新脚本使用显式 `--bot`。
 - 裸 `ai telegram` 会先选择操作，再列出可操作的 Bot；启动、停止和状态菜单还提供 `all bots`，删除菜单会要求二次确认。带 `--bot` 进入交互菜单时会跳过第二次 Bot 选择。
 - `edit` 是命名 Bot 的交互式编辑入口；`delete` 会先停止目标 Bot，再删除该 Bot 的 config、PID、log 和 SQLite 文件。旧 `remove` 仍是 `delete` 的兼容别名。
+- legacy `telegram.json` 首次会自动迁移为命名 Bot `default`；删除 `default` 后，`list`、生命周期命令和 Bot 服务不会再从 legacy 配置把它重建出来。无目标 `ai telegram config` 仍可管理 legacy global config。
 - `config set ... --bot <name>` 只写目标 Bot 的配置，不改全局配置或其他 Bot；命令日志和终端输出会脱敏 `token`。
 - 命名 Bot 配置、PID、日志和会话分别保存在 `~/.ai-gateway/telegram/bots/<name>.json|.pid|.log|.sqlite`。未指定 `--bot` 的 legacy 配置继续使用 `~/.ai-gateway/telegram.json` 和 `telegram.sqlite`。
 - 为保持兼容，存在命名 Bot 时，不带目标的 `start`、`stop`、`status` 仍作用于全部命名 Bot；自动化脚本应显式使用 `--bot` 或 `--all`。

@@ -149,7 +149,7 @@ ai telegram delete --bot <name>                     # 停止并删除指定 Bot 
 ai telegram start|stop|status --all                 # 显式批量操作
 ```
 
-命名 Bot 的 selector 是配置文件名中的 canonical `name`，格式为小写 `a-z0-9_-`、最长 32 字符。`--bot=<name>` 与 `--bot <name>` 等价；旧 `start <name>`、`config <name>`、`remove <name>` 继续兼容。命名 Bot 的 config/PID/log/SQLite 固定落在 `telegram/bots/<name>.*`，任何带 `--bot` 的 mutation 禁止回退到 legacy `telegram.json`。为兼容已有脚本，存在命名 Bot 时，无目标 `start/stop/status` 仍表示全部命名 Bot，但新脚本必须显式使用 `--bot` 或 `--all`。
+命名 Bot 的 selector 是配置文件名中的 canonical `name`，格式为小写 `a-z0-9_-`、最长 32 字符。`--bot=<name>` 与 `--bot <name>` 等价；旧 `start <name>`、`config <name>`、`remove <name>` 继续兼容。命名 Bot 的 config/PID/log/SQLite 固定落在 `telegram/bots/<name>.*`，任何带 `--bot` 的 mutation 禁止回退到 legacy `telegram.json`。legacy `telegram.json` 到 `default` 的自动迁移只执行一次；显式删除 `default` 后必须保留迁移完成状态，任何后续 command 或 supervisor 禁止再次重建它。为兼容已有脚本，存在命名 Bot 时，无目标 `start/stop/status` 仍表示全部命名 Bot，但新脚本必须显式使用 `--bot` 或 `--all`。
 
 交互式 `ai telegram` 必须在选定 action 后展示第二层 Bot selector；`edit/delete/logs/doctor/config` 选择单 Bot，`start/stop/status` 额外提供 `all bots`。`ai telegram --bot <name>` 预绑定目标并跳过第二层 selector；legacy global config 仍由直接 `ai telegram config` 管理。交互删除必须二次确认；若停止在 5 秒内未完成，必须保留 config/PID/log/SQLite 并报错，不得留下仍运行但已失去管理文件的 Bot。
 

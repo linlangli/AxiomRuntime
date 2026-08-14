@@ -35,6 +35,7 @@
 
 ## Telegram
 
+- legacy `telegram.json` 只自动迁移一次；删除迁移出的 `default` 后再次执行 `list` 或启动 supervisor 不得重建它，legacy global config 内容仍保持可读
 - 自定义命令按 `(chat_id, cwd, name)` 持久化并在 Bot 重启后恢复；当基础、CLI、插件和自定义命令总数超过 Telegram 的 100 条菜单上限时，自定义命令仍优先展示且全部可直接解析执行
 - headless spawn CLI 通过单一 Runtime Transport Proxy 自动注入记忆并继续获得现有 usage/cost
 - 普通聊天自动写入记忆

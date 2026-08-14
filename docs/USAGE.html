@@ -743,6 +743,7 @@ ai telegram status --all</pre>
                   <li><code>--bot=&lt;name&gt;</code> 与 <code>--bot &lt;name&gt;</code> 等价。旧位置参数写法继续兼容；新脚本推荐显式指定 <code>--bot</code> 或 <code>--all</code>。</li>
                   <li>裸 <code>ai telegram</code> 会先选操作再列出 Bot；生命周期菜单可选 <code>all bots</code>，删除菜单会二次确认。带 <code>--bot</code> 进入交互菜单时会跳过 Bot 选择。</li>
                   <li><code>edit</code> 交互式编辑指定 Bot；<code>delete</code> 先停止目标 Bot，再删除该 Bot 的 config、PID、log 和 SQLite 文件。旧 <code>remove</code> 是兼容别名。</li>
+                  <li>legacy <code>telegram.json</code> 首次会自动迁移为命名 Bot <code>default</code>；删除 <code>default</code> 后，列表、生命周期命令和 Bot 服务不会再从 legacy 配置重建它。无目标 <code>ai telegram config</code> 仍可管理 legacy global config。</li>
                   <li><code>config set ... --bot &lt;name&gt;</code> 只修改指定 Bot，不影响全局或其他 Bot；token 不会出现在命令日志或终端输出中。</li>
                   <li>命名 Bot 的配置、PID、日志和会话保存在 <code>~/.ai-gateway/telegram/bots/&lt;name&gt;.json|.pid|.log|.sqlite</code>。</li>
                   <li>为保持兼容，存在命名 Bot 时，无目标 <code>start</code>、<code>stop</code>、<code>status</code> 仍作用于全部命名 Bot。</li>
