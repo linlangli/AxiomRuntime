@@ -51,7 +51,7 @@
 
 ## CLI
 
-- 发布助手：版本计算覆盖 patch/minor/major；Formula mutation 只允许 `homepage`/`url`/`sha256` 并保留安装逻辑；只读 status 必须识别 Git worktree、GitLab auth/`NPM_TOKEN`、npm latest 与 Tap checksum 状态；npm action 在 dirty worktree、merge conflict、duplicate version、pipeline failure 时 fail-closed；Homebrew action 在 npm version 不存在时 fail-closed，已同步时 idempotent no-op
+- 发布助手：版本计算覆盖 patch/minor/major；`ai --version` 测试以当前 `package.json` 为准，并覆盖临时目录先升级版本再执行完整测试的发布顺序；Formula mutation 只允许 `homepage`/`url`/`sha256` 并保留安装逻辑；只读 status 必须识别 Git worktree、GitLab auth/`NPM_TOKEN`、npm latest 与 Tap checksum 状态；npm action 在 dirty worktree、merge conflict、duplicate version、pipeline failure 时 fail-closed；Homebrew action 在 npm version 不存在时 fail-closed，已同步时 idempotent no-op
 - `ai set codex provider [name] [model-id]`：显式与交互选择均只接受已配置 provider；model candidates 只来自 provider discovered cache 的 `gpt-*`，显式 model 必须可用，named provider 省略 model 时按 numeric family + tier + rolling-alias 规则确定 newest，no-name 流程按 provider→model 交互；无 GPT 在 mutation 前失败。TOML 保留无关顶层字段/其他 table，API key 只进入 `auth.json`，文件 mode 为 `0600`，reserved/free-form provider name 生成稳定非保留 id
 - `ai set codex chatgpt`：调用真实 Codex login contract 的 stub，验证有效 `auth_mode=chatgpt` 与 token shape 后才切 `model_provider=openai`；login cancel、invalid auth 或写入失败恢复原 `config.toml`/`auth.json` 且不调度 restart
 - `ai set codex proxy <endpoint|off>`：裸 `host:port` 规范化为 HTTP origin；拒绝 credential/path/query/fragment 与非 HTTP(S) scheme；只 set/clear `shell_environment_policy.set` 的大小写 HTTP(S)/ALL proxy keys，保留无关 env/table；environment update 失败恢复原 config 且不调度 restart

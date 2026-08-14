@@ -120,13 +120,14 @@ test("CLI command registry resolves commands and aliases", async () => {
 test("version command prints the package version without creating runtime state", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-version-test-"));
   const runtimeHome = path.join(tempDir, "runtime-home");
+  const packageMetadata = JSON.parse(await fs.readFile(path.resolve("package.json"), "utf8"));
   const result = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "--version"], {
     encoding: "utf8",
     env: { ...process.env, AI_GATEWAY_HOME: runtimeHome }
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), "0.0.1");
+  assert.equal(result.stdout.trim(), packageMetadata.version);
   await assert.rejects(fs.access(runtimeHome), { code: "ENOENT" });
   await fs.rm(tempDir, { recursive: true, force: true });
 });
