@@ -21,6 +21,7 @@
 ## 通过 npm 安装
 
 ```bash
+node --version
 npm install --global @offerpilot/axiomruntime
 ai --version
 ai setup
@@ -28,11 +29,15 @@ ai setup
 
 npm 包名是 `@offerpilot/axiomruntime`，安装后注册的可执行命令是 `ai`。`ai --version`、`ai version`、`ai -v` 均输出当前包版本，并且不会创建 Runtime 配置或日志。
 
+如果 npm 显示 `EBADENGINE`，当前 Node.js 版本不满足运行要求。请先升级到 `22.19.0+`，再重新安装；不要把该警告当作可忽略的普通提示。
+
+全局安装可以由 root 完成，但 `ai`、Telegram 和其他常驻 Runtime 进程应由专用非 root 用户运行。`ai doctor` 会提示 root 执行风险；若 root 下仍请求 Claude `auto`/`bypassPermissions`，Runtime 会把本次执行约束为默认权限、重写临时 settings，并记录 configured/effective mode，不会把 `--dangerously-skip-permissions` 传给 Claude Code。
+
 ## 通过 Homebrew 安装
 
 ```bash
-brew tap offerpilot/tap
-brew install axiomruntime
+brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
+brew install linlangli/axiom/axiomruntime
 ai --version
 ai setup
 ```
@@ -103,10 +108,51 @@ ai use codex 51talk gpt-5.5
 - Codex 兼容 `gpt`、`codex`、`grok`、`o` 系列和 `openai` 模型名。
 - 当前 provider 不可用时，按 `level` 自动降级。
 - 启动 Claude Code 时，AI Gateway 会生成临时 `--settings` 文件，把 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 写入 settings 的 `env` 后启动；不会修改 `~/.claude/settings.json`，也不会使用 `--bare`。
-- provider 的 `mode` 为 `auto` 时，启动 Claude Code 会追加 `--dangerously-skip-permissions`；`ask` 模式不会追加该参数，并会在启动前确认。
+- provider 的 `mode` 为 `auto` 时，非 root 执行 Claude Code 会追加 `--dangerously-skip-permissions`；`ask` 模式不会追加该参数，并会在启动前确认。root 下请求 `auto` 会被安全约束为默认权限，并输出如何改用非 root 用户的告警。
 - 启动 Codex 时，AI Gateway 会通过本次子进程的 `-c model_provider=...` 参数固定所选 provider，并用 `env_key = "OPENAI_API_KEY"` 读取本次注入的 API Key。Codex 全局 `auth.json`、`config.toml` 和直接执行 `codex` 的流程不会被修改。
 - 如果 provider 的 `baseUrl` 是 OpenAI 兼容地址，例如 `https://icode.51talk.biz/v1`，启动 Claude Code 时会自动注入 `https://icode.51talk.biz`；启动 Codex 时仍使用 `/v1`。
 - 启动记录会写入日志，包含 provider、baseUrl、模型、启动参数和 API Key 指纹，不包含完整 API Key。
+
+## 设置 Codex App 的持久 Provider
+
+切换到 ChatGPT 账号：
+
+```bash
+ai set codex chatgpt
+```
+
+命令会调用 `codex login` 打开浏览器，由 Codex 完成 ChatGPT OAuth；成功后把用户级 `model_provider` 设置为内建 `openai`，并更新 `CODEX_HOME/auth.json`。默认 `CODEX_HOME` 是 `~/.codex`。
+
+切换到 AI Runtime 已添加的 provider：
+
+```bash
+ai set codex provider 51talk-cq gpt-5.6-sol  # 显式选择 GPT 模型
+ai set codex provider 51talk-cq              # 自动选择最新的可用 GPT 模型
+ai set codex provider                         # 依次交互选择 provider 和 GPT 模型
+```
+
+也可以运行 `ai set codex`，再交互选择 `ChatGPT account`、`Configured provider` 或 `Proxy`。Provider 规则如下：
+
+- 自定义 provider 必须已经通过 `ai provider add` 添加；命令复用它的 `name`、`baseUrl` 和 `apiKey`，模型候选只来自该 provider 已探测并缓存的 `gpt-*` 列表。
+- 指定 provider 但省略 model 时，按 GPT 数字版本从新到旧选择；同版本优先 `sol`、`pro`、无 tier alias、`codex`、`terra`、`mini`、`luna`、`nano`，并优先滚动 alias 而不是日期快照。没有任何 GPT 模型时提示先运行 `ai status` 刷新模型列表，不修改 Codex 配置。
+- 显式 model 必须是该 provider 列表中的 `gpt-*` id；`ai set codex provider` 则先选择 provider，再从排序后的 GPT 列表选择模型。
+- `config.toml` 只写 `model_provider`、provider metadata 和本次选中的模型，不写 API Key；原有 project、MCP、plugin、feature 等无关设置会保留。
+- 自定义 provider 的 Key 按 Codex 兼容格式写入 `auth.json`，权限强制为 `0600`。切换到自定义 provider 会替换当前 ChatGPT token；以后切回 ChatGPT 需要再次完成浏览器登录。
+- `config.toml` 与 `auth.json` 使用临时文件原子替换；登录取消、认证结果无效或写入失败时恢复两份原文件。
+- 两份文件一致后，macOS 会延迟重启已安装的 `Codex.app`；当前客户端名为 `ChatGPT.app` 时会重启该应用。找不到应用或在其他平台运行时，配置仍然成功，但需按提示手动重启。
+- 日志只记录 provider 名、provider id 和是否已安排重启，不记录 API Key 或 ChatGPT token。
+
+设置 Codex App 的 HTTP 代理：
+
+```bash
+ai set codex proxy 127.0.0.1:7890
+ai set codex proxy http://127.0.0.1:7890
+ai set codex proxy off                    # 清除本命令管理的代理变量
+```
+
+也可以运行 `ai set codex` 后选择 `Proxy`。裸 `host:port` 会规范化为 `http://host:port`；仅接受不含账号密码、path、query 或 fragment 的 `http://` / `https://` origin。命令只更新 `config.toml` 的 `[shell_environment_policy.set]` 中大小写 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`，保留该 table 的其他变量以及其余 Codex 设置，不修改 `auth.json`。macOS 还会同步当前登录会话的 user launchd environment，让重启后的 `Codex.app` / `ChatGPT.app` 继承代理；同步失败会恢复原 config 且不重启，注销或重启 macOS 后需重新运行本命令。其他平台仍会写入 Codex 子进程环境配置，但 Codex App 自身的桌面环境需由用户设置后手动重启。代理地址在 command usage log 中整体脱敏。
+
+`ai set codex` 与 `ai use codex` 的作用域不同：前者显式修改 Codex App 的持久用户配置；后者只为本次子进程注入 provider，不修改全局 Codex 配置。
 
 ## Telegram Bot
 
@@ -152,7 +198,7 @@ ai telegram status --all
 - `--bot=<name>` 与 `--bot <name>` 等价。旧位置参数写法（例如 `ai telegram start ops`、`ai telegram config ops`、`ai telegram remove ops`）继续兼容；推荐新脚本使用显式 `--bot`。
 - 裸 `ai telegram` 会先选择操作，再列出可操作的 Bot；启动、停止和状态菜单还提供 `all bots`，删除菜单会要求二次确认。带 `--bot` 进入交互菜单时会跳过第二次 Bot 选择。
 - `edit` 是命名 Bot 的交互式编辑入口；`delete` 会先停止目标 Bot，再删除该 Bot 的 config、PID、log 和 SQLite 文件。旧 `remove` 仍是 `delete` 的兼容别名。
-- 删除迁移得到的 `default` Bot 时，同时清理 legacy `telegram.json` 与数据库，避免后续迁移重新创建绑定。
+- legacy `telegram.json` 首次会自动迁移为命名 Bot `default`；删除 `default` 后，`list`、生命周期命令和 Bot 服务不会再从 legacy 配置把它重建出来。无目标 `ai telegram config` 仍可管理 legacy global config。
 - `config set ... --bot <name>` 只写目标 Bot 的配置，不改全局配置或其他 Bot；命令日志和终端输出会脱敏 `token`。
 - 命名 Bot 配置、PID、日志和会话分别保存在 `~/.ai-gateway/telegram/bots/<name>.json|.pid|.log|.sqlite`。未指定 `--bot` 的 legacy 配置继续使用 `~/.ai-gateway/telegram.json` 和 `telegram.sqlite`。
 - 为保持兼容，存在命名 Bot 时，不带目标的 `start`、`stop`、`status` 仍作用于全部命名 Bot；自动化脚本应显式使用 `--bot` 或 `--all`。
@@ -218,7 +264,9 @@ level
 model
 ```
 
-`apiKey` 是交互式凭证输入，不是 `providers.json` 的持久化字段。命令将凭证写入 `SecretStore`，配置只保存 `apiKeyRef`；编辑时不回显原值，留空表示保持现有凭证。
+> **当前实现：`apiKey` 以明文保存在 `providers.json`。** 目标架构要求凭证写入 `SecretStore`、配置只保留 `apiKeyRef`（见 [modules/03-capabilities.md](modules/03-capabilities.md)），但 `SecretStore` 尚未实现。因此当前必须自行保护 `providers.json` 的文件权限，且不要提交到仓库。
+>
+> 选择 `apiKey` 编辑时，当前值会作为输入默认值显示；这同样是尚未收敛到目标行为的已知差异。
 
 规则：
 
@@ -239,12 +287,12 @@ ai provider list
 level
 name
 baseUrl
-credentialStatus
+API Key
 mode
 model
 ```
 
-列表只显示 `configured/missing/unavailable` 等凭证状态，禁止显示 API Key 或可用于解析 secret 的内部信息。
+> **当前实现显示掩码后的 API Key**（保留首末各 4 位，例如 `sk-d****0000`），不是完整值。目标态是只显示 `configured/missing/unavailable` 凭证状态、不泄露任何 secret 片段；录屏或截图分享前请注意这一差异。
 
 `ai provider list` 只展示配置，不刷新健康度。
 
@@ -274,7 +322,7 @@ ai memory embedding clear
 - 参数顺序为 `name baseUrl apiKey model`；`--type` 取 `jina` 或 `openai-compatible`。
 - `--type jina` 会默认写入 `retrieval.query` 和 `retrieval.passage`，可用 `--query-task` / `--passage-task` 覆盖；`--dimensions` 指定向量维度。
 - `set` 后会调用 embeddings 接口做一次轻量验证；加 `--skip-test` 可跳过。
-- 配置只保存在本机 `~/.ai-gateway/memory.json`，日志会脱敏 API Key。
+- 配置只保存在本机 `~/.ai-gateway/memory.json`，日志会脱敏 API Key。但配置文件本身当前以明文保存 `apiKey`（与 `providers.json` 同样待迁移到 `SecretStore`），请限制文件权限。
 
 ## 查看状态
 
@@ -308,6 +356,8 @@ token 使用量
 ```
 
 `ai status` 是轻量检查：它验证 provider 连通性、模型列表、Claude/Codex 各自的有效 baseUrl 和兼容模型，不发送真实对话请求。
+
+`apiKey` 与 `ai provider list` 一样显示掩码值（保留首末各 4 位）。
 
 token 使用量来自 `usage.json` 中真实记录的 provider usage。AI Gateway 自己发起且 provider 返回 usage 的请求会累计，例如 `ai doctor --deep`；Telegram Codex 执行也会通过本地代理记录 provider usage。
 
@@ -542,7 +592,7 @@ ai web
   {
     "name": "51talk",
     "baseUrl": "https://example.com",
-    "apiKeyRef": "secret://provider/51talk",
+    "apiKey": "sk-xxx",
     "mode": "auto",
     "level": 1,
     "model": "claude-opus-4-6"
@@ -550,7 +600,9 @@ ai web
 ]
 ```
 
-`apiKeyRef` 由 CLI/SecretStore 管理。手工编辑配置时可修改已有 ref，但不得把明文 API Key 写入 JSON；新增或轮换凭证使用 `ai provider add/edit`。
+新增或轮换凭证使用 `ai provider add/edit`，不要手工编辑 `apiKey`。
+
+> **当前 `apiKey` 是明文字段。** 目标架构为 `apiKeyRef` + `SecretStore`（`"apiKeyRef": "secret://provider/<name>"`），迁移完成后 legacy `apiKey` 只作一次性 migration input。在此之前请确保 `providers.json` 权限受限，且绝不提交到仓库。
 
 `model-pricing.json` 用于给只返回 token usage、不返回 cost 的模型估算费用。单位是美元 / 百万 token，可按模型名或 `provider/model` 配置：
 

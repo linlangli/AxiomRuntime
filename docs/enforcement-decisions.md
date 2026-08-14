@@ -772,6 +772,7 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - capability handle 必须签名、短时有效并绑定 user/execution/domain/operation；跨 execution 和跨 Agent 复用失败。
 - Memory、Profile、Skill、网页、文件和模型输出均无权创建或扩权 capability；只有 Broker/Policy Kernel 可以签发。
 - redirect、data egress、confirmation 和 action risk 在工具执行时验证，不能只依赖 prompt 中的 capability 描述。
+- 安装身份与执行身份必须分离：管理员可安装 Runtime 包，但 Claude Agent 与常驻 Runtime 应使用专用非 root OS identity。检测到 UID 0 时，`bypassPermissions` 必须在 args/settings 构造前约束为 effective `default`，清除 inherited bypass，并记录 configured/effective mode 与 constraint reason；任何 Surface/Adapter 禁止传递 `--dangerously-skip-permissions`。
 
 ### R24 Shadow、完整性与可逆编译（Phase 11-13）
 
@@ -896,9 +897,15 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - `ai setup` and the default `ai doctor` may create missing Runtime-home files and may back up then rebuild invalid derived cache/usage/session files. They must not read or modify project source, and must never overwrite invalid `providers.json` automatically.
 - Installing Claude Code/Codex is an external mutation and requires interactive confirmation or the explicit `ai setup --install-tools` flag; `--yes` alone is not authorization.
 - `ai use claude` and `ai use codex` start the matching CLI with the default provider/model.
+- 维护者以仓库根目录 `发布.command` 作为无需记命令的交互入口。npm 与 Homebrew 是两个独立显式 action：npm action 准备 versioned main commit/tag 并等待 GitLab npm pipeline；Homebrew action 只读取已发布的 npm Registry tarball、按实际 bytes 计算 SHA256、保留 Formula install logic、展示 diff，并在推送 Tap 前要求确认。缺少 prerequisite 时提供设置引导；dirty worktree、merge conflict、duplicate/missing version、pipeline failure 或 credential unavailable 时必须 fail-closed，且禁止输出 secret。
 - `ai use codex` pins a process-scoped Codex model provider to the Runtime-selected base URL and injected API key without modifying global Codex auth/config state.
+- `ai set codex chatgpt` runs the Codex-supported browser login, selects built-in `model_provider = "openai"`, updates user-level `config.toml`/`auth.json`, and restarts the installed Codex/ChatGPT desktop app after a successful consistent write.
+- `ai set codex provider [name] [model-id]` selects an existing Runtime provider and only a model from its discovered `gpt-*` model list. With `name` and no model it deterministically chooses the newest GPT family and preferred tier; with no `name` it interactively selects provider then GPT model. An explicit unavailable/non-GPT id or a provider with no available GPT models fails before mutation. The command writes provider metadata plus the selected model to `config.toml`, writes the API key only to mode-`0600` `auth.json`, preserves unrelated Codex settings, and rolls both files back on failure.
+- `ai set codex proxy <host:port|url>` normalizes a bare endpoint to an HTTP origin, writes standard HTTP(S)/ALL proxy variables under `shell_environment_policy.set`, and on macOS synchronizes the user launchd environment before restarting Codex/ChatGPT; `off` clears only those managed variables. Proxy credentials, paths, queries, and fragments are rejected, unrelated TOML state is preserved, and environment-update failure restores the previous config without scheduling restart.
+- Persistent Codex configuration is never an implicit side effect of `ai use codex`; command output and logs must not contain the API key or ChatGPT tokens.
 - `ai telegram edit|delete|start|stop|status|config|logs|doctor --bot <name>` targets only the named Telegram Bot; `start|stop|status --all` is the explicit bulk form, while legacy positional forms remain compatible.
 - Interactive `ai telegram` selects an action and then a named Bot; lifecycle actions also offer `all bots`, scoped `--bot` interaction skips the second selector, and interactive deletion requires confirmation without deleting files when graceful stop times out.
+- Legacy `telegram.json` 到命名 Bot `default` 的自动迁移必须是一次性的；删除 `default` 后必须保留迁移完成状态，后续 `list`、lifecycle command 或 supervisor 禁止再次从 legacy config 重建它，同时 legacy global config 仍可由无目标 `ai telegram config` 管理。
 - `ai telegram config set <key> <value> --bot <name>` updates only `telegram/bots/<name>.json`, and Telegram token values never appear in command logs or terminal config output.
 - Unavailable providers trigger automatic fallback.
 - Manual changes to `providers.json` are recognized on the next command run.

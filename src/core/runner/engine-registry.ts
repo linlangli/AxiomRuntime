@@ -1,9 +1,11 @@
 import type { CliToolType, Provider } from "../types.js";
+import { resolveClaudePermissionMode } from "./claude-permission-policy.js";
 
 export type RunnerArgsInput = {
   provider: Provider;
   model: string;
   settingsPath?: string | null;
+  uid?: number | null;
 };
 
 export type RunnerEngineDescriptor = {
@@ -51,12 +53,16 @@ registerRunnerEngine({
       ANTHROPIC_MODEL: model
     };
   },
-  buildArgs: ({ provider, model, settingsPath }) => {
+  buildArgs: ({ provider, model, settingsPath, uid }) => {
     const args = ["--model", model];
     if (settingsPath) {
       args.push("--settings", settingsPath);
     }
-    if (provider.mode === "auto") {
+    const permission = resolveClaudePermissionMode(
+      provider.mode === "auto" ? "bypassPermissions" : "default",
+      { uid }
+    );
+    if (permission.effectiveMode === "bypassPermissions") {
       args.push("--permission-mode", "bypassPermissions");
       args.push("--dangerously-skip-permissions");
     }

@@ -26,31 +26,32 @@ AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/AI_RUNTIME_
 
 ## 通过 npm 安装
 
-运行环境需要 Node.js `22.19.0` 或更高版本。全局安装后，npm 会把本包注册为 `ai` 命令：
+运行环境需要 Node.js `22.19.0` 或更高版本。先确认版本，再执行全局安装；npm 会把本包注册为 `ai` 命令：
 
 ```bash
+node --version
 npm install --global @offerpilot/axiomruntime
 ai --version
 ai setup
 ```
 
+如果 npm 显示 `EBADENGINE`，说明当前 Node.js 版本不受支持。请先升级到 `22.19.0+`，不要继续使用警告状态下安装的 CLI。
+
 `ai --version` 用于验证 npm 包和命令安装成功；`ai setup` 初始化 Runtime 配置，并可在确认后安装缺失的 Claude Code/Codex。之后可直接运行 `ai`。
+
+可用 root 完成全局安装，但日常执行 `ai` 和常驻服务应使用专用非 root 用户。若仍以 root 启动 Claude，Runtime 会把 `auto`/`bypassPermissions` 安全约束为默认权限、输出告警，并且绝不会传递 Claude Code 禁止 root 使用的 `--dangerously-skip-permissions`。
 
 ## 通过 Homebrew 安装
 
-发布流程会在 npm 发布成功后把 `Formula/axiomruntime.rb` 同步到 `offerpilot/homebrew-tap`。Tap 建立后可使用：
+维护者发布新版本时可直接双击仓库根目录的 `发布.command`，交互选择 npm、Homebrew 或发布条件检查，无需记发布命令。npm 发布成功后，再选择 Homebrew；助手会读取 npm Registry 的真实 tarball 与 SHA256，并把 `Formula/axiomruntime.rb` 同步到 GitLab 项目 `linlangli/axiom`。
+
+用户首次安装需要显式提供 GitLab 地址：
 
 ```bash
-brew tap offerpilot/tap
-brew install axiomruntime
+brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
+brew install linlangli/axiom/axiomruntime
 ai --version
 ai setup
-```
-
-如果 Tap 不托管在 GitHub，需要在首次添加时显式提供公开 Git 地址：
-
-```bash
-brew tap offerpilot/tap <homebrew-tap-public-git-url>
 ```
 
 ## 安装开发依赖
@@ -103,6 +104,8 @@ AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 
 默认分支提交通过测试后，GitLab CI 会构建以 commit SHA 标记的镜像，并由锁定当前项目的受保护 Runner（标签 `axiomruntime-prod`）部署到 `154.201.73.41:/opt/AxiomRuntime`。部署只操作 `axiomruntime` Compose 项目；健康检查失败时恢复上一镜像，不清理服务器上的其他容器或镜像。
 
+镜像构建会在一次性 build stage 中编译 `better-sqlite3` 原生 addon，再把裁掉开发依赖后的 production dependency tree 复制到相同 Node.js 版本的最终镜像；最终镜像不包含编译器。
+
 首次部署前，服务器必须已有 `/opt/AxiomRuntime/config/providers.json` 和 `/opt/AxiomRuntime/secrets/server-token`，且容器用户 `10001:10001` 可以读写配置目录。CI 只校验这些文件，不生成或覆盖凭据。
 
 Telegram 容器默认不启动，以免与现有 long polling 进程争抢消息。完成迁移并停止旧 Bot 后，在服务器 `/opt/AxiomRuntime/.env` 中设置：
@@ -130,6 +133,10 @@ ai provider add
 ai provider list
 ai provider edit
 ai provider delete
+ai set codex chatgpt
+ai set codex provider 51talk-cq gpt-5.6-sol
+ai set codex provider 51talk-cq
+ai set codex proxy 127.0.0.1:7890
 ai telegram
 ai telegram list
 ai telegram start --bot ops

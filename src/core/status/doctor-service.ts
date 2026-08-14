@@ -14,6 +14,7 @@ import { readProviders } from "../config/providers-store.js";
 import { checkProvider, runDeepCheck } from "../models/model-discovery.js";
 import { writeLog } from "../logs/log-service.js";
 import { getKnownCandidates, resolveToolCommand } from "../runner/command-resolver.js";
+import { isPrivilegedProcess, type ProcessIdentityOptions } from "../runner/claude-permission-policy.js";
 import { resolveProviderCandidatesForTool, type ResolvedRun } from "../runner/fallback.js";
 import { buildUsageEvent } from "../usage/usage-service.js";
 import type { CliToolType, RunToolType } from "../types.js";
@@ -48,6 +49,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorItem
   const checkProviders = options.checkProviders ?? true;
 
   checkNodeVersion(items);
+  checkExecutionUser(items);
   if (options.checkNativeDependencies ?? true) {
     await checkNativeDependencies(items);
   }
@@ -57,6 +59,21 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorItem
   checkCommand("Local CLIs", "claude", items);
   checkCommand("Local CLIs", "codex", items);
   return items;
+}
+
+function checkExecutionUser(items: DoctorItem[]): void {
+  const item = getExecutionUserDoctorItem();
+  if (item) items.push(item);
+}
+
+export function getExecutionUserDoctorItem(identity: ProcessIdentityOptions = {}): DoctorItem | null {
+  if (!isPrivilegedProcess(identity)) return null;
+  return {
+    group: "Execution User",
+    status: "warn",
+    message: "Axiom Runtime is running as root; Claude auto/bypass permission mode is unavailable and will be constrained to default permissions.",
+    suggestion: "Install globally as root if required, but run `ai` and long-lived services with a dedicated non-root account."
+  };
 }
 
 export async function runDeepDoctor(tool: CliToolType = "codex", options: DoctorOptions = {}): Promise<DoctorItem[]> {

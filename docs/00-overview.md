@@ -165,7 +165,7 @@ src/
 
 ## C. Runner 引擎现状（→ 目标 ④ Execution Kernel + ⑤ Transport）
 
-`src/core/runner/`：`command-resolver`（CLI 二进制查找）、`engine-registry`（Claude/Codex 策略注册；`ai use codex` 通过 process-scoped provider override 固定本次注入 Key，不改全局 Codex auth/config）、`tool-runner`（运行环境+密钥注入+临时文件）、`fallback`（候选排序：健康→兼容→优先级+覆盖）。`openai-usage-*` 系列（server/http/responses/recording/types）是本地 HTTP 代理，**目标态剥离到 ⑤ Transport Proxy**。
+`src/core/runner/`：`command-resolver`（CLI 二进制查找）、`engine-registry`（Claude/Codex 策略注册；`ai use codex` 通过 process-scoped provider override 固定本次注入 Key，不改全局 Codex auth/config）、`claude-permission-policy`（UID 0 下把 Claude `bypassPermissions` 约束为 `default`）、`tool-runner`（运行环境+密钥注入+临时文件）、`fallback`（候选排序：健康→兼容→优先级+覆盖）。`openai-usage-*` 系列（server/http/responses/recording/types）是本地 HTTP 代理，**目标态剥离到 ⑤ Transport Proxy**。
 
 ## D. 双路径用量采集（→ 目标 ⑤ UsageObserver）
 
@@ -277,6 +277,7 @@ Memory 不是独立产品，而是 AI Runtime 的**学习与知识子系统**。
 > | Runtime Transport Proxy 单一数据平面 | 未实现 | `src/core/transport-proxy/` 目录不存在 |
 > | 版本化 migrations | 未实现，`create table if not exists` 直建 | 无 migrations 目录 |
 > | 凭证加密 | 未启用，credential 类直接抛错 | `memory-service.ts` |
+> | `SecretStore` + `apiKeyRef` | 未实现，`providers.json` 明文存 `apiKey` | `src/core/config/providers-store.ts` |
 
 ## C. 非目标
 
@@ -555,7 +556,8 @@ flowchart LR
 
 ```typescript
 // === Core 全局类型 ===
-Provider          // 服务商配置 (name, baseUrl, apiKeyRef, model, mode, level)
+Provider          // 服务商配置 (name, baseUrl, apiKey, model, mode, level)
+                  // 现状：apiKey 为明文字段；目标态是 apiKeyRef + SecretStore（未实现）
 ProviderCache     // 缓存状态 (status: HealthStatus, models[], lastCheckedAt, lastError)
 UsageEvent        // 用量事件 (tokens, provider, model, source)
 TokenUsage        // Token 统计 (inputTokens, outputTokens, totalTokens, cacheReadInputTokens)

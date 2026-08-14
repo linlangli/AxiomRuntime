@@ -22,10 +22,11 @@
     "telegram:service": "node --enable-source-maps dist/telegram/supervisor.js",
     "test": "npm run build && node --test test/*.test.js",
     "release": "node scripts/release.js",
-    "release:current": "node scripts/release.js --current",
-    "release:check": "npm test && npm run homebrew:check",
+    "release:current": "node scripts/release.js --npm",
+    "release:check": "npm test && npm pack --dry-run",
     "homebrew:update": "node scripts/update-homebrew-formula.js --write",
     "homebrew:check": "node scripts/update-homebrew-formula.js",
+    "homebrew:publish": "node scripts/release.js --homebrew",
     "prepublishOnly": "npm run release:check"
   },
   "files": [
@@ -47,11 +48,11 @@
     "typescript": "^5.8.0"
   },
   "dependencies": {
-    "better-sqlite3": "^12.11.1",
+    "better-sqlite3": "^13.0.2",
     "gpt-tokenizer": "^3.4.0",
     "grammy": "^1.44.0",
     "https-proxy-agent": "^9.1.0",
     "proper-lockfile": "^4.1.2",
-    "undici": "^8.7.0"
+    "undici": "^8.10.0"
   }
 }

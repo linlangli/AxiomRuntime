@@ -35,6 +35,7 @@
 
 ## Telegram
 
+- legacy `telegram.json` 只自动迁移一次；删除迁移出的 `default` 后再次执行 `list` 或启动 supervisor 不得重建它，legacy global config 内容仍保持可读
 - 自定义命令按 `(chat_id, cwd, name)` 持久化并在 Bot 重启后恢复；当基础、CLI、插件和自定义命令总数超过 Telegram 的 100 条菜单上限时，自定义命令仍优先展示且全部可直接解析执行
 - headless spawn CLI 通过单一 Runtime Transport Proxy 自动注入记忆并继续获得现有 usage/cost
 - 普通聊天自动写入记忆
@@ -50,6 +51,11 @@
 
 ## CLI
 
+- 发布助手：版本计算覆盖 patch/minor/major；Formula mutation 只允许 `homepage`/`url`/`sha256` 并保留安装逻辑；只读 status 必须识别 Git worktree、GitLab auth/`NPM_TOKEN`、npm latest 与 Tap checksum 状态；npm action 在 dirty worktree、merge conflict、duplicate version、pipeline failure 时 fail-closed；Homebrew action 在 npm version 不存在时 fail-closed，已同步时 idempotent no-op
+- `ai set codex provider [name] [model-id]`：显式与交互选择均只接受已配置 provider；model candidates 只来自 provider discovered cache 的 `gpt-*`，显式 model 必须可用，named provider 省略 model 时按 numeric family + tier + rolling-alias 规则确定 newest，no-name 流程按 provider→model 交互；无 GPT 在 mutation 前失败。TOML 保留无关顶层字段/其他 table，API key 只进入 `auth.json`，文件 mode 为 `0600`，reserved/free-form provider name 生成稳定非保留 id
+- `ai set codex chatgpt`：调用真实 Codex login contract 的 stub，验证有效 `auth_mode=chatgpt` 与 token shape 后才切 `model_provider=openai`；login cancel、invalid auth 或写入失败恢复原 `config.toml`/`auth.json` 且不调度 restart
+- `ai set codex proxy <endpoint|off>`：裸 `host:port` 规范化为 HTTP origin；拒绝 credential/path/query/fragment 与非 HTTP(S) scheme；只 set/clear `shell_environment_policy.set` 的大小写 HTTP(S)/ALL proxy keys，保留无关 env/table；environment update 失败恢复原 config 且不调度 restart
+- desktop restart：macOS 依次探测 `Codex.app`/`ChatGPT.app` 并 detached restart；app 缺失或非 macOS 时配置保持成功并提示手动重启
 - 现有 `startOpenAiUsageProxy` API、Responses↔Chat translation、records、metrics、usage.json 和错误 fixture 在 usage-only 迁移后全部 parity
 - 同一 execution 同时启用 Usage/Memory 时只有一个 listener、一个 upstream connection path 和一次 base URL 覆写；检测第二 listener 或 self-loop 必须失败
 - `ai use claude/codex` 通过 Runtime Transport Proxy 每 turn 产生完整 Pre-Read manifest、ephemeral capture、SanitizedTurnEnvelope 和 Post-Run job；raw request/tool data 不落盘
@@ -84,6 +90,7 @@
 - Agent 权限：每个 `tool_request` 重新经 Kernel/Policy；Agent 更换 provider、扩大 scope、自签 capability 或绕过 confirmation 的 fixture 必须失败
 - Coding Agent 分层：Telegram/CLI/API 对同一 `claude-code-agent` 或 `codex-cli-agent` descriptor 产生一致的 provider pin、permission、budget、retry owner、Usage 与 terminal event；Telegram `Engine` facade 不得直接 spawn Tool 或绕过 Orchestration
 - CLI enforcement capability：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 按版本声明 tool interception、confirmation、resume、cancel 与 isolation 支持；未知版本或不可拦截模式必须触发 descriptor/Policy 收窄，且不得伪报逐 Tool 强制授权已生效
+- Privileged Claude launch：以 UID 0 fixture 请求 `bypassPermissions` 时，CLI/Telegram effective mode 必须为 `default`，args 禁止出现 `--dangerously-skip-permissions`，execution-scoped settings 必须移除 inherited bypass；非 root fixture 保持现有 `auto` 行为。
 - Adapter replacement：local 与至少一个替换 Tool/Workflow/Agent adapter 通过相同 contract/error/cancel/idempotency/recovery suite
 - Durable boundary：Agent reasoning、raw tool args/output、provider run payload 不进入 RuntimeEvent、checkpoint、audit、crash dump 或 fixture
 

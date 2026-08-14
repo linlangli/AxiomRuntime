@@ -458,13 +458,16 @@
         <section id="install" class="panel">
           <h2>通过 npm 安装</h2>
           <div class="detail-body">
-            <pre>npm install --global @offerpilot/axiomruntime
+            <pre>node --version
+npm install --global @offerpilot/axiomruntime
 ai --version
 ai setup</pre>
             <p>npm 包名是 <code>@offerpilot/axiomruntime</code>，安装后注册的可执行命令是 <code>ai</code>。需要 Node.js <code>22.19.0+</code>。</p>
+            <p>如果 npm 显示 <code>EBADENGINE</code>，请先升级 Node.js 再重新安装，不要继续使用警告状态下安装的 CLI。</p>
             <p><code>ai --version</code> 无副作用地验证安装；<code>ai setup</code> 初始化 Runtime，并可在确认后安装缺失的 Claude Code/Codex。</p>
-            <pre>brew tap offerpilot/tap
-brew install axiomruntime
+            <p>全局安装可以由 root 完成，但日常执行和常驻服务应使用专用非 root 用户。root 下请求 Claude <code>auto</code>/<code>bypassPermissions</code> 时，Runtime 会安全约束为默认权限并告警，不会传递 <code>--dangerously-skip-permissions</code>。</p>
+            <pre>brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
+brew install linlangli/axiom/axiomruntime
 ai --version
 ai setup</pre>
             <p>Homebrew Formula 复用同版本 npm tarball并校验 SHA256，固定使用 Homebrew <code>node@22</code>。非 GitHub Tap 首次添加时需提供公开 Git URL。</p>
@@ -534,6 +537,12 @@ ai setup</pre>
                 <td>指定 provider 和模型启动工具。</td>
                 <td>provider 不可用时按 level 降级。</td>
               </tr>
+              <tr data-search="set codex chatgpt login oauth provider proxy config auth restart app">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai set codex chatgpt</code><br /><code class="cmd">ai set codex provider 51talk-cq gpt-5.6-sol</code><br /><code class="cmd">ai set codex provider 51talk-cq</code><br /><code class="cmd">ai set codex provider</code><br /><code class="cmd">ai set codex proxy 127.0.0.1:7890</code></td>
+                <td>持久切换 Codex App 的 ChatGPT 账号、已添加 provider 或 HTTP proxy。</td>
+                <td>一致更新配置与必要环境，成功后重启 app。</td>
+              </tr>
               <tr data-search="last resume previous selection">
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai last</code></td>
@@ -556,7 +565,7 @@ ai setup</pre>
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider edit</code><br /><code class="cmd">ai provider edit 51talk</code></td>
                 <td>修改 name、baseUrl、凭证、mode、level、model。</td>
-                <td>凭证写入 SecretStore，配置只保存 apiKeyRef；编辑时不回显原值。</td>
+                <td>当前 apiKey 以明文保存在 providers.json，编辑时会回显当前值。SecretStore + apiKeyRef 是目标态，尚未实现。</td>
               </tr>
               <tr data-search="provider delete remove fallback">
                 <td><span class="group-label">Provider</span></td>
@@ -628,13 +637,35 @@ ai use codex 51talk gpt-5.5</pre>
                 <ul>
                   <li>provider 不可用时按 <code>level</code> 自动降级。</li>
                   <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings。</li>
-                  <li>Codex 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
-                  <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。</li>
+                  <li><code>ai use codex</code> 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
+                  <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，非 root 执行 Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。root 下请求 <code>auto</code> 会被安全约束为默认权限，临时 settings 中继承的 bypass 配置也会被清除。</li>
                   <li>OpenAI 兼容地址用于 Codex 时会使用 <code>/v1</code>，用于 Claude 时会去掉 <code>/v1</code>。</li>
                   <li>日志只记录 Key 指纹，不记录完整 API Key。</li>
                 </ul>
               </div>
             </div>
+            <details open>
+              <summary>持久设置 Codex App provider</summary>
+              <div class="detail-body">
+                <pre>ai set codex chatgpt
+ai set codex provider 51talk-cq gpt-5.6-sol
+ai set codex provider 51talk-cq
+ai set codex provider
+ai set codex proxy 127.0.0.1:7890
+ai set codex proxy off</pre>
+                <ul>
+                  <li><code>chatgpt</code> 调用 <code>codex login</code> 打开浏览器，并在成功后选择内建 <code>model_provider = "openai"</code>。</li>
+                  <li><code>provider name model-id</code> 显式选择该 provider 已探测的 <code>gpt-*</code> 模型；只给 provider 时自动选最新 GPT。</li>
+                  <li><code>provider</code> 不带名称时依次交互选择已添加的 provider 和 GPT 模型；没有可用 GPT 时提示运行 <code>ai status</code>，不修改配置。</li>
+                  <li>自动选择先比较 GPT 数字版本，同版本优先 <code>sol</code>、<code>pro</code>、alias、<code>codex</code>、<code>terra</code>、<code>mini</code>、<code>luna</code>、<code>nano</code>，并优先滚动 alias。API Key 只写入 mode <code>0600</code> 的 <code>auth.json</code>。</li>
+                  <li>原有 project、MCP、plugin、feature 设置会保留；任一步失败会恢复原 <code>config.toml</code> 和 <code>auth.json</code>。</li>
+                  <li>切换自定义 provider 会替换当前 ChatGPT token；切回 ChatGPT 时需重新登录。</li>
+                  <li>成功后 macOS 会重启 <code>Codex.app</code> 或当前名称的 <code>ChatGPT.app</code>；无法自动重启时按提示手动操作。</li>
+                  <li><code>proxy</code> 把裸 <code>host:port</code> 规范化为 HTTP origin，只更新 <code>shell_environment_policy.set</code> 的大小写 HTTP(S)/ALL proxy keys；<code>off</code> 清除这些 managed keys，不修改 <code>auth.json</code>。</li>
+                  <li>Proxy URL 禁止包含账号密码、path、query 或 fragment，command usage log 会整体脱敏。macOS 会同步当前登录会话的 user launchd environment；失败时恢复原 config 且不重启，注销或重启 macOS 后需重新运行本命令。</li>
+                </ul>
+              </div>
+            </details>
           </section>
 
           <section id="memory" class="panel">
@@ -712,7 +743,7 @@ ai telegram status --all</pre>
                   <li><code>--bot=&lt;name&gt;</code> 与 <code>--bot &lt;name&gt;</code> 等价。旧位置参数写法继续兼容；新脚本推荐显式指定 <code>--bot</code> 或 <code>--all</code>。</li>
                   <li>裸 <code>ai telegram</code> 会先选操作再列出 Bot；生命周期菜单可选 <code>all bots</code>，删除菜单会二次确认。带 <code>--bot</code> 进入交互菜单时会跳过 Bot 选择。</li>
                   <li><code>edit</code> 交互式编辑指定 Bot；<code>delete</code> 先停止目标 Bot，再删除该 Bot 的 config、PID、log 和 SQLite 文件。旧 <code>remove</code> 是兼容别名。</li>
-                  <li>删除迁移得到的 <code>default</code> Bot 时，同时清理 legacy <code>telegram.json</code> 与数据库，避免后续迁移重新创建绑定。</li>
+                  <li>legacy <code>telegram.json</code> 首次会自动迁移为命名 Bot <code>default</code>；删除 <code>default</code> 后，列表、生命周期命令和 Bot 服务不会再从 legacy 配置重建它。无目标 <code>ai telegram config</code> 仍可管理 legacy global config。</li>
                   <li><code>config set ... --bot &lt;name&gt;</code> 只修改指定 Bot，不影响全局或其他 Bot；token 不会出现在命令日志或终端输出中。</li>
                   <li>命名 Bot 的配置、PID、日志和会话保存在 <code>~/.ai-gateway/telegram/bots/&lt;name&gt;.json|.pid|.log|.sqlite</code>。</li>
                   <li>为保持兼容，存在命名 Bot 时，无目标 <code>start</code>、<code>stop</code>、<code>status</code> 仍作用于全部命名 Bot。</li>
@@ -809,7 +840,8 @@ ai session clear</pre>
                 <pre>~/.ai-gateway/providers.json
 ~/.ai-gateway/memory.json
 ~/.ai-gateway/model-pricing.json</pre>
-                <p><code>providers.json</code> 保存聊天 provider 与 <code>apiKeyRef</code>；<code>memory.json</code> 保存记忆检索 embedding 模型与 secret ref；实际凭证进入 SecretStore。<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格。</p>
+                <p><code>providers.json</code> 保存聊天 provider；<code>memory.json</code> 保存记忆检索 embedding 模型。<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格。</p>
+                <p><strong>注意：</strong>这两个文件当前都以明文保存 <code>apiKey</code>。请限制文件权限并且不要提交到仓库。凭证改由 SecretStore 管理、配置只留 <code>apiKeyRef</code> 是目标架构，尚未实现。</p>
               </div>
             </details>
             <details>

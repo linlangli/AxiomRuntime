@@ -52,7 +52,7 @@
 
 `src/core/integrations/` 已提供通用集成状态注册；`plugins/` 目录和完整插件生命周期仍待建设。
 
-Claude Code/Codex 的具体 CLI 封装目标态属于本层：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 实现 `AgentAdapterPort`。它们拥有二进制发现、启动参数、临时 vendor 配置、进程生命周期、stream event parsing、session cursor 和 vendor error mapping；不拥有 Agent capability 激活、provider/model 选择、tool permission、retry policy、Memory、Usage 或 Learning。当前 CLI runner 对 `ai use codex` 使用 process-scoped `model_provider` override，把 `env_key` 固定为本次子进程的 `OPENAI_API_KEY`，禁止回落到用户全局 Codex credential；该 override 不写入全局 `auth.json` 或 `config.toml`。Telegram `Engine` wrapper 是 ① 的兼容 facade，不是另一个 Agent Adapter 权威入口。
+Claude Code/Codex 的具体 CLI 封装目标态属于本层：`ClaudeCodeCliAgentAdapter` / `CodexCliAgentAdapter` 实现 `AgentAdapterPort`。它们拥有二进制发现、启动参数、临时 vendor 配置、进程生命周期、stream event parsing、session cursor 和 vendor error mapping；不拥有 Agent capability 激活、provider/model 选择、tool permission、retry policy、Memory、Usage 或 Learning。当前 CLI runner 对 `ai use codex` 使用 process-scoped `model_provider` override，把 `env_key` 固定为本次子进程的 `OPENAI_API_KEY`，禁止回落到用户全局 Codex credential；该 override 不写入全局 `auth.json` 或 `config.toml`。显式 `ai set codex` 则调用独立的 `codex-provider-config` integration service，按用户意图持久切换 vendor client 或 proxy：ChatGPT 认证委托 `codex login`；自定义 provider 由 Runtime provider record 与 discovered model cache 生成 Codex provider table、GPT-only selected model 与兼容 `auth.json`；proxy 更新 fixed env-key allowlist 并在 macOS 同步 user launchd environment；成功后调度 desktop restart。该 integration service 不替代 Runtime Transport Proxy；它只配置外部 vendor client 的 upstream network environment。执行路径与持久 mutation 禁止混用。Telegram `Engine` wrapper 是 ① 的兼容 facade，不是另一个 Agent Adapter 权威入口。
 
 ## 10. 验收标准
 
@@ -63,6 +63,7 @@ Claude Code/Codex 的具体 CLI 封装目标态属于本层：`ClaudeCodeCliAgen
 - Workflow/Agent provider 的 checkpoint、event cursor、SDK error 与 provider run id 只在 adapter 内部存在，对外转换为 Runtime canonical state/event/error。
 - Adapter 声称 cancel/compensation/resume 时必须有故障注入证明；不支持时 descriptor 明确声明，Registry/Policy 禁止把它用于要求该能力的 workflow。
 - Claude Code/Codex adapter fixture 覆盖 CLI version fingerprint、spawn failure、event sequence/dedup、tool proposal、confirmation round-trip、resume/cancel、unknown terminal、provider route 固定和 secret/reasoning 不落盘；无法拦截的 native tool mode 必须在 descriptor 中显式降级。
+- Codex persistent-config fixture 覆盖 ChatGPT login success/cancel、provider + explicit/automatic/interactive GPT model selection、no-GPT failure、proxy validation/set/clear、TOML unrelated-table preservation、credential mode、multi-file/environment rollback、reserved provider id 和 desktop restart unavailable；该能力只能由显式 `ai set codex` 调用。
 - 本地 profile 无托管服务仍可用；每个可选 provider 有独立测试的 fallback。
 - JSONL、OpenTelemetry 与企业 OTLP/APM Adapter 消费同一 `CapabilityObservation`；Adapter 可采样、聚合、脱敏和导出，但不得发明第二套 action、把 telemetry 变成审计真相或把 exporter 故障传播到 Runtime 主链。
 
@@ -187,6 +188,8 @@ Profile 只替换 backend，不改变 `MemoryService`、Claim/Evidence、PolicyD
 
 引入成熟组件前必须记录 ADR，至少包括：能力契约、数据分类与出境、开源许可证、维护活跃度、已知 CVE、资源占用、锁定版本、升级/回滚、离线能力、托管与自托管差异、替换 fixture 和数据导出格式。CI 生成 SBOM 并执行依赖与许可证扫描。
 
+包含 Node 原生 addon 的容器部署必须在一次性 build stage 中提供锁定依赖所需的编译工具链，随后裁掉 development dependency，并把 production dependency tree 复制到使用相同 Node.js patch release 的最终镜像。最终镜像不携带编译器，也不得在缺少工具链的 stage 中再次执行会触发源码编译的 `npm ci`。当前 `better-sqlite3` 属于该约束范围。
+
 每个 adapter 必须提供：
 
 1. contract test 和固定 golden fixture；
@@ -306,7 +309,12 @@ registerEngine({
   buildArgs: (provider, model, settingsPath) => {
     const args = ["--model", model];
     if (settingsPath) args.push("--settings", settingsPath);
-    if (provider.mode === "auto") args.push("--dangerously-skip-permissions");
+    const permission = resolveClaudePermissionMode(
+      provider.mode === "auto" ? "bypassPermissions" : "default"
+    );
+    if (permission.effectiveMode === "bypassPermissions") {
+      args.push("--dangerously-skip-permissions");
+    }
     return args;
   },
   normalizeBaseUrl: (url) => url.replace(/\/+$/, "").replace(/\/v1$/i, "")

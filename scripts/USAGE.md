@@ -1,103 +1,53 @@
-# 发布脚本使用说明
+# 发布助手使用说明
 
 > 文档受众：中文发布与运维人员。AI 与维护者的发布规则以英文 `docs/CONVENTIONS.md` 为准。
 
-## Release
+## 使用入口
 
-交互式发布：
+macOS 直接双击仓库根目录的 `发布.command`。无需切换分支，也无需记住发布命令。
 
-```bash
-npm run release
-```
+助手提供三个操作：
 
-首次发布仓库中已经设置好的当前版本（当前为 `0.0.1`）：
+1. **发布新版本到 npm**
+2. **把 npm 最新版本发布到 Homebrew Tap**
+3. **检查 npm / Homebrew 发布条件和当前状态**
 
-```bash
-npm run release:current
-```
+`npm run release` 仍可打开同一个菜单，供无法双击 `.command` 文件的平台使用。
 
-`release:current` 不修改版本号或创建版本 commit；它会验证干净工作区、完整测试、npm tarball 和 Homebrew Formula，确认同名 tag 不存在后只创建当前版本 tag。
+## 发布 npm
 
-脚本会自动执行：
+助手会自动：
 
-```text
-检查 Git 工作区是否干净
-选择 patch/minor/major
-npm test
-npm version --no-git-tag-version
-npm run homebrew:update
-npm run homebrew:check
-npm pack --dry-run
-创建版本 commit 和 tag
-```
+- 检查 Node.js、Git、npm、GitLab CLI、GitLab 登录和 `NPM_TOKEN`
+- 检查当前工作区是否干净
+- 在临时目录读取远端 `main` 并合入当前提交，不切换用户工作区分支
+- 以合并后的 `package.json` 为版本基准，提供 patch / minor / major 中文选项
+- 运行 `npm ci`、完整测试和 `npm pack --dry-run`
+- 创建中文 release commit 和 `v<version>` tag
+- 二次确认后原子推送 `main` 与 tag
+- 等待 GitLab tag pipeline 返回 npm 发布成功或失败
 
-说明：
+如果缺少 GitLab CLI，macOS 且已安装 Homebrew 时，助手可直接安装；如果没有登录，会启动登录向导。如果缺少 `NPM_TOKEN`，助手会打开 npm Token 页面和 GitLab CI 变量页面，并说明需要创建的变量名。
 
-- 工作区不干净时会拒绝发布。
-- 脚本只暂存 `package.json`、`package-lock.json` 和 Formula，并创建版本 commit/tag。
-- 发布前会通过 `npm pack --dry-run` 展示将要发布的文件。
-- 实际 npm/Homebrew 发布由 tag pipeline 完成，脚本不直接调用 `npm publish`。
+工作区不干净或合并 `main` 发生冲突时，助手不会自动覆盖内容，而是停止并提示先处理提交或冲突。
 
-## GitLab CI 自动发布
+## 发布 Homebrew
 
-仓库包含 `.gitlab-ci.yml`，在 `main` 分支上的 commit 打 tag 后，会自动发布到 npm。
+Homebrew 只能发布 npm Registry 中已经存在的版本。助手会自动：
 
-首次使用前，在 GitLab 项目里配置 CI/CD 变量：
+- 读取 `@offerpilot/axiomruntime` 的 npm `latest` 版本
+- 下载 Registry tarball 并计算真实 SHA256
+- 读取远端 `main` 中的 `Formula/axiomruntime.rb`
+- 若 Formula 已同步则直接报告，无需重复发布
+- 若未同步，则只更新 `homepage`、`url` 和 `sha256`，保留安装逻辑
+- 运行 Ruby 语法检查（本机有 Ruby 时）
+- 展示 diff 并二次确认后提交、推送 Homebrew Formula
 
-```text
-NPM_TOKEN=<你的 npm automation token>
-HOMEBREW_TAP_PUSH_URL=<带写权限且设为 masked 的 Tap Git URL>
-HOMEBREW_TAP_BRANCH=main
-```
+Homebrew 发布不会创建 npm tag，也不会调用 `npm publish`。
 
-`HOMEBREW_TAP_PUSH_URL` 指向独立的 `offerpilot/homebrew-tap` 仓库。推荐使用受限 deploy token/机器人凭证，不要使用个人长期凭证。Tap 仓库必须预先存在并至少包含目标分支。
+## 安全规则
 
-发布流程会在 Linux 发布 runner 完成构建后重新生成并校验 `Formula/axiomruntime.rb` 的 URL/SHA256，将 Formula 作为 artifact 传给后续 Job；npm 发布成功后再用 registry tarball 二次验证并推送到 Tap。这样不会依赖 macOS 与 Linux 的 npm tarball 字节完全一致：
-
-```bash
-git switch main
-git merge develop
-npm run release:current # 首次发布已经设置好的 0.0.1
-git push origin main --tags
-```
-
-后续版本将上述 `npm run release:current` 换成 `npm run release`，交互选择升级类型。
-
-`npm run release` 会自动完成：
-
-```text
-升级 package.json 版本号
-执行完整测试
-更新并校验 Homebrew Formula URL/SHA256
-创建版本 commit
-创建 git tag，例如 v0.1.1
-```
-
-交互选择的版本类型：
-
-```text
-patch  # 0.0.1 -> 0.0.2，修复问题或小改动
-minor  # 0.0.1 -> 0.1.0，新增兼容功能
-major  # 0.0.1 -> 1.0.0，破坏性变更
-```
-
-规则：
-
-- 只有 tag pipeline 会执行 npm 发布。
-- tag 对应的 commit 必须在 `origin/main` 历史里。
-- tag 版本必须和 `package.json` 的 `version` 一致，支持 `v0.0.1` 或 `0.0.1`。
-- 发布前会执行 `npm test` 和 `npm pack --dry-run`。
-- npm 发布成功后，CI 会从 registry 重新下载 tarball并验证 Formula SHA256；校验通过才推送 Homebrew Tap。
-
-完整检查命令：
-
-```bash
-git status
-git log --oneline --decorate -5
-```
-
-确认 tag 已生成：
-
-```bash
-git tag --list
-```
+- npm 发布 commit 必须进入远端 `main`，tag 版本必须等于 `package.json.version`。
+- npm 发布由 GitLab CI 使用 masked `NPM_TOKEN` 执行，本地脚本不读取或打印 Token。
+- Homebrew Formula 只使用 npm Registry 的公开 tarball，SHA256 从实际下载内容计算。
+- 所有临时发布目录在流程结束后清理；用户工作区不会自动切换分支。

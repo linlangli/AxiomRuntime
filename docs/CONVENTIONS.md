@@ -48,6 +48,10 @@ Principles:
 - Writes should use temp-file plus rename semantics to reduce corruption from concurrent CLI processes.
 - Validate configuration at read time.
 - Preserve user edits.
+- Explicit commands that persist configuration into another client home must snapshot and roll back every affected file as one operation, preserve unrelated settings, and use that client's supported authentication flow rather than synthesizing OAuth credentials.
+- Codex credentials written to `CODEX_HOME/auth.json` must use mode `0600`; API keys must not be copied into `config.toml`, command output, or logs.
+- Persistent custom Codex provider selection must use the provider's discovered model cache, accept only available `gpt-*` ids, and fail without mutation when no GPT model is available. Automatic selection must be deterministic: newer numeric GPT family first, then the documented tier order, with rolling aliases preferred over dated snapshots.
+- Codex proxy persistence must manage only `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and their lowercase equivalents in `shell_environment_policy.set`. Proxy URLs supplied on the command line must not contain credentials. A macOS desktop-environment update must roll back both its changed launchd variables and `config.toml` before reporting failure.
 
 ## Development Conventions
 
@@ -57,7 +61,7 @@ Principles:
 - Keep user-facing documentation in Chinese.
 - Keep project documents under `docs/`, except the root `README.md`.
 - Keep the minimum Node.js runtime synchronized across `package.json`, `package-lock.json`, `.gitlab-ci.yml`, and user documentation. CI must execute the declared minimum version, currently `22.19.0`, so newer local runtimes cannot hide dependency incompatibilities.
-- Publish npm as `@offerpilot/axiomruntime` and treat its versioned tarball as the sole CLI distribution source. Homebrew Formulae must pin the matching registry URL and SHA256, depend on `node@22`, and pass `ai --version`; the npm publish job must regenerate the Formula after building on the release runner and pass it as an artifact, because npm tarball bytes may differ across operating systems. A tag pipeline may update the Tap only after npm publication and registry checksum verification.
+- Publish npm as `@offerpilot/axiomruntime` and treat its versioned registry tarball as the sole CLI distribution source. Homebrew Formulae must pin the matching registry URL and SHA256, depend on `node@22`, and pass `ai --version`. npm and Homebrew are explicit, independently selected release actions: the npm action creates and pushes a release tag for GitLab CI; the Homebrew action may run only after that version exists in npm Registry and must derive its checksum from the downloaded registry tarball before updating the Tap.
 - Prefer clean core APIs over CLI-specific logic.
 - Keep `providers.json` stable and human-editable.
 - Avoid adding fields to `providers.json` unless users need to edit them directly.
@@ -91,6 +95,7 @@ Required implementation behavior:
 - Preserve Tool/Workflow/Agent boundaries: a Tool is one typed side effect, a Workflow is a recoverable state machine, and an Agent is an adapter whose tool proposals return to the Kernel for authorization. Hidden retries, permissions, provider switches, or side effects in adapters are forbidden.
 - Meet the numeric release gates in `service-level-objectives.md`; hard safety regressions override availability error budgets.
 - Provider-specific behavior stays in adapters.
+- Treat package-install privilege separately from Runtime execution privilege. Claude launch paths must detect UID 0 before building arguments or temporary settings, must never forward `--dangerously-skip-permissions` from a privileged process, and must record any policy constraint from configured `bypassPermissions` to effective `default`; long-lived Runtime services should use a dedicated non-root OS identity.
 - Resolve provider fallback candidates once per execution attempt. After selection, engine adapters execute the exact provider/model and never perform hidden second-stage routing.
 - Treat expired runtime circuits as half-open probes. Do not let stale `status: error` metadata permanently disable a provider after its cooldown.
 - Keep protocol compatibility distinct from transient upstream failure: native Responses may fall back to Chat only for explicit protocol incompatibility, never for Cloudflare `52x` or similar timeouts.
@@ -127,21 +132,19 @@ The project includes a GitLab CI pipeline in `.gitlab-ci.yml`.
 CI rules:
 
 - Normal branch and merge request pipelines run `npm test`.
+- Docker dependency stages must provide the native build toolchain required by locked Node addons. Compile those addons in a disposable build stage, prune development dependencies there, and copy the resulting production dependency tree into an ABI-compatible final image; do not repeat `npm ci` in a toolchain-free final stage.
+- Pin build and final Docker stages to the same declared minimum Node.js patch release so native addons are compiled and executed with the same Node ABI.
 - Tag pipelines publish to npm.
 - npm publishing requires the GitLab CI/CD variable `NPM_TOKEN`.
 - A release tag must point to a commit contained in `origin/main`.
 - The tag version must match `package.json` version. Both `v0.1.1` and `0.1.1` tag formats are accepted.
 - The publish job runs `npm test` and `npm pack --dry-run` before `npm publish --access public`.
+- Homebrew publication is a separate explicit maintainer action. It must read an already-published npm Registry version, calculate SHA256 from the downloaded registry tarball, preserve Formula installation logic, show the diff, and require confirmation before pushing the Tap.
+- The interactive release assistant must fail closed on a dirty worktree, merge conflicts, missing GitLab authentication, missing `NPM_TOKEN`, duplicate npm versions, or a missing npm version for Homebrew. It may guide or launch prerequisite setup but must never expose tokens or resolve source conflicts automatically.
 
 Release convention:
 
-```bash
-git switch main
-git merge develop
-npm run release:current # only when publishing a pre-set initial version
-# npm run release      # subsequent interactive version bumps
-git push origin main --tags
-```
+On macOS, maintainers double-click the repository-root `发布.command` and choose npm, Homebrew, or status checks. `npm run release` opens the same menu as a cross-platform compatibility entry. Maintainers are not required to remember branch, version, tag, push, or Homebrew update commands.
 
 ## Progress Sync Rules
 
@@ -187,7 +190,7 @@ Documentation review must appear in the task checklist or handoff summary even w
 ## Current Status
 
 - Foundation CLI implemented with no runtime third-party dependencies.
-- Implemented commands: `ai`, `ai version|--version|-v`, `ai setup`, `ai help`, `ai add`, `ai provider list`, `ai provider edit`, `ai provider delete`, `ai session`, `ai session list`, `ai session clear`, `ai report`, `ai status`, `ai log`, `ai context`, actionable `ai doctor` with safe Runtime-home repair, `ai doctor --deep --tool claude|codex`, `ai use`, `ai last`, placeholder `ai web`.
+- Implemented commands: `ai`, `ai version|--version|-v`, `ai setup`, `ai help`, `ai add`, `ai provider list`, `ai provider edit`, `ai provider delete`, `ai set codex`, `ai session`, `ai session list`, `ai session clear`, `ai report`, `ai status`, `ai log`, `ai context`, actionable `ai doctor` with safe Runtime-home repair, `ai doctor --deep --tool claude|codex`, `ai use`, `ai last`, placeholder `ai web`.
 - Implemented core stores: `providers.json`, `.ai-cache.json`, `usage.json`.
 - Implemented real token usage recording for provider responses with usage data (from `ai doctor --deep`).
 - Implemented provider level normalization, level swapping, model discovery with `/v1/models` fallback, lightweight health checks, status rendering, fallback resolution, and runner environment setup.

@@ -3,9 +3,10 @@ import os from "node:os";
 import { getTelegramBotConfigPath, getTelegramBotDbPath, getTelegramBotDir, getTelegramConfigPath, getTelegramDbPath } from "../core/config/paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../core/config/json-store.js";
 import { readBoolean, readNumber, readOptionalString, readString } from "../core/config/schema.js";
+import type { ClaudePermissionMode } from "../core/runner/claude-permission-policy.js";
 
 export type TelegramEngineName = "claude" | "codex";
-export type TelegramPermissionMode = "readOnly" | "default" | "acceptEdits" | "bypassPermissions";
+export type TelegramPermissionMode = ClaudePermissionMode;
 
 export type TelegramConfig = {
   token: string;

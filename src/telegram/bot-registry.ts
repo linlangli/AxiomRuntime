@@ -18,6 +18,7 @@ export type BotEntry = {
 };
 
 const BOT_NAME_RE = /^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$/;
+const LEGACY_MIGRATION_MARKER = ".telegram-legacy-migrated";
 
 export function isValidBotName(name: string): boolean {
   return BOT_NAME_RE.test(name) && name.length <= 32;
@@ -57,14 +58,20 @@ export function isBotRunning(name: string): { running: boolean; pid: number | nu
 export async function migrateLegacyConfig(): Promise<void> {
   const legacyPath = getTelegramConfigPath();
   if (!fs.existsSync(legacyPath)) return;
-  if (botExists("default")) return;
+  if (fs.existsSync(getLegacyMigrationMarkerPath())) return;
 
   const dir = getTelegramBotDir();
   await fsPromises.mkdir(dir, { recursive: true });
-  await fsPromises.copyFile(legacyPath, getTelegramBotConfigPath("default"));
+  if (!botExists("default")) {
+    await fsPromises.copyFile(legacyPath, getTelegramBotConfigPath("default"));
+  }
+  await markLegacyMigrationComplete();
 }
 
 export async function removeBotFiles(name: string, configuredDbPath?: string): Promise<void> {
+  if (name === "default") {
+    await markLegacyMigrationComplete();
+  }
   const managedConfiguredDbPath = configuredDbPath && isManagedConfigPath(configuredDbPath)
     ? path.resolve(configuredDbPath)
     : undefined;
@@ -77,8 +84,7 @@ export async function removeBotFiles(name: string, configuredDbPath?: string): P
     getTelegramBotConfigPath(name),
     getTelegramBotPidPath(name),
     getTelegramBotLogPath(name),
-    ...[...dbPaths].flatMap((dbPath) => [dbPath, `${dbPath}-shm`, `${dbPath}-wal`]),
-    ...(name === "default" ? [getTelegramConfigPath()] : [])
+    ...[...dbPaths].flatMap((dbPath) => [dbPath, `${dbPath}-shm`, `${dbPath}-wal`])
   ];
   for (const p of paths) {
     try {
@@ -92,4 +98,13 @@ export async function removeBotFiles(name: string, configuredDbPath?: string): P
 function isManagedConfigPath(filePath: string): boolean {
   const relative = path.relative(getConfigRoot(), path.resolve(filePath));
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function getLegacyMigrationMarkerPath(): string {
+  return path.join(getConfigRoot(), LEGACY_MIGRATION_MARKER);
+}
+
+async function markLegacyMigrationComplete(): Promise<void> {
+  await fsPromises.mkdir(getConfigRoot(), { recursive: true });
+  await fsPromises.writeFile(getLegacyMigrationMarkerPath(), "completed\n", { mode: 0o600 });
 }

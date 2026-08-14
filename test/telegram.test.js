@@ -16,7 +16,7 @@ import {
   setTelegramConfigValue,
   updateBotConfig
 } from "../dist/telegram/config.js";
-import { botExists } from "../dist/telegram/bot-registry.js";
+import { botExists, migrateLegacyConfig } from "../dist/telegram/bot-registry.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
 import { requiresDangerousConfirmation } from "../dist/telegram/interaction/approval.js";
@@ -212,25 +212,36 @@ test("telegram CLI updates, shows, and deletes only the explicitly targeted bot"
   });
 });
 
-test("telegram remove default clears the legacy binding so it cannot be migrated again", async () => {
+test("removing a migrated default bot preserves global config without recreating the bot", async () => {
   await withTempHome(async (tempDir) => {
-    const botDir = path.join(tempDir, "telegram", "bots");
-    const namedConfigPath = path.join(botDir, "default.json");
-    const legacyConfigPath = path.join(tempDir, "telegram.json");
-    await fs.mkdir(botDir, { recursive: true });
-    await fs.writeFile(namedConfigPath, "{}", "utf8");
-    await fs.writeFile(legacyConfigPath, "{}", "utf8");
+    const legacyDbPath = path.join(tempDir, "telegram.sqlite");
+    await saveTelegramConfig(normalizeTelegramConfig({
+      token: "legacy-token",
+      allowedUserIds: [1],
+      dbPath: legacyDbPath
+    }));
+    await migrateLegacyConfig();
+    assert.equal(botExists("default"), true);
+    await Promise.all([
+      fs.writeFile(legacyDbPath, "db"),
+      fs.writeFile(`${legacyDbPath}-shm`, "shm"),
+      fs.writeFile(`${legacyDbPath}-wal`, "wal")
+    ]);
 
     const originalLog = console.log;
     console.log = () => {};
     try {
       await runTelegramCommand(["remove", "default"]);
+      await runTelegramCommand(["list"]);
     } finally {
       console.log = originalLog;
     }
 
-    await assert.rejects(fs.access(namedConfigPath), { code: "ENOENT" });
-    await assert.rejects(fs.access(legacyConfigPath), { code: "ENOENT" });
+    assert.equal(botExists("default"), false);
+    assert.equal((await loadTelegramConfig()).token, "legacy-token");
+    for (const filePath of [legacyDbPath, `${legacyDbPath}-shm`, `${legacyDbPath}-wal`]) {
+      await assert.rejects(fs.access(filePath), { code: "ENOENT" });
+    }
   });
 });
 
@@ -2555,6 +2566,32 @@ test("claude args include verbose stream-json output", () => {
   assert.equal(args.includes("--output-format"), true);
   assert.equal(args.includes("stream-json"), true);
   assert.equal(args.includes("--verbose"), true);
+});
+
+test("claude args never request bypass permissions as root", () => {
+  const args = buildClaudeArgs({
+    prompt: "hello",
+    model: "claude-opus-4-6",
+    settingsPath: "/tmp/settings.json",
+    permissionMode: "bypassPermissions",
+    uid: 0
+  });
+  assert.deepEqual(args.slice(args.indexOf("--permission-mode"), args.indexOf("--permission-mode") + 2), [
+    "--permission-mode",
+    "default"
+  ]);
+  assert.equal(args.includes("--dangerously-skip-permissions"), false);
+});
+
+test("claude args retain bypass permissions for non-root users", () => {
+  const args = buildClaudeArgs({
+    prompt: "hello",
+    model: "claude-opus-4-6",
+    settingsPath: "/tmp/settings.json",
+    permissionMode: "bypassPermissions",
+    uid: 1000
+  });
+  assert.equal(args.includes("--dangerously-skip-permissions"), true);
 });
 
 test("claude read-only binds the prompt before variadic allowed tools", () => {

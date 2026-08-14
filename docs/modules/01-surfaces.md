@@ -66,7 +66,7 @@ Surfaces **无持久数据所有权**。会话真相属 ② Orchestration 的 Wo
 
 ## 9. 现状映射
 
-`src/cli/`（18 文件）、`src/telegram/`（37 文件）已存在，保持为 adapter；`telegram/session|memory|interaction` 中的可复用策略**应当**上移 ② Orchestration。`server/`、`web/`、`scheduler/` 待建。
+`src/cli/`、`src/telegram/` 已存在并保持为 adapter；`ai set codex` 仅读取 provider/model candidates、呈现 provider→model selector 并调用 `src/core/integrations/codex-provider-config.ts`，不在 Surface 内实现 GPT filtering/ordering、凭据/TOML、desktop environment 写入或重启语义。`telegram/session|memory|interaction` 中的可复用策略**应当**上移 ② Orchestration。`server/`、`web/`、`scheduler/` 待建。
 
 ## 10. 验收标准
 
@@ -149,7 +149,7 @@ ai telegram delete --bot <name>                     # 停止并删除指定 Bot 
 ai telegram start|stop|status --all                 # 显式批量操作
 ```
 
-命名 Bot 的 selector 是配置文件名中的 canonical `name`，格式为小写 `a-z0-9_-`、最长 32 字符。`--bot=<name>` 与 `--bot <name>` 等价；旧 `start <name>`、`config <name>`、`remove <name>` 继续兼容。命名 Bot 的 config/PID/log/SQLite 固定落在 `telegram/bots/<name>.*`，任何带 `--bot` 的 mutation 禁止回退到 legacy `telegram.json`。为兼容已有脚本，存在命名 Bot 时，无目标 `start/stop/status` 仍表示全部命名 Bot，但新脚本必须显式使用 `--bot` 或 `--all`。
+命名 Bot 的 selector 是配置文件名中的 canonical `name`，格式为小写 `a-z0-9_-`、最长 32 字符。`--bot=<name>` 与 `--bot <name>` 等价；旧 `start <name>`、`config <name>`、`remove <name>` 继续兼容。命名 Bot 的 config/PID/log/SQLite 固定落在 `telegram/bots/<name>.*`，任何带 `--bot` 的 mutation 禁止回退到 legacy `telegram.json`。legacy `telegram.json` 到 `default` 的自动迁移只执行一次；显式删除 `default` 后必须保留迁移完成状态，任何后续 command 或 supervisor 禁止再次重建它。为兼容已有脚本，存在命名 Bot 时，无目标 `start/stop/status` 仍表示全部命名 Bot，但新脚本必须显式使用 `--bot` 或 `--all`。
 
 交互式 `ai telegram` 必须在选定 action 后展示第二层 Bot selector；`edit/delete/logs/doctor/config` 选择单 Bot，`start/stop/status` 额外提供 `all bots`。`ai telegram --bot <name>` 预绑定目标并跳过第二层 selector；legacy global config 仍由直接 `ai telegram config` 管理。交互删除必须二次确认；若停止在 5 秒内未完成，必须保留 config/PID/log/SQLite 并报错，不得留下仍运行但已失去管理文件的 Bot。删除迁移生成的 `default` Bot 时必须同时清理 legacy `telegram.json` 与数据库，防止后续迁移恢复已解绑 Bot。
 
@@ -198,13 +198,18 @@ const ALWAYS_CONFIRM_PATTERNS = [
 
 `ai`（无参进交互模式）｜`ai help`（打开 `docs/USAGE.html`）。直接命令：
 
-npm 分发包固定为 `@offerpilot/axiomruntime`，其 `bin` 契约固定注册 `ai`。`npm install --global @offerpilot/axiomruntime` 的安装验收必须在隔离 prefix 中直接执行已安装的 `ai`。Homebrew Formula 必须复用相同版本的 npm tarball、固定 SHA256、依赖 `node@22` 并以 `ai --version` 验收；不得维护第二套 Runtime 构建物。Tag pipeline 必须先发布 npm，验证 registry tarball与 Formula checksum 一致后，才能把 Formula 推送到独立 Tap。`ai doctor` 诊断 Runtime 配置、Provider 连通性和外部 CLI readiness，不承担包管理器完整性校验。
+npm 分发包固定为 `@offerpilot/axiomruntime`，其 `bin` 契约固定注册 `ai`。`npm install --global @offerpilot/axiomruntime` 的安装验收必须在隔离 prefix 中直接执行已安装的 `ai`。Homebrew Formula 必须复用 npm Registry 中已发布版本的 tarball、固定实际下载内容的 SHA256、依赖 `node@22` 并以 `ai --version` 验收；不得维护第二套 Runtime 构建物。维护者通过根目录 `发布.command` 交互选择 npm、Homebrew 或 status check：npm action 在临时 main 中完成 version/test/tag/push 并等待 GitLab pipeline，Homebrew action 只接受 Registry 已存在版本、保留 Formula 安装逻辑、展示 diff 并经确认后推送 Tap。两个 action 禁止隐式连带触发；工作区不干净、合并冲突、缺少 GitLab auth/`NPM_TOKEN`、npm 版本重复或 Homebrew 来源版本不存在时必须 fail-closed，并提供不暴露 secret 的中文引导。`ai doctor` 诊断 Runtime 配置、Provider 连通性和外部 CLI readiness，不承担包管理器完整性校验。
+
+全局安装身份与 Runtime 执行身份分离：管理员可安装 npm 包，但 `ai` 与 Telegram 常驻服务应以专用非 root 用户执行。Surface 只展示 configured/effective permission mode 与约束原因；UID 0 下 Claude `bypassPermissions -> default` 的裁决由共享 core policy 完成，CLI 与 Telegram 禁止各自绕过或重复实现。
 
 ```bash
 ai version | ai --version | ai -v
 ai setup [--yes] [--install-tools] [--skip-provider] [--skip-tools]
 ai use claude | ai use codex
 ai use claude 51talk claude-opus-4-6      # tool + provider + model
+ai set codex chatgpt
+ai set codex provider [provider-name] [model-id]
+ai set codex proxy <host:port|url|off>
 ai add 51talk https://example.com sk-xxx  # 添加 provider
 ai provider edit | list
 ai status | log | context | doctor [--local|--no-fix|--strict|--deep --tool claude|codex] | last | web
@@ -214,7 +219,7 @@ ai report
 
 ## F. surface 职责边界（呼应本文 §2）
 
-CLI 只负责：解析命令 → 构造意图 → 获取安装外部 CLI 等显式授权 → 呈现结果。provider 选择委托 ③（见 [03-capabilities.md](03-capabilities.md) 附 D–F），执行委托 ④，用量呈现读 ⑤ 的 `usage.json`。`ai status` 是健康态投影；`ai doctor` 的诊断和安全修复由 core status/config API 实现，修复范围仅限 Runtime home，禁止读取或修改项目源码，禁止自动覆盖 `providers.json`。CLI 不实现路由或配置修复语义。
+CLI 只负责：解析命令 → 构造意图 → 获取安装外部 CLI 或持久切换 Codex client provider/proxy 等显式授权 → 呈现结果。provider/model 候选读取 ③ 的 provider cache，GPT-only 校验与 newest ordering 由 core integration policy 完成；Surface 只呈现 provider→model 两级 selector。执行委托 ④，用量呈现读 ⑤ 的 `usage.json`。`ai set codex` 的 ChatGPT OAuth、`CODEX_HOME/config.toml`/`auth.json` 事务写入、macOS user launchd proxy environment 同步和 app restart 委托 ⑩ 的 core integration service。`ai status` 是健康态投影；`ai doctor` 的诊断和安全修复由 core status/config API 实现，修复范围仅限 Runtime home，禁止读取或修改项目源码，禁止自动覆盖 `providers.json`。CLI 不实现路由、凭据写入或配置修复语义。
 
 ---
 
@@ -1487,7 +1492,7 @@ ai-gateway/
 {
   "dependencies": {
     "grammy": "^1.30.0",
-    "better-sqlite3": "^11.0.0"
+    "better-sqlite3": "^13.0.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0"
