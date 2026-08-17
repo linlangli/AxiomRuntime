@@ -222,7 +222,6 @@ export function buildCodexProviderConfig(
     `name = ${tomlString(provider.name)}`,
     `base_url = ${tomlString(provider.baseUrl.trim().replace(/\/+$/, ""))}`,
     `env_key = ${tomlString("OPENAI_API_KEY")}`,
-    "requires_openai_auth = true",
     `wire_api = ${tomlString("responses")}`
   ].join(eol);
   return `${next.trimEnd()}${eol}${eol}${table}${eol}`;

@@ -70,7 +70,8 @@ test("Codex provider config preserves unrelated settings and replaces its manage
   assert.match(updated, /^cli_auth_credentials_store = "file"/m);
   assert.match(updated, /\[model_providers\.51talk-cq\]/);
   assert.match(updated, /base_url = "https:\/\/cq\.example\.com\/v1"/);
-  assert.match(updated, /requires_openai_auth = true/);
+  assert.match(updated, /env_key = "OPENAI_API_KEY"/);
+  assert.doesNotMatch(updated, /requires_openai_auth/);
   assert.match(updated, /\[projects\."\/tmp\/project"\]/);
   assert.doesNotMatch(updated, /https:\/\/stale\.test/);
   assert.doesNotMatch(updated, /cq-secret/);

@@ -104,8 +104,6 @@ registerRunnerEngine({
       "-c",
       `model_providers.${providerId}.env_key=${tomlString("OPENAI_API_KEY")}`,
       "-c",
-      `model_providers.${providerId}.requires_openai_auth=true`,
-      "-c",
       `model_providers.${providerId}.wire_api=${tomlString("responses")}`,
       "--model",
       model
