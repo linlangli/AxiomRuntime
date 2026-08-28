@@ -90,8 +90,6 @@ test("runner engine registry exposes built-in engines", () => {
     "-c",
     'model_providers.ai_gateway_selected.env_key="OPENAI_API_KEY"',
     "-c",
-    "model_providers.ai_gateway_selected.requires_openai_auth=true",
-    "-c",
     'model_providers.ai_gateway_selected.wire_api="responses"',
     "--model",
     "gpt-5.5",
@@ -871,6 +869,23 @@ test("does not skip Claude permissions in ask mode", () => {
   ]);
 });
 
+test("does not require OpenAI auth for gateway-selected Codex providers", () => {
+  const provider = {
+    name: "api",
+    baseUrl: "https://icode.51talk.biz/v1/",
+    apiKey: "key",
+    mode: "auto",
+    level: 1,
+    model: "gpt-5.5"
+  };
+
+  // requires_openai_auth=true makes Codex gate on $CODEX_HOME/auth.json, which
+  // forces a sign-in prompt even though the provider authenticates via env_key.
+  const args = buildRunnerArgs("codex", provider, "gpt-5.5", null);
+  assert.ok(!args.some((arg) => arg.includes("requires_openai_auth")));
+  assert.ok(args.includes('model_providers.ai_gateway_selected.env_key="OPENAI_API_KEY"'));
+});
+
 test("maps Codex auto mode to bypass approvals and sandbox", () => {
   const provider = {
     name: "api",
@@ -890,8 +905,6 @@ test("maps Codex auto mode to bypass approvals and sandbox", () => {
     'model_providers.ai_gateway_selected.base_url="https://icode.51talk.biz/v1"',
     "-c",
     'model_providers.ai_gateway_selected.env_key="OPENAI_API_KEY"',
-    "-c",
-    "model_providers.ai_gateway_selected.requires_openai_auth=true",
     "-c",
     'model_providers.ai_gateway_selected.wire_api="responses"',
     "--model",
@@ -919,8 +932,6 @@ test("does not skip Codex approvals in ask mode", () => {
     'model_providers.ai_gateway_selected.base_url="https://icode.51talk.biz/v1"',
     "-c",
     'model_providers.ai_gateway_selected.env_key="OPENAI_API_KEY"',
-    "-c",
-    "model_providers.ai_gateway_selected.requires_openai_auth=true",
     "-c",
     'model_providers.ai_gateway_selected.wire_api="responses"',
     "--model",

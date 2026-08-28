@@ -110,6 +110,7 @@ ai use codex 51talk gpt-5.5
 - 启动 Claude Code 时，AI Gateway 会生成临时 `--settings` 文件，把 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 写入 settings 的 `env` 后启动；不会修改 `~/.claude/settings.json`，也不会使用 `--bare`。
 - provider 的 `mode` 为 `auto` 时，非 root 执行 Claude Code 会追加 `--dangerously-skip-permissions`；`ask` 模式不会追加该参数，并会在启动前确认。root 下请求 `auto` 会被安全约束为默认权限，并输出如何改用非 root 用户的告警。
 - 启动 Codex 时，AI Gateway 会通过本次子进程的 `-c model_provider=...` 参数固定所选 provider，并用 `env_key = "OPENAI_API_KEY"` 读取本次注入的 API Key。Codex 全局 `auth.json`、`config.toml` 和直接执行 `codex` 的流程不会被修改。
+- 这条 provider override 不会设置 `requires_openai_auth`。该开关会让 Codex 把「是否已认证」判定为 `CODEX_HOME/auth.json` 是否存在（不识别 `OPENAI_API_KEY` 环境变量），因此在没有 `auth.json` 的机器上会强制弹出 ChatGPT 登录选择页。Runtime 托管的 provider 靠 `env_key` 完成认证，不依赖 OpenAI 官方身份。
 - 如果 provider 的 `baseUrl` 是 OpenAI 兼容地址，例如 `https://icode.51talk.biz/v1`，启动 Claude Code 时会自动注入 `https://icode.51talk.biz`；启动 Codex 时仍使用 `/v1`。
 - 启动记录会写入日志，包含 provider、baseUrl、模型、启动参数和 API Key 指纹，不包含完整 API Key。
 
@@ -222,7 +223,7 @@ ai telegram status --all
 - `/terminal <命令>` 在当前工作目录执行命令，最长 60 秒；高风险命令仍需 inline confirmation。`/restart` 会优雅停止当前 Bot 并启动 replacement process。
 - Claude 失败时 Bot 会提取 terminal error；不会再把 `system/init` JSON 当成主错误显示。
 - `full-auto` 会映射到 Claude/Codex 的跳过审批模式，但高风险命令文本仍会在 Telegram 侧强制确认。
-- 如果本机不能直连 `api.telegram.org`，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。
+- 如果本机不能直连 `api.telegram.org`，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。交互式新增或编辑 Bot 时，`proxyUrl` 输入提示会展示完整 URL 示例；地址请包含协议，例如 `http://127.0.0.1:7890`。
 
 ## 添加 Provider
 

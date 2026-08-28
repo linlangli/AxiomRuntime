@@ -753,7 +753,7 @@ ai telegram status --all</pre>
                   <li><code>/provider</code> 以按钮列出全部 AI Provider，可编辑名称、Base URL、API Key、默认模型、模式和优先级，二次确认后删除，或从列表底部添加。操作复用 <code>ai provider</code> 的核心 CRUD 和检查逻辑。</li>
                   <li>Provider API Key 在详情中只显示“已配置”，不会写入 Bot 应用日志；输入后 Bot 会尽力立即删除该 Telegram 消息。未完成表单在 Bot 重启后需要重新开始。</li>
                   <li>Telegram Codex 执行会自动走本地 OpenAI 兼容代理记录 provider usage；<code>/usage</code> 有 provider cost 时直接展示，否则按 <code>model-pricing.json</code> 估算。</li>
-                  <li>如果本机不能直连 <code>api.telegram.org</code>，设置 <code>proxyUrl</code> 或环境变量 <code>HTTPS_PROXY</code> / <code>ALL_PROXY</code>。</li>
+                  <li>如果本机不能直连 <code>api.telegram.org</code>，设置 <code>proxyUrl</code> 或环境变量 <code>HTTPS_PROXY</code> / <code>ALL_PROXY</code>。交互式新增或编辑 Bot 时，<code>proxyUrl</code> 输入提示会展示完整 URL 示例；地址请包含协议，例如 <code>http://127.0.0.1:7890</code>。</li>
                 </ul>
               </div>
             </details>
