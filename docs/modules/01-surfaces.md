@@ -153,6 +153,8 @@ ai telegram start|stop|status --all                 # 显式批量操作
 
 交互式 `ai telegram` 必须在选定 action 后展示第二层 Bot selector；`edit/delete/logs/doctor/config` 选择单 Bot，`start/stop/status` 额外提供 `all bots`。`ai telegram --bot <name>` 预绑定目标并跳过第二层 selector；legacy global config 仍由直接 `ai telegram config` 管理。交互删除必须二次确认；若停止在 5 秒内未完成，必须保留 config/PID/log/SQLite 并报错，不得留下仍运行但已失去管理文件的 Bot。
 
+交互式新增 Bot 或编辑命名/legacy Telegram 配置时，`proxyUrl` 输入提示必须明确要求包含协议，并展示完整示例 `http://127.0.0.1:7890`；新增 Bot 的提示还必须说明该字段可以留空。
+
 Setup 引导：`/start → model(Provider/Model) → workdir(+/init) → agent_profile(画像) → ready`。`workdir` 步骤直接把最近记录的绝对路径渲染为 inline button，末尾提供“自定义”，不再经过“已存在”二级入口。同一 chat 任务经 `SessionManager.runExclusive()` 串行执行，避免并发写同一 session。
 
 ### C.1 当前高优先级 UX 契约

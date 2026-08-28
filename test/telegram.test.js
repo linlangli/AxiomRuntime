@@ -4,7 +4,11 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { parseTelegramTargetArgs, runTelegramCommand } from "../dist/cli/commands/telegram.js";
+import {
+  parseTelegramTargetArgs,
+  runTelegramCommand,
+  TELEGRAM_PROXY_URL_PROMPT
+} from "../dist/cli/commands/telegram.js";
 import {
   loadBotConfig,
   loadTelegramConfig,
@@ -78,6 +82,11 @@ import { completeAgentProfile, inferEngineFromModel, setWorkdir } from "../dist/
 import { parseModelPriceInput } from "../dist/telegram/handlers/usage.js";
 import { SessionManager } from "../dist/telegram/session/manager.js";
 import { SessionStore } from "../dist/telegram/session/store.js";
+
+test("telegram proxy prompt shows a complete URL example", () => {
+  assert.match(TELEGRAM_PROXY_URL_PROMPT, /include protocol/i);
+  assert.match(TELEGRAM_PROXY_URL_PROMPT, /http:\/\/127\.0\.0\.1:7890/);
+});
 
 test("normalizes telegram config and parses config values", async () => {
   await withTempHome(async () => {

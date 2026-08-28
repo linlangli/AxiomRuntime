@@ -223,7 +223,7 @@ ai telegram status --all
 - `/terminal <命令>` 在当前工作目录执行命令，最长 60 秒；高风险命令仍需 inline confirmation。`/restart` 会优雅停止当前 Bot 并启动 replacement process。
 - Claude 失败时 Bot 会提取 terminal error；不会再把 `system/init` JSON 当成主错误显示。
 - `full-auto` 会映射到 Claude/Codex 的跳过审批模式，但高风险命令文本仍会在 Telegram 侧强制确认。
-- 如果本机不能直连 `api.telegram.org`，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。
+- 如果本机不能直连 `api.telegram.org`，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。交互式新增或编辑 Bot 时，`proxyUrl` 输入提示会展示完整 URL 示例；地址请包含协议，例如 `http://127.0.0.1:7890`。
 
 ## 添加 Provider
 

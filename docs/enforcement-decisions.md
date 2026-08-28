@@ -907,6 +907,7 @@ phase: "memory_recall" | "memory_injected" | "skill_applied"
 - Interactive `ai telegram` selects an action and then a named Bot; lifecycle actions also offer `all bots`, scoped `--bot` interaction skips the second selector, and interactive deletion requires confirmation without deleting files when graceful stop times out.
 - Legacy `telegram.json` 到命名 Bot `default` 的自动迁移必须是一次性的；删除 `default` 后必须保留迁移完成状态，后续 `list`、lifecycle command 或 supervisor 禁止再次从 legacy config 重建它，同时 legacy global config 仍可由无目标 `ai telegram config` 管理。
 - `ai telegram config set <key> <value> --bot <name>` updates only `telegram/bots/<name>.json`, and Telegram token values never appear in command logs or terminal config output.
+- Interactive Telegram Bot add/edit flows show `proxyUrl` as a complete URL input, explicitly require a protocol, and include `http://127.0.0.1:7890` as the example; the add flow also states that the field may be left empty.
 - Unavailable providers trigger automatic fallback.
 - Manual changes to `providers.json` are recognized on the next command run.
 
