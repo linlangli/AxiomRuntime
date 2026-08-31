@@ -640,6 +640,7 @@ ai use codex 51talk gpt-5.5</pre>
                   <li><code>ai use codex</code> 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
                   <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，非 root 执行 Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。root 下请求 <code>auto</code> 会被安全约束为默认权限，临时 settings 中继承的 bypass 配置也会被清除。</li>
                   <li>OpenAI 兼容地址用于 Codex 时会使用 <code>/v1</code>，用于 Claude 时会去掉 <code>/v1</code>。</li>
+                  <li>Claude 与 Codex 的本次子进程都会通过 execution-scoped 本地代理转发；原生终端交互不变，provider 返回的真实 usage 会按 provider/model 写入 <code>usage.json</code>。</li>
                   <li>日志只记录 Key 指纹，不记录完整 API Key。</li>
                 </ul>
               </div>
@@ -799,7 +800,7 @@ ai provider list
 ai log
 ai log --print
 ai context</pre>
-                <p><code>status</code> 会刷新 provider 健康度和模型缓存，展示 Claude/Codex 各自实际 baseUrl、兼容模型、token 使用量和使用占比。</p>
+                <p><code>status</code> 会刷新 provider 健康度和模型缓存，展示 Claude/Codex 各自实际 baseUrl、兼容模型、token 使用量和使用占比。CLI 与 Telegram 的 Claude/Codex 新请求只要 provider 返回结构化 usage 都会计入；周统计按 provider 精确名称聚合，同一 provider 的不同模型合并，事件仍保留 model 明细。升级前未经过代理的旧历史不会估算补录。</p>
               </div>
               <div class="note">
                 <h3>诊断与自动修复</h3>

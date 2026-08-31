@@ -13,7 +13,7 @@ import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resol
 import { isPrivilegedProcess, resolveClaudePermissionMode } from "../dist/core/runner/claude-permission-policy.js";
 import { getRunnerEngine, listRunnerEngines } from "../dist/core/runner/engine-registry.js";
 import { startOpenAiUsageProxy } from "../dist/core/runner/openai-usage-proxy.js";
-import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl, resolveRunnerLaunchPolicy, writeTemporaryClaudeSettings } from "../dist/core/runner/tool-runner.js";
+import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl, resolveRunnerLaunchPolicy, runTool, writeTemporaryClaudeSettings } from "../dist/core/runner/tool-runner.js";
 import { estimateTokenCostUsd } from "../dist/core/usage/pricing.js";
 import { runResolvedProviderCandidates } from "../dist/cli/commands/use.js";
 import { getCliCommand, listInteractiveCliCommands, registerCliCommand } from "../dist/cli/registry.js";
@@ -465,6 +465,204 @@ test("OpenAI usage proxy records one usage event from SSE response", async () =>
       await proxy.close();
       await upstream.close();
     }
+  });
+});
+
+test("usage proxy preserves Anthropic paths and merges streamed usage", async () => {
+  await withTempHome(async (tempDir) => {
+    const upstream = await startTestServer(async (req, res) => {
+      assert.equal(req.url, "/v1/messages");
+      assert.equal(req.headers["x-api-key"], "secret");
+      assert.equal(req.headers.authorization, undefined);
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      assert.equal(body.model, "claude-opus-5");
+      res.setHeader("content-type", "text/event-stream");
+      res.write("event: message_start\n");
+      res.write(`data: ${JSON.stringify({
+        type: "message_start",
+        message: {
+          model: "claude-opus-5",
+          usage: {
+            input_tokens: 8,
+            cache_creation_input_tokens: 2,
+            cache_read_input_tokens: 4,
+            output_tokens: 1
+          }
+        }
+      })}\n\n`);
+      res.write("event: message_delta\n");
+      res.write(`data: ${JSON.stringify({
+        type: "message_delta",
+        usage: { output_tokens: 5 }
+      })}\n\n`);
+      res.end();
+    });
+
+    const proxy = await startOpenAiUsageProxy({
+      provider: {
+        name: "anthropic-api",
+        baseUrl: `${upstream.url}/v1`,
+        apiKey: "secret",
+        mode: "ask",
+        level: 1,
+        model: "claude-opus-5"
+      },
+      model: "claude-opus-5",
+      tool: "telegram",
+      engine: "claude"
+    });
+
+    try {
+      assert.doesNotMatch(proxy.baseUrl, /\/v1$/);
+      const response = await fetch(`${proxy.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": "local" },
+        body: JSON.stringify({ model: "claude-opus-5", messages: [], stream: true })
+      });
+      await response.text();
+
+      assert.deepEqual(proxy.getRecords()[0].usage, {
+        inputTokens: 14,
+        outputTokens: 5,
+        totalTokens: 19,
+        cacheReadInputTokens: 4
+      });
+      const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
+      assert.equal(usage.events.length, 1);
+      assert.equal(usage.events[0].provider, "anthropic-api");
+      assert.equal(usage.events[0].model, "claude-opus-5");
+      assert.equal(usage.events[0].totalTokens, 19);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("usage proxy retains terminal usage after a large streamed response", async () => {
+  await withTempHome(async () => {
+    const upstream = await startTestServer(async (_req, res) => {
+      res.setHeader("content-type", "text/event-stream");
+      res.write(`data: ${JSON.stringify({
+        type: "message_start",
+        message: { model: "claude-opus-5", usage: { input_tokens: 7, output_tokens: 1 } }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: "x".repeat(8 * 1024 * 1024) }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        type: "message_delta",
+        usage: { output_tokens: 9 }
+      })}\n\n`);
+      res.end();
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "large", baseUrl: upstream.url, apiKey: "secret", mode: "ask", level: 1, model: "claude-opus-5" },
+      model: "claude-opus-5",
+      tool: "claude",
+      engine: "claude"
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-opus-5", messages: [], stream: true })
+      });
+      await response.arrayBuffer();
+      assert.deepEqual(proxy.getRecords()[0].usage, {
+        inputTokens: 7,
+        outputTokens: 9,
+        totalTokens: 16
+      });
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("direct CLI runners route Claude and Codex usage through the ledger", async () => {
+  await withTempHome(async (tempDir) => {
+    const requests = [];
+    const upstream = await startTestServer(async (req, res) => {
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      requests.push({ url: req.url, model: body.model });
+      if (req.url === "/v1/messages") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({
+          model: body.model,
+          usage: { input_tokens: 10, output_tokens: 2 }
+        }));
+        return;
+      }
+      assert.equal(req.url, "/v1/responses");
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        model: body.model,
+        usage: { input_tokens: 20, output_tokens: 3, total_tokens: 23 }
+      }));
+    });
+    const binDir = path.join(tempDir, "bin");
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(path.join(binDir, "claude"), `#!/usr/bin/env node
+if (process.argv.includes("--version")) process.exit(0);
+const response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages", {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY },
+  body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL, messages: [] })
+});
+await response.text();
+process.exit(response.ok ? 0 : 1);
+`, { mode: 0o755 });
+    await fs.writeFile(path.join(binDir, "codex"), `#!/usr/bin/env node
+if (process.argv.includes("--version")) process.exit(0);
+const setting = process.argv.find((value) => value.startsWith("model_providers.ai_gateway_selected.base_url="));
+const baseUrl = JSON.parse(setting.slice(setting.indexOf("=") + 1));
+const modelIndex = process.argv.indexOf("--model");
+const response = await fetch(baseUrl + "/responses", {
+  method: "POST",
+  headers: { "content-type": "application/json", authorization: "Bearer " + process.env.OPENAI_API_KEY },
+  body: JSON.stringify({ model: process.argv[modelIndex + 1], input: "hello" })
+});
+await response.text();
+process.exit(response.ok ? 0 : 1);
+`, { mode: 0o755 });
+
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+    const provider = {
+      name: "51talk-ww-cq",
+      baseUrl: `${upstream.url}/v1`,
+      apiKey: "secret",
+      mode: "ask",
+      level: 1,
+      model: "claude-opus-5"
+    };
+    try {
+      assert.equal(await runTool("claude", provider, "claude-opus-5"), 0);
+      assert.equal(await runTool("codex", { ...provider, model: "gpt-5.6-sol" }, "gpt-5.6-sol"), 0);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      await upstream.close();
+    }
+
+    assert.deepEqual(requests, [
+      { url: "/v1/messages", model: "claude-opus-5" },
+      { url: "/v1/responses", model: "gpt-5.6-sol" }
+    ]);
+    const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
+    assert.deepEqual(usage.events.map((event) => ({
+      provider: event.provider,
+      tool: event.tool,
+      model: event.model,
+      totalTokens: event.totalTokens
+    })), [
+      { provider: "51talk-ww-cq", tool: "claude", model: "claude-opus-5", totalTokens: 12 },
+      { provider: "51talk-ww-cq", tool: "codex", model: "gpt-5.6-sol", totalTokens: 23 }
+    ]);
   });
 });
 

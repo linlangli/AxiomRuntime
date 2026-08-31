@@ -24,7 +24,8 @@ const DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS = 45_000;
 const MAX_CONSECUTIVE_HEADERS_TIMEOUTS = 2;
 
 export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): Promise<OpenAiUsageProxy> {
-  const upstreamBaseUrl = getToolBaseUrl("codex", input.provider);
+  const engine = input.engine ?? (input.tool === "claude" ? "claude" : "codex");
+  const upstreamBaseUrl = getToolBaseUrl(engine, input.provider);
   const upstreamHeadersTimeoutMs = normalizePositiveTimeout(
     input.upstreamHeadersTimeoutMs,
     DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS
@@ -68,7 +69,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
       requestModel = extractRequestModel(requestBody) ?? input.model;
       requestBytes = requestBody.length;
       requestShape = summarizeRequestShape(requestBody);
-      const responsesStream = isResponsesStreamRequest(req.url ?? "/", requestBody);
+      const responsesStream = engine === "codex" && isResponsesStreamRequest(req.url ?? "/", requestBody);
       void writeLog({
         category: "usage",
         action: "openai_usage_proxy_request",
@@ -81,7 +82,9 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
         }
       });
 
-      const upstreamUrl = buildUpstreamUrl(upstreamBaseUrl, req.url ?? "/");
+      const upstreamUrl = buildUpstreamUrl(upstreamBaseUrl, req.url ?? "/", {
+        stripV1Prefix: engine === "codex"
+      });
       upstreamPath = new URL(upstreamUrl).pathname;
       if (consecutiveHeadersTimeouts >= MAX_CONSECUTIVE_HEADERS_TIMEOUTS) {
         await writeLog({
@@ -106,7 +109,10 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
       }
       const upstreamResponse = await fetch(upstreamUrl, {
         method: req.method,
-        headers: buildUpstreamHeaders(req.headers, input.provider.apiKey),
+        headers: buildUpstreamHeaders(req.headers, input.provider.apiKey, {
+          includeAnthropicApiKey: engine === "claude",
+          includeAuthorization: engine !== "claude"
+        }),
         body: requestBody.length && methodMayHaveBody(req.method) ? requestBody : undefined,
         dispatcher: upstreamDispatcher
       });
@@ -235,7 +241,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
   }
 
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `http://127.0.0.1:${address.port}${engine === "codex" ? "/v1" : ""}`,
     async close() {
       const closeServer = server.listening
         ? new Promise<void>((resolve, reject) => {

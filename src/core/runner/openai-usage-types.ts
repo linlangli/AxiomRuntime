@@ -1,4 +1,4 @@
-import type { Provider, RunToolType, TokenUsage } from "../types.js";
+import type { CliToolType, Provider, RunToolType, TokenUsage } from "../types.js";
 
 export type OpenAiUsageProxyRecord = {
   provider: string;
@@ -30,6 +30,7 @@ export type StartOpenAiUsageProxyInput = {
   provider: Provider;
   model: string;
   tool: RunToolType;
+  engine?: CliToolType;
   onUsage?: (record: OpenAiUsageProxyRecord) => void | Promise<void>;
   upstreamHeadersTimeoutMs?: number;
 };

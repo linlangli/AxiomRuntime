@@ -79,17 +79,52 @@ type UsageCandidate = {
 
 function extractBestUsageCandidate(text: string, contentType: string, fallbackModel: string): UsageCandidate | null {
   const values = contentType.includes("text/event-stream") ? parseSseValues(text) : parseJsonValues(text);
-  let best: UsageCandidate | null = null;
+  const candidates: UsageCandidate[] = [];
 
   for (const value of values) {
-    for (const candidate of collectUsageCandidates(value, fallbackModel)) {
-      if (!best || candidate.usage.totalTokens >= best.usage.totalTokens) {
-        best = candidate;
-      }
+    candidates.push(...collectUsageCandidates(value, fallbackModel));
+  }
+
+  return mergeUsageCandidates(candidates, fallbackModel);
+}
+
+function mergeUsageCandidates(candidates: UsageCandidate[], fallbackModel: string): UsageCandidate | null {
+  if (!candidates.length) return null;
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let cacheReadInputTokens: number | undefined;
+  let model = fallbackModel;
+  let modelCandidateTokens = -1;
+  let costUsd: number | undefined;
+
+  for (const candidate of candidates) {
+    inputTokens = Math.max(inputTokens, candidate.usage.inputTokens);
+    outputTokens = Math.max(outputTokens, candidate.usage.outputTokens);
+    totalTokens = Math.max(totalTokens, candidate.usage.totalTokens);
+    if (candidate.usage.cacheReadInputTokens !== undefined) {
+      cacheReadInputTokens = Math.max(cacheReadInputTokens ?? 0, candidate.usage.cacheReadInputTokens);
+    }
+    if (candidate.usage.totalTokens >= modelCandidateTokens) {
+      model = candidate.model;
+      modelCandidateTokens = candidate.usage.totalTokens;
+    }
+    if (candidate.costUsd !== undefined) {
+      costUsd = Math.max(costUsd ?? 0, candidate.costUsd);
     }
   }
 
-  return best;
+  return {
+    model,
+    usage: {
+      inputTokens,
+      outputTokens,
+      totalTokens: Math.max(totalTokens, inputTokens + outputTokens),
+      ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {})
+    },
+    ...(costUsd !== undefined ? { costUsd } : {})
+  };
 }
 
 function parseJsonValues(text: string): unknown[] {

@@ -3,10 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { Engine, EngineExecuteParams, ExecutionResult, ProgressUpdate, ToolCallResult } from "./types.js";
-import type { TokenUsage } from "../../core/types.js";
 import { cleanupRuntime, createCommandPermissionRequest, formatEngineTimeout, prepareEngineRuntime, summarizeRuntime } from "./engine-utils.js";
 import { createJsonLineAccumulator, extractJsonLines, spawnCapture, stripAnsi, terminateProcessTree } from "./process-utils.js";
-import { startOpenAiUsageProxy, type OpenAiUsageProxy, type OpenAiUsageProxyRecord } from "../../core/runner/openai-usage-proxy.js";
+import { sumKnownProxyCosts, sumProxyUsage } from "../../core/runner/openai-usage-proxy.js";
 import { requiresDangerousConfirmation } from "../interaction/approval.js";
 import { writeTelegramLog } from "../log.js";
 import { isRecord } from "../../core/utils/is-record.js";
@@ -24,30 +23,23 @@ export class CodexEngine implements Engine {
     const startTime = Date.now();
     const permissionMode = params.permissionMode ?? "default";
 
-    if (permissionMode === "bypassPermissions" && requiresDangerousConfirmation(params.prompt)) {
-      const approved = await params.onPermission(createCommandPermissionRequest("Codex prompt", params.prompt));
-      if (!approved) {
-        cleanupRuntime(runtime);
-        throw new Error("Dangerous command denied.");
-      }
-    }
-
-    let usageProxy: OpenAiUsageProxy | null = null;
-    await params.onProgress?.({ phase: "thinking", message: "Codex started" });
-    await writeTelegramLog({
-      action: "codex_start",
-      message: `Starting Codex for Telegram chat ${params.chatId}`,
-      metadata: { ...summarizeRuntime(runtime.provider, runtime.model, "codex"), cwd: params.cwd }
-    });
-
     try {
-      usageProxy = await startOpenAiUsageProxy({
-        provider: runtime.provider,
-        model: runtime.model,
-        tool: "telegram"
+      if (permissionMode === "bypassPermissions" && requiresDangerousConfirmation(params.prompt)) {
+        const approved = await params.onPermission(createCommandPermissionRequest("Codex prompt", params.prompt));
+        if (!approved) {
+          throw new Error("Dangerous command denied.");
+        }
+      }
+
+      await params.onProgress?.({ phase: "thinking", message: "Codex started" });
+      await writeTelegramLog({
+        action: "codex_start",
+        message: `Starting Codex for Telegram chat ${params.chatId}`,
+        metadata: { ...summarizeRuntime(runtime.provider, runtime.model, "codex"), cwd: params.cwd }
       });
+
       const args = buildCodexArgs(params.prompt, runtime.model, params.cwd, permissionMode, {
-        baseUrl: usageProxy.baseUrl
+        baseUrl: runtime.usageProxy.baseUrl
       }, params.resume, params.imagePaths);
       const progressParser = createJsonLineAccumulator((event) => handleCodexProgressEvent(event, params.onProgress));
       const result = await spawnCapture({
@@ -57,8 +49,8 @@ export class CodexEngine implements Engine {
         env: {
           ...runtime.env,
           OPENAI_API_KEY: runtime.provider.apiKey,
-          OPENAI_BASE_URL: usageProxy.baseUrl,
-          AI_GATEWAY_BASE_URL: usageProxy.baseUrl
+          OPENAI_BASE_URL: runtime.usageProxy.baseUrl,
+          AI_GATEWAY_BASE_URL: runtime.usageProxy.baseUrl
         },
         signal,
         timeoutMs: params.timeoutMs,
@@ -96,16 +88,15 @@ export class CodexEngine implements Engine {
       return {
         ...parsed,
         sessionId,
-        cost: sumKnownProxyCosts(usageProxy.getRecords()),
-        usage: sumProxyUsage(usageProxy.getRecords()),
+        cost: sumKnownProxyCosts(runtime.usageProxy.getRecords()),
+        usage: sumProxyUsage(runtime.usageProxy.getRecords()),
         provider: runtime.provider.name,
         model: runtime.model
       };
     } finally {
       this.processes.delete(params.chatId);
       this.controllers.delete(params.chatId);
-      await usageProxy?.close().catch(() => undefined);
-      cleanupRuntime(runtime);
+      await cleanupRuntime(runtime);
     }
   }
 
@@ -457,22 +448,4 @@ function readChangedFiles(event: Record<string, unknown>): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
   if (typeof event.path === "string" && /patch|edit|write/i.test(String(event.type ?? ""))) return [event.path];
   return [];
-}
-
-function sumKnownProxyCosts(records: OpenAiUsageProxyRecord[]): number | undefined {
-  const knownCosts = records
-    .map((record) => record.costUsd)
-    .filter((cost): cost is number => typeof cost === "number" && Number.isFinite(cost) && cost >= 0);
-  if (!knownCosts.length) return undefined;
-  return Number(knownCosts.reduce((sum, cost) => sum + cost, 0).toFixed(8));
-}
-
-function sumProxyUsage(records: OpenAiUsageProxyRecord[]): TokenUsage | undefined {
-  if (!records.length) return undefined;
-  return records.reduce<TokenUsage>((sum, record) => ({
-    inputTokens: sum.inputTokens + record.usage.inputTokens,
-    outputTokens: sum.outputTokens + record.usage.outputTokens,
-    totalTokens: sum.totalTokens + record.usage.totalTokens,
-    cacheReadInputTokens: (sum.cacheReadInputTokens ?? 0) + (record.usage.cacheReadInputTokens ?? 0)
-  }), { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadInputTokens: 0 });
 }

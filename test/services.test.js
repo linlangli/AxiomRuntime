@@ -578,6 +578,16 @@ test("getProviderStatuses refreshes health and aggregates weekly tokens", async 
             outputTokens: 5,
             totalTokens: 15,
             createdAt: new Date().toISOString()
+          },
+          {
+            provider: "api",
+            tool: "claude",
+            model: "claude-opus-5",
+            source: "proxy",
+            inputTokens: 3,
+            outputTokens: 2,
+            totalTokens: 5,
+            createdAt: new Date().toISOString()
           }
         ]
       })
@@ -586,7 +596,7 @@ test("getProviderStatuses refreshes health and aggregates weekly tokens", async 
     const statuses = await getProviderStatuses({ refresh: true });
     assert.equal(statuses[0].health, "ok");
     assert.equal(statuses[0].models.length, 1);
-    assert.equal(statuses[0].weeklyTokens, 15);
+    assert.equal(statuses[0].weeklyTokens, 20);
     assert.equal(statuses[0].usageShare, 100);
     assert.equal(statuses[0].codex.state, "ready");
     assert.equal(statuses[0].codex.baseUrl, "https://api.test/v1");
