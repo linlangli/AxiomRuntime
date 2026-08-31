@@ -1,6 +1,6 @@
-# AI Runtime（当前阶段：AI Gateway）
+# AxiomRuntime（当前阶段：Provider Gateway）
 
-本项目的长期目标是构建一套企业级 AI Runtime：让模型、Agent、记忆、知识、技能、工作流和工具在统一的运行、治理与学习体系中协作，并持续把个人经验沉淀为组织能力。
+本项目的长期目标是构建一套 AI Runtime：让模型、Agent、记忆、知识、技能、工作流和工具在统一的运行、治理与学习体系中协作，并持续把个人经验沉淀为可复用能力。
 
 Runtime 才是产品。Memory、Agent 和 LLM 都是可以替换和组合的能力模块。
 
@@ -10,19 +10,25 @@ Runtime 才是产品。Memory、Agent 和 LLM 都是可以替换和组合的能�
 
 ## 文档导航
 
-- [中文文档总览](./docs/README.md)
-- [doc_2.0 文档层总览](./docs/README.md)
-- [中文使用指南](./docs/usage.md)
-- [HTML 命令手册](./docs/USAGE.html)
-- [整体架构与当前实现快照](./docs/00-overview.md)
+文档共三份，均标注实现状态（🟢 已实现 / 🟡 部分实现 / 🔴 规划中）：
 
-AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/AI_RUNTIME_ARCHITECTURE.md` 和 `docs/CONVENTIONS.md`；产品规范、宪法摘要、记忆/学习与 Telegram 设计等构成 `doc_2.0` 文档层（现已展开在 `docs/` 与 `docs/modules/` 下，索引见 `docs/README.md`）。
+| 文档 | 读者 | 内容 |
+|---|---|---|
+| [使用指南](./docs/usage.md) | 使用者 | 安装、上手、每个命令怎么用 |
+| [技术架构](./docs/architecture.md) | 开发者 | 分层设计、执行主链、所有权边界、Mermaid 图 |
+| [产品需求文档](./docs/prd.md) | 开发者 + 产品 | 定位、能力清单、发布计划、交付风险、验收标准 |
+
+另有 [HTML 命令手册](./docs/USAGE.html)，`ai help` 会直接打开。
+
+维护者与 AI 协作规则见 `AGENTS.md` 和 `CLAUDE.md`（英文）。
 
 ## 当前边界
 
 - 已交付：本地 Provider Gateway、Claude/Codex 启动与 fallback、Telegram、会话、用量、诊断和早期 Memory。
 - 演进中：统一 Runtime 执行上下文、自动学习与记忆治理、Skill/Capability 生命周期、插件体系。
-- 长期方向：组织与租户隔离、能力注册与共享、企业集成、Web/Desktop/API 治理界面。
+- 长期方向：组织与租户隔离、能力注册与共享、外部系统集成、Web/Desktop/API 治理界面。
+
+完整的已实现与规划对照见 [产品需求文档 §3](./docs/prd.md)。
 
 ## 通过 npm 安装
 
@@ -174,3 +180,4 @@ Telegram Bot 集成说明：
 
 - [docs/usage.md](./docs/usage.md)
 - [docs/USAGE.html](./docs/USAGE.html)
+- [docs/prd.md](./docs/prd.md) 的「已知限制」一节

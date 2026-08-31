@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1750" viewBox="0 0 1800 1750" role="img" aria-labelledby="title desc">
-  <title id="title">企业级 AI Runtime 产品完整架构图</title>
-  <desc id="desc">展示用户与运营者、接入面、企业控制面、运行时执行主链、唯一传输代理、自动记忆学习闭环、Capability Observability、可替换适配器和权威数据存储之间的关系。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1730" viewBox="0 0 1800 1730" role="img" aria-labelledby="title desc">
+  <title id="title">AxiomRuntime 产品完整架构图</title>
+  <desc id="desc">展示用户与运营者、接入面、控制面、运行时执行主链、唯一传输代理、自动记忆学习闭环、Capability Observability、可替换适配器和权威数据存储之间的关系。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
@@ -26,9 +26,9 @@
     </style>
   </defs>
 
-  <rect width="1800" height="1500" fill="#ffffff"/>
-  <text x="60" y="55" class="page-title">企业级 AI Runtime 产品完整架构</text>
-  <text x="60" y="84" class="subtitle">产品主线：统一执行 → 受治理记忆 → 可验证学习 → 组织能力沉淀</text>
+  <rect width="1800" height="1730" fill="#ffffff"/>
+  <text x="60" y="55" class="page-title">AxiomRuntime 产品完整架构</text>
+  <text x="60" y="84" class="subtitle">产品主线：统一执行 → 受治理记忆 → 可验证学习 → 可复用能力沉淀</text>
 
   <!-- Product actors and canonical contracts -->
   <rect x="70" y="115" width="330" height="72" rx="6" fill="#f8fafc" stroke="#64748b" stroke-width="1.5"/>
@@ -46,7 +46,7 @@
 
   <!-- Control plane -->
   <rect x="45" y="230" width="420" height="710" rx="8" fill="#f7fffb" stroke="#059669" stroke-width="2"/>
-  <text x="70" y="264" class="section-title">企业控制面 Enterprise Control Plane</text>
+  <text x="70" y="264" class="section-title">控制面 Control Plane</text>
   <text x="70" y="288" class="small">治理组织与环境，不承载模型请求转发</text>
 
   <rect x="75" y="315" width="360" height="82" rx="6" fill="#ecfdf5" stroke="#10b981"/>
@@ -80,7 +80,7 @@
 
   <!-- Runtime -->
   <rect x="500" y="230" width="770" height="710" rx="8" fill="#f8fbff" stroke="#2563eb" stroke-width="2"/>
-  <text x="525" y="264" class="section-title">AI Runtime 执行与能力平面</text>
+  <text x="525" y="264" class="section-title">Runtime 执行与能力平面</text>
   <text x="525" y="288" class="small">所有接入面共享同一条受治理执行生命周期</text>
 
   <rect x="535" y="315" width="700" height="72" rx="6" fill="#eff6ff" stroke="#3b82f6"/>
@@ -208,14 +208,14 @@
 
   <rect x="500" y="1320" width="390" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
   <text x="695" y="1345" text-anchor="middle" class="node-title">Tool / MCP / 浏览器 Adapter</text>
-  <text x="695" y="1368" text-anchor="middle" class="node-body">企业系统 · SaaS · 本地工具</text>
+  <text x="695" y="1368" text-anchor="middle" class="node-body">外部系统 · SaaS · 本地工具</text>
 
   <rect x="925" y="1320" width="390" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
   <text x="1120" y="1345" text-anchor="middle" class="node-title">成熟智能能力 Provider</text>
   <text x="1120" y="1368" text-anchor="middle" class="node-body">抽取 · 检索 · 向量 · 时序图 · 评估</text>
 
   <rect x="1350" y="1320" width="375" height="66" rx="6" fill="#f5f3ff" stroke="#8b5cf6"/>
-  <text x="1537" y="1345" text-anchor="middle" class="node-title">企业系统 Adapter</text>
+  <text x="1537" y="1345" text-anchor="middle" class="node-title">外部系统 Adapter</text>
   <text x="1537" y="1368" text-anchor="middle" class="node-body">OIDC/SAML · SCIM · OPA/Cedar · SIEM · FinOps · OTLP/APM</text>
 
   <!-- Data -->
@@ -292,6 +292,6 @@
   <path class="edge" d="M 1537 1386 V 1490"/>
 
   <!-- Ownership callouts -->
-  <text x="60" y="1675" class="small">实线：运行或治理调用　　虚线：契约约束 / 只读关联　　绿色：企业控制　　橙色：记忆与学习闭环</text>
-  <text x="60" y="1703" class="small">权威边界：UsageObserver 独占用量账本；Memory 独占 Claim/Evidence 语义；Policy 独占规则与决策；Observation 与 Adapter 不拥有 Runtime 权威。</text>
+  <text x="60" y="1670" class="small">实线：运行或治理调用　　虚线：契约约束 / 只读关联　　绿色：控制面治理　　橙色：记忆与学习闭环</text>
+  <text x="60" y="1698" class="small">权威边界：UsageObserver 独占用量账本；Memory 独占 Claim/Evidence 语义；Policy 独占规则与决策；Observation 与 Adapter 不拥有 Runtime 权威。</text>
 </svg>
