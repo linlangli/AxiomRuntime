@@ -78,6 +78,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 多服务商切换 | `ai use claude 某站` | 一句话切换，不动全局配置 |
 | 服务商故障降级 | 自动 | 按 level 顺序自动试下一个 |
 | 用量记账 | `ai status` / `ai report` | 真实用量，按服务商/模型归属 |
+| 图片生成 | `ai image 51talk-image "提示词"` | 使用指定 Provider 的默认图片模型生成并安全保存 |
 | 远程执行 | Telegram Bot | 手机上跑，带进度和审批 |
 | Codex 桌面端配置 | `ai set codex` | 原子写 + 失败回滚 |
 | 环境诊断 | `ai doctor` | 自动修复损坏的内部状态文件 |
@@ -128,7 +129,17 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 幂等计费键 | 🟡 | 目标是从 attempt 身份派生，保证 exactly-once |
 | 组织/项目用量归属 | 🔴 | 当前只按服务商聚合 |
 
-### 3.4 Telegram Bot 🟢
+### 3.4 图片生成 🟢
+
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| CLI 图片生成 | 🟢 | `ai image [provider] [model] [prompt]`；支持完全交互、Provider 默认模型和显式模型 |
+| 标准 images API | 🟢 | 调用 OpenAI-compatible `/v1/images/generations` |
+| 图片安全落盘 | 🟢 | 支持 `b64_json`，限制响应/图片大小并以 `0600` 保存 |
+| URL 响应 | 🟢 | 仅输出无凭证的 `https` URL，不自动下载 |
+| 图片 usage | 🟢 | 复用唯一 Transport Proxy/UsageObserver 记录真实 usage |
+
+### 3.5 Telegram Bot 🟢
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
@@ -147,7 +158,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 自动记忆 | 🔴 | **普通聊天不自动记录** |
 | 代理支持 | 🟢 | `proxyUrl` 或 `HTTPS_PROXY`/`ALL_PROXY` |
 
-### 3.5 记忆 🟡
+### 3.6 记忆 🟡
 
 **这是当前与目标差距最大的模块。**
 
@@ -169,7 +180,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 凭证隔离 / 登录态托管 | 🔴 credential 类直接抛错 |
 | 版本化 migrations | 🔴 直建表，无 migrations |
 
-### 3.6 诊断与运维 🟢
+### 3.7 诊断与运维 🟢
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
@@ -184,7 +195,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | OpenTelemetry 导出 | 🔴 | |
 | 备份 / 恢复演练 | 🔴 | |
 
-### 3.7 常驻 API 服务 🟢
+### 3.8 常驻 API 服务 🟢
 
 | 路由 | 状态 |
 |---|---|
@@ -202,7 +213,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 - 默认 `read_only`；**服务端 API 不暴露 `bypassPermissions`**
 - 请求体、并发、执行超时都有上限（默认 16 MiB / 2 并发 / 10 分钟）
 
-### 3.8 完全未实现 🔴
+### 3.9 完全未实现 🔴
 
 | 能力 | 说明 |
 |---|---|

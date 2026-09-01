@@ -21,6 +21,7 @@ AxiomRuntime 提供一个 `ai` 命令，帮你统一管理 Claude Code 和 Codex
 | 某个中转站挂了，手动换很麻烦 | 按优先级自动降级到下一个可用服务商 |
 | 不知道 token 花在哪 | 本地代理记录真实用量，`ai status` 查看 |
 | 想在手机上用 Claude Code | Telegram Bot 远程执行 |
+| 需要生成图片 | `ai image <provider> <prompt>` 调用已配置的图片 Provider 并保存结果 |
 
 它**不是**模型，也不替代 Claude Code / Codex —— 这两个 CLI 需要你自己安装，AxiomRuntime 负责给它们喂对的配置并在后台记账。
 
@@ -148,7 +149,7 @@ ai provider delete 我的站
 - 改 `level` 时如果目标等级被占用，两个 Provider 会**交换**等级
 - 删除会同时清理配置和模型缓存
 
-> **安全提示：`apiKey` 目前以明文保存在 `providers.json`。** 请确认该文件权限受限，且绝不提交到仓库。加密存储是规划中的能力，见第 10 节。
+> **安全提示：`apiKey` 目前以明文保存在 `providers.json`。** 请确认该文件权限受限，且绝不提交到仓库。加密存储是规划中的能力，见第 11 节。
 
 ---
 
@@ -187,9 +188,30 @@ ai last                                # 沿用上次的工具、服务商和模
 
 **日志**：记录服务商、Base URL、模型、启动参数和 API Key 指纹，**不记完整 Key**。
 
+## 6. 生成图片
+
+使用已配置并探测到的图片模型生成一张图片：
+
+```bash
+ai image                                                   # 交互选择 Provider、模型并输入提示词
+ai image 51talk-image "一只戴墨镜的猫，数字插画"          # 使用 Provider 默认模型
+ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"  # 指定具体模型
+```
+
+规则：
+
+- 直接运行 `ai image` 时，会依次选择 Provider、具体模型并输入提示词。
+- 第一个参数是 Provider 名（例如 `51talk-image`）。第二个参数如果匹配该 Provider 的模型缓存，就作为具体模型；否则从第二个参数开始全部拼成提示词，并使用 Provider 默认模型。
+- Provider 和模型必须出现在模型缓存中。命令执行前会自动刷新；也可以先运行 `ai status` 检查模型列表。如果没有 Provider，先运行 `ai add`。
+- 为避免模型名与提示词歧义，指定具体模型时建议给提示词加引号，例如 `ai image 51talk-image gpt-image-2 "提示词"`。
+- Runtime 按 Provider 健康状态和 `level` 顺序尝试，失败会自动切换下一个同样提供该模型的 Provider。
+- `b64_json` 响应会以 `0600` 权限保存到当前目录，输出绝对路径；远程 `https` 图片响应会输出 URL，不会自动下载不受信任的地址。
+- 图片生成请求最长等待 120 秒；生成服务通常比文本请求耗时更长，超过此时间会自动失败并尝试下一个 Provider。
+- 图片请求复用 execution-scoped Transport Proxy；Provider 返回的真实 usage 会写入同一份 `usage.json`，不会估算图片 token。
+
 ---
 
-## 6. 配置 Codex 桌面端
+## 7. 配置 Codex 桌面端
 
 上一节的 `ai use codex` 只影响本次执行。如果你想**持久**改掉 Codex App 的配置，用 `ai set codex`。
 
@@ -238,7 +260,7 @@ macOS 会同步当前登录会话的 launchd 环境，让重启后的 Codex App 
 
 ---
 
-## 7. Telegram Bot
+## 8. Telegram Bot
 
 在手机上远程跑 Claude Code / Codex。
 
@@ -318,7 +340,7 @@ ai telegram config set defaultCwd /workspace/ops --bot ops
 
 ---
 
-## 8. 会话、报告与诊断
+## 9. 会话、报告与诊断
 
 ### 会话
 
@@ -376,7 +398,7 @@ ai context --print
 
 ---
 
-## 9. 其他能力
+## 10. 其他能力
 
 ### 内网 API 服务
 
@@ -426,7 +448,7 @@ ai --version
 
 ---
 
-## 10. 配置文件
+## 11. 配置文件
 
 配置目录默认 `~/.ai-gateway/`，可用 `AI_GATEWAY_HOME` 覆盖：
 
@@ -481,7 +503,7 @@ AI_GATEWAY_HOME=/path/to/config ai provider list
 
 ---
 
-## 11. 常见问题
+## 12. 常见问题
 
 **装完 `ai` 找不到命令**
 检查 npm 全局 bin 是否在 PATH 里：`npm bin -g`。
@@ -506,7 +528,7 @@ Node.js 版本低于 22.19.0。升级后重新安装，别忽略警告。
 
 ---
 
-## 12. 还没有的功能
+## 13. 还没有的功能
 
 这一节列出**尚未实现**的能力，避免你按文档去找找不到的东西。完整规划见 [产品需求文档](prd.md)。
 

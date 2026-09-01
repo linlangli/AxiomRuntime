@@ -61,7 +61,7 @@ Provider Gateway            ← 当前位置
 ```text
 src/
 ├── cli/                    CLI 接入面
-│   ├── commands/           16 个命令：use/set/add/status/doctor/telegram/session/...
+│   ├── commands/           17 个命令：use/image/set/add/status/doctor/telegram/session/...
 │   ├── output/  prompts/   终端渲染与交互
 │   └── registry.ts         命令注册表
 ├── core/                   核心逻辑
@@ -93,7 +93,7 @@ src/
 
 | 目录 | 状态 |
 |---|---|
-| `core/config`、`core/providers`、`core/models`、`core/runner`、`core/usage`、`core/sessions` | 🟢 |
+| `core/config`、`core/providers`、`core/models`、`core/runner`、`core/images`、`core/usage`、`core/sessions` | 🟢 |
 | `core/memory` | 🟡 仅 embedding 配置 |
 | `telegram/memory` | 🟡 单表 + 关键词匹配 |
 | `core/contracts`、`core/transport-proxy`、`core/policy`、`core/learning`、`core/auth-session`、`core/skills`、`plugins/`、`web/` | 🔴 目录不存在 |
@@ -235,6 +235,7 @@ flowchart TD
 | `tool-runner.ts` | 运行环境 + 密钥注入 + 临时文件 | ④ Kernel |
 | `fallback.ts` | 候选排序与逐个执行 | ③ + ④ |
 | `openai-usage-*.ts`（7 个） | 本地 HTTP 代理、协议翻译、用量记录 | ⑤ Transport |
+| `images/image-generation-service.ts` | 图片模型解析、请求、响应校验和安全落盘 | ③ Capability + ⑤ Transport |
 
 `openai-usage-*` 这一组是当前的用量代理实现，**目标态按职责剥离到 ⑤ Transport Proxy**，拆成 `transport-core` / `TransformCoordinator` / `UsageObserver` / `MemoryExtension` + 兼容 facade。`startOpenAiUsageProxy()` 作为兼容 facade 保留，行为由 parity 测试锁定。
 
@@ -246,6 +247,10 @@ flowchart TD
 - 事件按 Runtime 已选择的 provider 与**实际** model 写入 `usage.json`
 - Telegram 把同一批 proxy records 投影到 `SessionManager.recordProviderUsage()`，**不产生第二份 token 账本**
 - Claude JSON stream 的 `cost_usd` 在 provider 返回时作为该 session 的实际成本；不估算、不补写 token
+
+### 图片生成 🟢
+
+`ai image [provider] [model] [prompt]` 是独立的 `ImageGenerationService` capability，不复用 Claude/Codex 的 Agent 模型兼容过滤。CLI 无参数时交互选择 Provider 和具体模型；指定 Provider 时，第二个参数只有匹配该 Provider 模型缓存才解释为模型，否则保持 `provider + prompt` 兼容。Core 按明确的 Provider/模型选择候选，并按健康度和 `level` 自动 fallback，通过 execution-scoped Transport Proxy 调用 OpenAI-compatible `/v1/images/generations`。图片请求和代理响应头等待上限统一为 120 秒，避免通用文本代理的 45 秒 headers timeout 截断正常的图片生成；超时后继续 Provider fallback。响应校验 `b64_json`/安全的 `https` URL，并将 base64 图片以 `0600` 权限原子保存。图片请求的真实 usage 仍由唯一 UsageObserver 记录；CLI 不记录提示词到 command usage log。
 
 ### 进度流式 🟢
 

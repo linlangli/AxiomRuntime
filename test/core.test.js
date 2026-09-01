@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
-import { normalizeProviders, swapProviderLevel } from "../dist/core/config/providers-store.js";
+import { normalizeProviders, swapProviderLevel, writeProviders } from "../dist/core/config/providers-store.js";
+import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { checkProvider, extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
 import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
@@ -16,7 +17,9 @@ import { startOpenAiUsageProxy } from "../dist/core/runner/openai-usage-proxy.js
 import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl, resolveRunnerLaunchPolicy, runTool, writeTemporaryClaudeSettings } from "../dist/core/runner/tool-runner.js";
 import { estimateTokenCostUsd } from "../dist/core/usage/pricing.js";
 import { runResolvedProviderCandidates } from "../dist/cli/commands/use.js";
+import { resolveImageCommandInput } from "../dist/cli/commands/image.js";
 import { getCliCommand, listInteractiveCliCommands, registerCliCommand } from "../dist/cli/registry.js";
+import { generateImage } from "../dist/core/images/image-generation-service.js";
 
 test("normalizes provider levels by priority", () => {
   const providers = normalizeProviders([
@@ -115,6 +118,165 @@ test("CLI command registry resolves commands and aliases", async () => {
   assert.equal(called, true);
 });
 
+test("image command accepts provider, explicit model, and prompt", async () => {
+  const provider = {
+    name: "51talk-image",
+    baseUrl: "https://images.test/v1",
+    apiKey: "secret",
+    mode: "auto",
+    level: 1,
+    model: "gpt-image-2"
+  };
+  const input = await resolveImageCommandInput(
+    ["51talk-image", "gpt-image-1", "一只", "戴墨镜的猫"],
+    [provider],
+    {
+      "51talk-image": {
+        status: "ok",
+        models: ["gpt-image-2", "gpt-image-1"],
+        lastCheckedAt: "now",
+        lastError: null
+      }
+    },
+    async () => { throw new Error("select should not run"); },
+    async () => { throw new Error("text should not run"); }
+  );
+
+  assert.deepEqual(input, {
+    provider: "51talk-image",
+    model: "gpt-image-1",
+    prompt: "一只 戴墨镜的猫"
+  });
+});
+
+test("image command keeps provider plus unquoted prompt compatibility", async () => {
+  const provider = {
+    name: "51talk-image",
+    baseUrl: "https://images.test/v1",
+    apiKey: "secret",
+    mode: "auto",
+    level: 1,
+    model: "gpt-image-2"
+  };
+  const input = await resolveImageCommandInput(
+    ["51talk-image", "a", "cat", "in", "space"],
+    [provider],
+    {
+      "51talk-image": {
+        status: "ok",
+        models: ["gpt-image-2"],
+        lastCheckedAt: "now",
+        lastError: null
+      }
+    }
+  );
+
+  assert.deepEqual(input, {
+    provider: "51talk-image",
+    model: "gpt-image-2",
+    prompt: "a cat in space"
+  });
+});
+
+test("image command interactively selects provider, model, and prompt", async () => {
+  const providers = [
+    { name: "general", baseUrl: "https://api.test/v1", apiKey: "a", mode: "auto", level: 1, model: "gpt-5.5" },
+    { name: "51talk-image", baseUrl: "https://images.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-image-2" }
+  ];
+  const prompts = [];
+  const input = await resolveImageCommandInput(
+    [],
+    providers,
+    {
+      general: { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null },
+      "51talk-image": {
+        status: "ok",
+        models: ["gpt-image-2", "gpt-image-1"],
+        lastCheckedAt: "now",
+        lastError: null
+      }
+    },
+    async (message, choices) => {
+      prompts.push({ message, choices });
+      return prompts.length === 1 ? "51talk-image" : "gpt-image-1";
+    },
+    async (message) => {
+      assert.equal(message, "Image prompt");
+      return "一只戴墨镜的猫";
+    }
+  );
+
+  assert.deepEqual(input, {
+    provider: "51talk-image",
+    model: "gpt-image-1",
+    prompt: "一只戴墨镜的猫"
+  });
+  assert.deepEqual(prompts.map((item) => item.message), [
+    "Select image provider",
+    "Select image model for 51talk-image"
+  ]);
+});
+
+test("image generation resolves the configured model and saves provider base64 output", async () => {
+  await withTempHome(async (tempDir) => {
+    const provider = {
+      name: "51talk-image",
+      baseUrl: "https://images.test/v1",
+      apiKey: "secret",
+      mode: "auto",
+      level: 1,
+      model: "gpt-image-2"
+    };
+    await writeProviders([provider]);
+    await upsertProviderCache(provider.name, {
+      status: "ok",
+      models: ["gpt-image-2"],
+      lastCheckedAt: new Date().toISOString(),
+      lastError: null
+    });
+
+    const upstream = await startTestServer(async (req, res) => {
+      assert.equal(req.url, "/v1/images/generations");
+      assert.equal(req.headers.authorization, "Bearer secret");
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      assert.deepEqual(body, { model: "gpt-image-2", prompt: "一只戴墨镜的猫", n: 1 });
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        created: 1,
+        data: [{
+          b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          revised_prompt: "一只戴墨镜的猫，数字插画"
+        }],
+        usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 }
+      }));
+    });
+    const configuredProvider = { ...provider, baseUrl: upstream.url + "/v1" };
+    await writeProviders([configuredProvider]);
+
+    try {
+      const result = await generateImage({
+        provider: "51talk-image",
+        model: "gpt-image-2",
+        prompt: "一只戴墨镜的猫",
+        outputDir: tempDir
+      });
+      assert.equal(result.provider, provider.name);
+      assert.equal(result.model, "gpt-image-2");
+      assert.match(result.filePath ?? "", /axiom-image-.*\.png$/);
+      assert.equal(result.revisedPrompt, "一只戴墨镜的猫，数字插画");
+      const image = await fs.readFile(result.filePath);
+      assert.deepEqual(image.subarray(0, 8), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
+      assert.equal(usage.events.length, 1);
+      assert.equal(usage.events[0].provider, provider.name);
+      assert.equal(usage.events[0].model, "gpt-image-2");
+      assert.equal(usage.events[0].totalTokens, 6);
+    } finally {
+      await upstream.close();
+    }
+  });
+});
+
 test("version command prints the package version without creating runtime state", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-version-test-"));
   const runtimeHome = path.join(tempDir, "runtime-home");
@@ -148,6 +310,28 @@ test("setup command initializes an empty runtime home non-interactively", async 
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, ".ai-cache.json"), "utf8")), { providers: {} });
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "usage.json"), "utf8")), { events: [] });
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "sessions.json"), "utf8")), { sessions: [] });
+  await fs.rm(tempDir, { recursive: true, force: true });
+});
+
+test("image command redacts its prompt from usage logs", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-image-log-test-"));
+  const runtimeHome = path.join(tempDir, "runtime-home");
+  const prompt = "confidential image prompt";
+  const result = spawnSync(process.execPath, [
+    path.resolve("dist/cli/index.js"),
+    "image",
+    "51talk-image",
+    prompt
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, AI_GATEWAY_HOME: runtimeHome }
+  });
+
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stderr, new RegExp(prompt));
+  const logs = await fs.readFile(path.join(runtimeHome, ".ai-gateway.log"), "utf8");
+  assert.doesNotMatch(logs, new RegExp(prompt));
+  assert.match(logs, /\[prompt 25 chars\]/);
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 

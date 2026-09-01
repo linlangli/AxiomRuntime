@@ -177,7 +177,9 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
       }
 
       writeResponseHead(res, upstreamResponse);
-      const captured = await streamResponse(upstreamResponse, res);
+      const captured = await streamResponse(upstreamResponse, res, {
+        maxCaptureBytes: input.tool === "image" ? 32 * 1024 * 1024 : undefined
+      });
       const recordedUsage = await recordUsageFromResponse({
         text: captured.toString("utf8"),
         contentType: upstreamResponse.headers.get("content-type") ?? "",

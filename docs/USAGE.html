@@ -531,6 +531,12 @@ ai setup</pre>
                 <td>用默认 provider 和默认模型启动 Claude Code 或 Codex。</td>
                 <td>不指定时使用 <code>level: 1</code>。</td>
               </tr>
+              <tr data-search="image generate image prompt model b64 url">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai image 51talk-image "一只戴墨镜的猫"</code></td>
+                <td>调用已配置的图片 Provider 和默认模型生成图片并保存到当前目录。</td>
+                <td>支持 Provider fallback；真实 usage 写入 <code>usage.json</code>。</td>
+              </tr>
               <tr data-search="use provider model named">
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai use claude 51talk claude-opus-4-6</code><br /><code class="cmd">ai use codex 51talk gpt-5.5</code></td>
@@ -631,6 +637,20 @@ ai use codex
 ai use claude 51talk
 ai use codex 51talk gpt-5.5</pre>
                 <p>不指定 provider 时使用 <code>level: 1</code>；不指定模型时使用 provider 默认 <code>model</code>。</p>
+              </div>
+              <div class="note">
+                <h3>生成图片</h3>
+                <pre>ai image
+ai image 51talk-image "一只戴墨镜的猫，数字插画"
+ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
+                <ul>
+                  <li>直接运行 <code>ai image</code> 时，会依次选择 Provider、具体模型并输入提示词。</li>
+                  <li>第一个参数是 Provider 名；第二个参数匹配模型缓存时作为具体模型，否则从第二个参数开始作为提示词并使用默认模型。</li>
+                  <li>命令执行前会自动刷新模型缓存；也可以先运行 <code>ai status</code> 检查。指定模型时建议给提示词加引号。</li>
+                  <li><code>b64_json</code> 会以 <code>0600</code> 权限保存到当前目录并输出绝对路径；远程响应只接受无凭证的 <code>https</code> URL。</li>
+                  <li>图片请求最长等待 120 秒；超时会自动失败并尝试下一个 Provider。</li>
+                  <li>请求经过 execution-scoped Transport Proxy，真实 usage 复用唯一 <code>UsageObserver</code> 账本。</li>
+                </ul>
               </div>
               <div class="note">
                 <h3>运行规则</h3>

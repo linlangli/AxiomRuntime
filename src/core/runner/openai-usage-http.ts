@@ -73,20 +73,25 @@ export function writeResponseHead(res: http.ServerResponse, response: Response):
   }
 }
 
-export async function streamResponse(response: Response, res: http.ServerResponse): Promise<Buffer> {
+export async function streamResponse(
+  response: Response,
+  res: http.ServerResponse,
+  options: { maxCaptureBytes?: number } = {}
+): Promise<Buffer> {
+  const maxCaptureBytes = normalizeCaptureLimit(options.maxCaptureBytes);
   const chunks: Buffer[] = [];
   let capturedBytes = 0;
   const tailChunks: Buffer[] = [];
   let tailBytes = 0;
   let responseBytes = 0;
-  const tailLimit = Math.floor(MAX_USAGE_CAPTURE_BYTES / 2);
+  const tailLimit = Math.floor(maxCaptureBytes / 2);
   if (!response.body) return Buffer.alloc(0);
 
   for await (const chunk of response.body) {
     const buffer = Buffer.from(chunk);
     responseBytes += buffer.length;
-    if (capturedBytes < MAX_USAGE_CAPTURE_BYTES) {
-      const remaining = MAX_USAGE_CAPTURE_BYTES - capturedBytes;
+    if (capturedBytes < maxCaptureBytes) {
+      const remaining = maxCaptureBytes - capturedBytes;
       chunks.push(buffer.length > remaining ? buffer.subarray(0, remaining) : buffer);
       capturedBytes += Math.min(buffer.length, remaining);
     }
@@ -95,12 +100,17 @@ export async function streamResponse(response: Response, res: http.ServerRespons
   }
 
   const captured = Buffer.concat(chunks, capturedBytes);
-  if (responseBytes <= MAX_USAGE_CAPTURE_BYTES) return captured;
+  if (responseBytes <= maxCaptureBytes) return captured;
   return Buffer.concat([
     captured.subarray(0, tailLimit),
     Buffer.from("\n"),
     Buffer.concat(tailChunks, tailBytes)
   ]);
+}
+
+function normalizeCaptureLimit(value: number | undefined): number {
+  if (!Number.isFinite(value) || value === undefined || value <= 0) return MAX_USAGE_CAPTURE_BYTES;
+  return Math.max(1024, Math.floor(value));
 }
 
 function appendTailChunk(
