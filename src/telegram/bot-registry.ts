@@ -8,7 +8,8 @@ import {
   getTelegramBotDir,
   getTelegramBotLogPath,
   getTelegramBotPidPath,
-  getTelegramConfigPath
+  getTelegramConfigPath,
+  getTelegramDbPath
 } from "../core/config/paths.js";
 
 export type BotEntry = {
@@ -67,15 +68,23 @@ export async function migrateLegacyConfig(): Promise<void> {
   await markLegacyMigrationComplete();
 }
 
-export async function removeBotFiles(name: string): Promise<void> {
+export async function removeBotFiles(name: string, configuredDbPath?: string): Promise<void> {
   if (name === "default") {
     await markLegacyMigrationComplete();
   }
+  const managedConfiguredDbPath = configuredDbPath && isManagedConfigPath(configuredDbPath)
+    ? path.resolve(configuredDbPath)
+    : undefined;
+  const dbPaths = new Set([
+    getTelegramBotDbPath(name),
+    ...(managedConfiguredDbPath ? [managedConfiguredDbPath] : []),
+    ...(name === "default" ? [getTelegramDbPath()] : [])
+  ]);
   const paths = [
     getTelegramBotConfigPath(name),
     getTelegramBotPidPath(name),
     getTelegramBotLogPath(name),
-    getTelegramBotDbPath(name)
+    ...[...dbPaths].flatMap((dbPath) => [dbPath, `${dbPath}-shm`, `${dbPath}-wal`])
   ];
   for (const p of paths) {
     try {
@@ -84,6 +93,11 @@ export async function removeBotFiles(name: string): Promise<void> {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
+}
+
+function isManagedConfigPath(filePath: string): boolean {
+  const relative = path.relative(getConfigRoot(), path.resolve(filePath));
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function getLegacyMigrationMarkerPath(): string {

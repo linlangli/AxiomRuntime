@@ -244,6 +244,7 @@ async function addBot(nameArg?: string): Promise<void> {
 
 async function removeBot(name: string): Promise<void> {
   if (!botExists(name)) throw new Error(`Bot "${name}" does not exist.`);
+  const config = await loadBotConfig(name);
   const { running, pid } = isBotRunning(name);
   if (running && pid) {
     process.kill(pid, "SIGTERM");
@@ -252,7 +253,7 @@ async function removeBot(name: string): Promise<void> {
     }
     console.log(`Stopped bot "${name}".`);
   }
-  await removeBotFiles(name);
+  await removeBotFiles(name, config.dbPath);
   console.log(`Bot "${name}" removed.`);
 }
 

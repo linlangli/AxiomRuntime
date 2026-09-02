@@ -221,20 +221,26 @@ test("telegram CLI updates, shows, and deletes only the explicitly targeted bot"
   });
 });
 
-test("deleting a migrated default bot does not recreate it from legacy config", async () => {
+test("removing a migrated default bot preserves global config without recreating the bot", async () => {
   await withTempHome(async (tempDir) => {
+    const legacyDbPath = path.join(tempDir, "telegram.sqlite");
     await saveTelegramConfig(normalizeTelegramConfig({
       token: "legacy-token",
       allowedUserIds: [1],
-      dbPath: path.join(tempDir, "telegram.sqlite")
+      dbPath: legacyDbPath
     }));
     await migrateLegacyConfig();
     assert.equal(botExists("default"), true);
+    await Promise.all([
+      fs.writeFile(legacyDbPath, "db"),
+      fs.writeFile(`${legacyDbPath}-shm`, "shm"),
+      fs.writeFile(`${legacyDbPath}-wal`, "wal")
+    ]);
 
     const originalLog = console.log;
     console.log = () => {};
     try {
-      await runTelegramCommand(["delete", "--bot", "default"]);
+      await runTelegramCommand(["remove", "default"]);
       await runTelegramCommand(["list"]);
     } finally {
       console.log = originalLog;
@@ -242,6 +248,9 @@ test("deleting a migrated default bot does not recreate it from legacy config", 
 
     assert.equal(botExists("default"), false);
     assert.equal((await loadTelegramConfig()).token, "legacy-token");
+    for (const filePath of [legacyDbPath, `${legacyDbPath}-shm`, `${legacyDbPath}-wal`]) {
+      await assert.rejects(fs.access(filePath), { code: "ENOENT" });
+    }
   });
 });
 
