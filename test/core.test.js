@@ -6,17 +6,20 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
-import { normalizeProviders, swapProviderLevel } from "../dist/core/config/providers-store.js";
+import { normalizeProviders, swapProviderLevel, writeProviders } from "../dist/core/config/providers-store.js";
+import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { checkProvider, extractTokenUsage } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
 import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
 import { isPrivilegedProcess, resolveClaudePermissionMode } from "../dist/core/runner/claude-permission-policy.js";
 import { getRunnerEngine, listRunnerEngines } from "../dist/core/runner/engine-registry.js";
 import { startOpenAiUsageProxy } from "../dist/core/runner/openai-usage-proxy.js";
-import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl, resolveRunnerLaunchPolicy, writeTemporaryClaudeSettings } from "../dist/core/runner/tool-runner.js";
+import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl, resolveRunnerLaunchPolicy, runTool, writeTemporaryClaudeSettings } from "../dist/core/runner/tool-runner.js";
 import { estimateTokenCostUsd } from "../dist/core/usage/pricing.js";
 import { runResolvedProviderCandidates } from "../dist/cli/commands/use.js";
+import { resolveImageCommandInput } from "../dist/cli/commands/image.js";
 import { getCliCommand, listInteractiveCliCommands, registerCliCommand } from "../dist/cli/registry.js";
+import { generateImage } from "../dist/core/images/image-generation-service.js";
 
 test("normalizes provider levels by priority", () => {
   const providers = normalizeProviders([
@@ -115,6 +118,165 @@ test("CLI command registry resolves commands and aliases", async () => {
   assert.equal(called, true);
 });
 
+test("image command accepts provider, explicit model, and prompt", async () => {
+  const provider = {
+    name: "51talk-image",
+    baseUrl: "https://images.test/v1",
+    apiKey: "secret",
+    mode: "auto",
+    level: 1,
+    model: "gpt-image-2"
+  };
+  const input = await resolveImageCommandInput(
+    ["51talk-image", "gpt-image-1", "一只", "戴墨镜的猫"],
+    [provider],
+    {
+      "51talk-image": {
+        status: "ok",
+        models: ["gpt-image-2", "gpt-image-1"],
+        lastCheckedAt: "now",
+        lastError: null
+      }
+    },
+    async () => { throw new Error("select should not run"); },
+    async () => { throw new Error("text should not run"); }
+  );
+
+  assert.deepEqual(input, {
+    provider: "51talk-image",
+    model: "gpt-image-1",
+    prompt: "一只 戴墨镜的猫"
+  });
+});
+
+test("image command keeps provider plus unquoted prompt compatibility", async () => {
+  const provider = {
+    name: "51talk-image",
+    baseUrl: "https://images.test/v1",
+    apiKey: "secret",
+    mode: "auto",
+    level: 1,
+    model: "gpt-image-2"
+  };
+  const input = await resolveImageCommandInput(
+    ["51talk-image", "a", "cat", "in", "space"],
+    [provider],
+    {
+      "51talk-image": {
+        status: "ok",
+        models: ["gpt-image-2"],
+        lastCheckedAt: "now",
+        lastError: null
+      }
+    }
+  );
+
+  assert.deepEqual(input, {
+    provider: "51talk-image",
+    model: "gpt-image-2",
+    prompt: "a cat in space"
+  });
+});
+
+test("image command interactively selects provider, model, and prompt", async () => {
+  const providers = [
+    { name: "general", baseUrl: "https://api.test/v1", apiKey: "a", mode: "auto", level: 1, model: "gpt-5.5" },
+    { name: "51talk-image", baseUrl: "https://images.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-image-2" }
+  ];
+  const prompts = [];
+  const input = await resolveImageCommandInput(
+    [],
+    providers,
+    {
+      general: { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null },
+      "51talk-image": {
+        status: "ok",
+        models: ["gpt-image-2", "gpt-image-1"],
+        lastCheckedAt: "now",
+        lastError: null
+      }
+    },
+    async (message, choices) => {
+      prompts.push({ message, choices });
+      return prompts.length === 1 ? "51talk-image" : "gpt-image-1";
+    },
+    async (message) => {
+      assert.equal(message, "Image prompt");
+      return "一只戴墨镜的猫";
+    }
+  );
+
+  assert.deepEqual(input, {
+    provider: "51talk-image",
+    model: "gpt-image-1",
+    prompt: "一只戴墨镜的猫"
+  });
+  assert.deepEqual(prompts.map((item) => item.message), [
+    "Select image provider",
+    "Select image model for 51talk-image"
+  ]);
+});
+
+test("image generation resolves the configured model and saves provider base64 output", async () => {
+  await withTempHome(async (tempDir) => {
+    const provider = {
+      name: "51talk-image",
+      baseUrl: "https://images.test/v1",
+      apiKey: "secret",
+      mode: "auto",
+      level: 1,
+      model: "gpt-image-2"
+    };
+    await writeProviders([provider]);
+    await upsertProviderCache(provider.name, {
+      status: "ok",
+      models: ["gpt-image-2"],
+      lastCheckedAt: new Date().toISOString(),
+      lastError: null
+    });
+
+    const upstream = await startTestServer(async (req, res) => {
+      assert.equal(req.url, "/v1/images/generations");
+      assert.equal(req.headers.authorization, "Bearer secret");
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      assert.deepEqual(body, { model: "gpt-image-2", prompt: "一只戴墨镜的猫", n: 1 });
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        created: 1,
+        data: [{
+          b64_json: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          revised_prompt: "一只戴墨镜的猫，数字插画"
+        }],
+        usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 }
+      }));
+    });
+    const configuredProvider = { ...provider, baseUrl: upstream.url + "/v1" };
+    await writeProviders([configuredProvider]);
+
+    try {
+      const result = await generateImage({
+        provider: "51talk-image",
+        model: "gpt-image-2",
+        prompt: "一只戴墨镜的猫",
+        outputDir: tempDir
+      });
+      assert.equal(result.provider, provider.name);
+      assert.equal(result.model, "gpt-image-2");
+      assert.match(result.filePath ?? "", /axiom-image-.*\.png$/);
+      assert.equal(result.revisedPrompt, "一只戴墨镜的猫，数字插画");
+      const image = await fs.readFile(result.filePath);
+      assert.deepEqual(image.subarray(0, 8), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
+      assert.equal(usage.events.length, 1);
+      assert.equal(usage.events[0].provider, provider.name);
+      assert.equal(usage.events[0].model, "gpt-image-2");
+      assert.equal(usage.events[0].totalTokens, 6);
+    } finally {
+      await upstream.close();
+    }
+  });
+});
+
 test("version command prints the package version without creating runtime state", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-version-test-"));
   const runtimeHome = path.join(tempDir, "runtime-home");
@@ -149,6 +311,28 @@ test("setup command initializes an empty runtime home non-interactively", async 
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, ".ai-cache.json"), "utf8")), { providers: {} });
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "usage.json"), "utf8")), { events: [] });
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "sessions.json"), "utf8")), { sessions: [] });
+  await fs.rm(tempDir, { recursive: true, force: true });
+});
+
+test("image command redacts its prompt from usage logs", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-image-log-test-"));
+  const runtimeHome = path.join(tempDir, "runtime-home");
+  const prompt = "confidential image prompt";
+  const result = spawnSync(process.execPath, [
+    path.resolve("dist/cli/index.js"),
+    "image",
+    "51talk-image",
+    prompt
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, AI_GATEWAY_HOME: runtimeHome }
+  });
+
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stderr, new RegExp(prompt));
+  const logs = await fs.readFile(path.join(runtimeHome, ".ai-gateway.log"), "utf8");
+  assert.doesNotMatch(logs, new RegExp(prompt));
+  assert.match(logs, /\[prompt 25 chars\]/);
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
@@ -466,6 +650,204 @@ test("OpenAI usage proxy records one usage event from SSE response", async () =>
       await proxy.close();
       await upstream.close();
     }
+  });
+});
+
+test("usage proxy preserves Anthropic paths and merges streamed usage", async () => {
+  await withTempHome(async (tempDir) => {
+    const upstream = await startTestServer(async (req, res) => {
+      assert.equal(req.url, "/v1/messages");
+      assert.equal(req.headers["x-api-key"], "secret");
+      assert.equal(req.headers.authorization, undefined);
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      assert.equal(body.model, "claude-opus-5");
+      res.setHeader("content-type", "text/event-stream");
+      res.write("event: message_start\n");
+      res.write(`data: ${JSON.stringify({
+        type: "message_start",
+        message: {
+          model: "claude-opus-5",
+          usage: {
+            input_tokens: 8,
+            cache_creation_input_tokens: 2,
+            cache_read_input_tokens: 4,
+            output_tokens: 1
+          }
+        }
+      })}\n\n`);
+      res.write("event: message_delta\n");
+      res.write(`data: ${JSON.stringify({
+        type: "message_delta",
+        usage: { output_tokens: 5 }
+      })}\n\n`);
+      res.end();
+    });
+
+    const proxy = await startOpenAiUsageProxy({
+      provider: {
+        name: "anthropic-api",
+        baseUrl: `${upstream.url}/v1`,
+        apiKey: "secret",
+        mode: "ask",
+        level: 1,
+        model: "claude-opus-5"
+      },
+      model: "claude-opus-5",
+      tool: "telegram",
+      engine: "claude"
+    });
+
+    try {
+      assert.doesNotMatch(proxy.baseUrl, /\/v1$/);
+      const response = await fetch(`${proxy.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": "local" },
+        body: JSON.stringify({ model: "claude-opus-5", messages: [], stream: true })
+      });
+      await response.text();
+
+      assert.deepEqual(proxy.getRecords()[0].usage, {
+        inputTokens: 14,
+        outputTokens: 5,
+        totalTokens: 19,
+        cacheReadInputTokens: 4
+      });
+      const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
+      assert.equal(usage.events.length, 1);
+      assert.equal(usage.events[0].provider, "anthropic-api");
+      assert.equal(usage.events[0].model, "claude-opus-5");
+      assert.equal(usage.events[0].totalTokens, 19);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("usage proxy retains terminal usage after a large streamed response", async () => {
+  await withTempHome(async () => {
+    const upstream = await startTestServer(async (_req, res) => {
+      res.setHeader("content-type", "text/event-stream");
+      res.write(`data: ${JSON.stringify({
+        type: "message_start",
+        message: { model: "claude-opus-5", usage: { input_tokens: 7, output_tokens: 1 } }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: "x".repeat(8 * 1024 * 1024) }
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        type: "message_delta",
+        usage: { output_tokens: 9 }
+      })}\n\n`);
+      res.end();
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "large", baseUrl: upstream.url, apiKey: "secret", mode: "ask", level: 1, model: "claude-opus-5" },
+      model: "claude-opus-5",
+      tool: "claude",
+      engine: "claude"
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-opus-5", messages: [], stream: true })
+      });
+      await response.arrayBuffer();
+      assert.deepEqual(proxy.getRecords()[0].usage, {
+        inputTokens: 7,
+        outputTokens: 9,
+        totalTokens: 16
+      });
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+});
+
+test("direct CLI runners route Claude and Codex usage through the ledger", async () => {
+  await withTempHome(async (tempDir) => {
+    const requests = [];
+    const upstream = await startTestServer(async (req, res) => {
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      requests.push({ url: req.url, model: body.model });
+      if (req.url === "/v1/messages") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({
+          model: body.model,
+          usage: { input_tokens: 10, output_tokens: 2 }
+        }));
+        return;
+      }
+      assert.equal(req.url, "/v1/responses");
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({
+        model: body.model,
+        usage: { input_tokens: 20, output_tokens: 3, total_tokens: 23 }
+      }));
+    });
+    const binDir = path.join(tempDir, "bin");
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(path.join(binDir, "claude"), `#!/usr/bin/env node
+if (process.argv.includes("--version")) process.exit(0);
+const response = await fetch(process.env.ANTHROPIC_BASE_URL + "/v1/messages", {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-api-key": process.env.ANTHROPIC_API_KEY },
+  body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL, messages: [] })
+});
+await response.text();
+process.exit(response.ok ? 0 : 1);
+`, { mode: 0o755 });
+    await fs.writeFile(path.join(binDir, "codex"), `#!/usr/bin/env node
+if (process.argv.includes("--version")) process.exit(0);
+const setting = process.argv.find((value) => value.startsWith("model_providers.ai_gateway_selected.base_url="));
+const baseUrl = JSON.parse(setting.slice(setting.indexOf("=") + 1));
+const modelIndex = process.argv.indexOf("--model");
+const response = await fetch(baseUrl + "/responses", {
+  method: "POST",
+  headers: { "content-type": "application/json", authorization: "Bearer " + process.env.OPENAI_API_KEY },
+  body: JSON.stringify({ model: process.argv[modelIndex + 1], input: "hello" })
+});
+await response.text();
+process.exit(response.ok ? 0 : 1);
+`, { mode: 0o755 });
+
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+    const provider = {
+      name: "51talk-ww-cq",
+      baseUrl: `${upstream.url}/v1`,
+      apiKey: "secret",
+      mode: "ask",
+      level: 1,
+      model: "claude-opus-5"
+    };
+    try {
+      assert.equal(await runTool("claude", provider, "claude-opus-5"), 0);
+      assert.equal(await runTool("codex", { ...provider, model: "gpt-5.6-sol" }, "gpt-5.6-sol"), 0);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      await upstream.close();
+    }
+
+    assert.deepEqual(requests, [
+      { url: "/v1/messages", model: "claude-opus-5" },
+      { url: "/v1/responses", model: "gpt-5.6-sol" }
+    ]);
+    const usage = JSON.parse(await fs.readFile(path.join(tempDir, "usage.json"), "utf8"));
+    assert.deepEqual(usage.events.map((event) => ({
+      provider: event.provider,
+      tool: event.tool,
+      model: event.model,
+      totalTokens: event.totalTokens
+    })), [
+      { provider: "51talk-ww-cq", tool: "claude", model: "claude-opus-5", totalTokens: 12 },
+      { provider: "51talk-ww-cq", tool: "codex", model: "gpt-5.6-sol", totalTokens: 23 }
+    ]);
   });
 });
 

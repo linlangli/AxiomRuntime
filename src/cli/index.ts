@@ -4,6 +4,7 @@ import { runContextCommand } from "./commands/context.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runProviderDeleteCommand, runProviderEditCommand } from "./commands/edit.js";
 import { runHelpCommand } from "./commands/help.js";
+import { runImageCommand } from "./commands/image.js";
 import { runListCommand } from "./commands/list.js";
 import { runLogCommand } from "./commands/log.js";
 import { runMemoryCommand } from "./commands/memory.js";
@@ -60,7 +61,7 @@ async function main(): Promise<void> {
   process.exitCode = 1;
 }
 
-function sanitizeArgs(command: string | undefined, args: string[]): string[] {
+export function sanitizeArgs(command: string | undefined, args: string[]): string[] {
   const redactedProxyArgs = redactCodexProxyCommandArgs(command, args);
   if (redactedProxyArgs) return redactedProxyArgs;
   if (command === "add" && args.length >= 3) {
@@ -74,6 +75,9 @@ function sanitizeArgs(command: string | undefined, args: string[]): string[] {
   }
   if (command === "telegram") {
     return maskTelegramConfigSecretArgs(args);
+  }
+  if (command === "image" && args.length > 1) {
+    return [args[0]!, `[prompt ${args.slice(1).join(" ").length} chars]`];
   }
   return args.map((arg, index) => {
     const previous = args[index - 1]?.toLowerCase();
@@ -133,7 +137,7 @@ function maskSecretArg(value: string): string {
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["setup", "use", "set", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["setup", "use", "image", "set", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -249,6 +253,11 @@ function registerBuiltInCommands(): void {
     name: "use",
     description: "use",
     run: (args) => runUseCommand(args)
+  });
+  registerCliCommand({
+    name: "image",
+    description: "generate image",
+    run: (args) => runImageCommand(args)
   });
   registerCliCommand({
     name: "set",

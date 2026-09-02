@@ -8,6 +8,7 @@ import type { CliToolType, Provider } from "../types.js";
 import { isRecord } from "../utils/is-record.js";
 import { resolveToolCommand } from "./command-resolver.js";
 import { getRunnerEngine } from "./engine-registry.js";
+import { startOpenAiUsageProxy } from "./openai-usage-proxy.js";
 import {
   CLAUDE_ROOT_PERMISSION_WARNING,
   resolveClaudePermissionMode,
@@ -27,57 +28,100 @@ export async function runTool(tool: CliToolType, provider: Provider, model: stri
     console.warn(`Warning: ${launchPolicy.warning}`);
   }
   const effectiveProvider = launchPolicy.provider;
-  const env = buildRunnerEnv(tool, effectiveProvider, model);
-  const temporaryFiles: string[] = [];
-  const claudeSettingsPath = engine.requiresSettingsFile
-    ? writeTemporaryClaudeSettings(effectiveProvider, { permissionMode: launchPolicy.claudeSettingsPermissionMode })
-    : null;
-  if (claudeSettingsPath) temporaryFiles.push(claudeSettingsPath);
-  const args = buildRunnerArgs(tool, effectiveProvider, model, claudeSettingsPath);
-  const effectiveBaseUrl = getToolBaseUrl(tool, effectiveProvider);
-  await writeLog({
-    category: "usage",
-    action: "tool_spawn",
-    message: `Spawning ${tool}: ${provider.name} / ${model}`,
-    metadata: {
-      tool,
-      provider: provider.name,
-      model,
-      mode: effectiveProvider.mode,
-      configuredMode: provider.mode,
-      permissionConstraint: launchPolicy.reason,
-      baseUrl: effectiveBaseUrl,
-      configuredBaseUrl: provider.baseUrl,
-      apiKeyFingerprint: getSecretFingerprint(provider.apiKey),
-      command,
-      args,
-      authInjection: engine.authInjection
-    }
-  });
-  const session = await startSession({
-    tool,
+  const usageProxy = await startOpenAiUsageProxy({
     provider: effectiveProvider,
     model,
-    projectPath: process.cwd(),
-    fallbackFrom: options.fallbackFrom ?? null
+    tool,
+    engine: tool
   });
+  const temporaryFiles: string[] = [];
+  const setup = await (async () => {
+    try {
+      const routedProvider = { ...effectiveProvider, baseUrl: usageProxy.baseUrl };
+      const env = buildRunnerEnv(tool, routedProvider, model);
+      const claudeSettingsPath = engine.requiresSettingsFile
+        ? writeTemporaryClaudeSettings(routedProvider, { permissionMode: launchPolicy.claudeSettingsPermissionMode })
+        : null;
+      if (claudeSettingsPath) temporaryFiles.push(claudeSettingsPath);
+      const args = buildRunnerArgs(tool, routedProvider, model, claudeSettingsPath);
+      const effectiveBaseUrl = getToolBaseUrl(tool, effectiveProvider);
+      await writeLog({
+        category: "usage",
+        action: "tool_spawn",
+        message: `Spawning ${tool}: ${provider.name} / ${model}`,
+        metadata: {
+          tool,
+          provider: provider.name,
+          model,
+          mode: effectiveProvider.mode,
+          configuredMode: provider.mode,
+          permissionConstraint: launchPolicy.reason,
+          baseUrl: effectiveBaseUrl,
+          transportBaseUrl: usageProxy.baseUrl,
+          configuredBaseUrl: provider.baseUrl,
+          apiKeyFingerprint: getSecretFingerprint(provider.apiKey),
+          command,
+          args,
+          authInjection: engine.authInjection
+        }
+      });
+      const session = await startSession({
+        tool,
+        provider: effectiveProvider,
+        model,
+        projectPath: process.cwd(),
+        fallbackFrom: options.fallbackFrom ?? null
+      });
+      return { args, env, session };
+    } catch (error) {
+      cleanupTemporaryFiles(temporaryFiles);
+      await usageProxy.close().catch(() => undefined);
+      throw error;
+    }
+  })();
+  const { args, env, session } = setup;
 
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: "inherit",
-      env
-    });
+    let finished = false;
+    const finish = async (exitCode: number, error?: Error): Promise<void> => {
+      if (finished) return;
+      finished = true;
+      cleanupTemporaryFiles(temporaryFiles);
+      await usageProxy.close().catch(async (closeError) => {
+        await writeLog({
+          level: "warn",
+          category: "usage",
+          action: "usage_proxy_close_failed",
+          message: `Failed to close usage proxy for ${tool}: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+          metadata: { tool, provider: provider.name, model }
+        }).catch(() => undefined);
+      });
+      await finishSession(session.id, exitCode).catch(() => undefined);
+      if (error) {
+        reject(error);
+      } else {
+        resolve(exitCode);
+      }
+    };
+
+    let child;
+    try {
+      child = spawn(command, args, {
+        stdio: "inherit",
+        env
+      });
+    } catch (error) {
+      void finish(1, new Error(`Failed to start ${command}. Run \`ai doctor\` to check local CLI installation. ${error instanceof Error ? error.message : String(error)}`));
+      return;
+    }
 
     child.on("error", (error) => {
-      cleanupTemporaryFiles(temporaryFiles);
-      void finishSession(session.id, 1);
-      reject(new Error(`Failed to start ${command}. Run \`ai doctor\` to check local CLI installation. ${error.message}`));
+      void finish(1, new Error(`Failed to start ${command}. Run \`ai doctor\` to check local CLI installation. ${error.message}`));
     });
 
     child.on("close", (code) => {
-      cleanupTemporaryFiles(temporaryFiles);
       const exitCode = code ?? 0;
-      void finishSession(session.id, exitCode).finally(() => resolve(exitCode));
+      void finish(exitCode);
     });
   });
 }

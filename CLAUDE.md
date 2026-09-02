@@ -51,14 +51,15 @@ Global config lives at `~/.ai-gateway/` (override with `AI_GATEWAY_HOME`):
 
 ## Normative Documentation
 
-Read before making architectural changes (in precedence order):
+Three documents under `docs/`. Read before making architectural changes:
 
-1. `docs/00-overview.md` — mission, hard invariants, constitution summary
-2. `docs/AI_RUNTIME_ARCHITECTURE.md` — target architecture
-3. `docs/CONVENTIONS.md` — engineering rules
-4. `docs/enforcement-decisions.md` — acceptance criteria (R1–R36, Q1–Q6)
+1. `docs/architecture.md` — mission, three hard invariants, target architecture, current-state map, Mermaid diagrams
+2. `docs/prd.md` — product positioning, capability inventory, release plan, delivery risks, acceptance gates
+3. `docs/usage.md` — user-facing behavior of every shipped command
 
-Documentation is part of done: every task must update affected normative docs in the same change. English for AI/maintainer docs, Chinese for user-facing docs. The `doc_2.0` layer uses Chinese prose with English identifiers (never translate identifiers).
+All three use status markers: 🟢 shipped / 🟡 partial / 🔴 planned. **Never treat a 🔴 item as available.** A capability may only be marked 🟢 when it is verifiable in `src/`.
+
+Documentation is part of done: every task must update the affected documents in the same change. Do not add a fourth normative doc — extend one of the three. `AGENTS.md` and `CLAUDE.md` are English; the `docs/` set uses Chinese prose with English identifiers (never translate identifiers).
 
 ## Design Rules
 

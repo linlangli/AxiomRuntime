@@ -2,7 +2,7 @@
 
 ## Product Identity
 
-This repository is building an enterprise AI Runtime, not merely a provider gateway, an assistant, a memory product, or an agent framework.
+This repository is building an AI Runtime, not merely a provider gateway, an assistant, a memory product, or an agent framework.
 
 The Runtime is the product. Providers, models, agents, memory, knowledge, skills, workflows, tools, execution, reasoning, and learning are replaceable Runtime capabilities.
 
@@ -10,12 +10,11 @@ North star: every interaction should make the Runtime more capable, reliable, an
 
 Read these documents before making architectural or product changes:
 
-1. `docs/AI_RUNTIME_ARCHITECTURE.md` - target architecture and module boundaries (English canon).
-2. `docs/CONVENTIONS.md` - engineering and documentation rules (English canon).
-3. `docs/00-overview.md` - product identity, the three hard invariants, and the migrated project-constitution summary (see its appendices).
-4. `doc_2.0` layer (root docs under `docs/` plus per-module docs under `docs/modules/`) - normative product behavior, capabilities, acceptance criteria (`enforcement-decisions.md`, R1–R36 / Q1–Q6), roadmap, and per-module design.
+1. `docs/architecture.md` - target architecture, module boundaries, the three hard invariants, and the implemented-vs-planned state map.
+2. `docs/prd.md` - product positioning, capability inventory, release plan, delivery risks, and acceptance gates.
+3. `docs/usage.md` - user-facing behavior of every shipped command.
 
-The former `docs/SPEC.md`, `docs/PROJECT_CONSTITUTION.md`, `docs/ARCHITECTURE.md`, `docs/USAGE.md`, `docs/memory-system-spec.md`, and `docs/telegram-bot-spec.md` have been migrated into the `doc_2.0` layer (now flattened into `docs/` and `docs/modules/`); consult `docs/README.md` for the index.
+All three documents mark implementation status explicitly (🟢 shipped / 🟡 partial / 🔴 planned). Never treat a 🔴 item as available.
 
 ## Architecture Rules
 
@@ -34,42 +33,34 @@ The former `docs/SPEC.md`, `docs/PROJECT_CONSTITUTION.md`, `docs/ARCHITECTURE.md
 
 ## Documentation Audiences
 
-AI-facing and maintainer-facing normative documents are written in English. User-facing documents are written in Chinese.
+`AGENTS.md` and `CLAUDE.md` are English maintainer instructions. The three documents under `docs/` use Chinese prose with canonical English identifiers: type/port/field names, paths, config keys, and enum values stay in English and are never translated. Identifiers in `docs/` must match code exactly.
 
-English normative documents:
+| Document | Audience | Content |
+|---|---|---|
+| `docs/usage.md` | End users | How to use every shipped command |
+| `docs/architecture.md` | Developers | Design, layering, ownership boundaries, Mermaid diagrams |
+| `docs/prd.md` | Developers and product | Positioning, capability inventory, releases, risks, gates |
+| `docs/USAGE.html` | End users | HTML command manual opened by `ai help`; the only doc shipped in the npm package |
 
-- `AGENTS.md`
-- `docs/AI_RUNTIME_ARCHITECTURE.md`
-- `docs/CONVENTIONS.md`
-
-Chinese-English hybrid normative layer (`doc_2.0`, living in `docs/` and `docs/modules/`): prose in Chinese; all identifiers (type/port/field names, paths, rule ids R1–R36 / Q1–Q6, config keys, enum values) stay in canonical English, never translated. This layer holds the migrated product spec, constitution summary, memory/learning design, transport protocol, Telegram surface design, acceptance criteria, and roadmap. Index: `docs/README.md`.
-
-Chinese user and review documents:
-
-- `README.md`
-- `docs/README.md`
-- `docs/usage.md`
-- `docs/USAGE.html`
-
-When the `doc_2.0` layer conflicts with an English canon document (`AI_RUNTIME_ARCHITECTURE.md` / `CONVENTIONS.md`), do not silently choose one: update both in the same change or surface the conflict. Identifiers in the `doc_2.0` layer must match code exactly.
+Do not add new normative documents under `docs/`. Extend one of the three above instead. The consolidated set replaces the former `doc_2.0` layer (`00-overview.md`, `AI_RUNTIME_ARCHITECTURE.md`, `CONVENTIONS.md`, `enforcement-decisions.md`, `roadmap.md`, `contracts.md`, `glossary.md`, `testing.md`, `service-level-objectives.md`, `extraction-readiness.md`, `architecture-map.md`, `AI_RUNTIME_PORTABLE_SPEC.md`, and `docs/modules/*`); consult git history for the superseded text.
 
 ## Required Documentation Updates
 
-- The normative layer is living documentation. Every development task must assess and update it before completion; documentation sync is part of the definition of done, not a later cleanup task.
-- Product direction or acceptance behavior: update `docs/enforcement-decisions.md` (R/Q clauses) and the relevant `docs/modules/` module document.
-- Architecture or ownership boundary: update `docs/AI_RUNTIME_ARCHITECTURE.md` and the affected `docs/modules/` module document.
+- The three documents are living documentation. Every development task must assess and update them before completion; documentation sync is part of the definition of done, not a later cleanup task.
 - CLI or configuration behavior: update `docs/usage.md` and `docs/USAGE.html`.
-- A new invariant or development rule: update `docs/CONVENTIONS.md`.
-- A change to product mission, north star, or the three hard invariants: requires explicit human approval and an update to the constitution appendix in `docs/00-overview.md`.
+- Architecture, ownership boundary, or a new engineering rule: update `docs/architecture.md`.
+- Product direction, capability status, release plan, or acceptance behavior: update `docs/prd.md`.
+- A change to product mission, north star, or the three hard invariants: requires explicit human approval and an update to `docs/architecture.md` section 2.
+- Any status change (🔴 → 🟡 → 🟢) must be reflected in every document that lists that capability. A capability may only be marked 🟢 when it is verifiable in `src/`.
 
 Required maintenance cadence:
 
-- Per task: review `docs/AI_RUNTIME_ARCHITECTURE.md`, `docs/CONVENTIONS.md`, and the affected `doc_2.0` documents (`docs/*.md` and `docs/modules/*.md`); update every affected document in the same change.
-- Per milestone or release: audit the full normative layer against current code, migrations, feature flags, tests, and known limitations.
+- Per task: review all three documents and update every affected one in the same change.
+- Per milestone or release: audit the full set against current code, migrations, feature flags, tests, and known limitations.
 - After a major incident or architectural reversal: record the new invariant, failure mode, and migration consequence immediately.
 - Never leave knowingly stale normative text. If implementation and documentation cannot be reconciled in the current task, mark the gap explicitly with status, owner, and exit condition.
 
-The constitution summary (mission, north star, hard invariants) in `docs/00-overview.md` is intentionally stable and changes only through explicit human direction. The other normative documents are living sources of truth and must evolve with implementation.
+The mission, north star, and three hard invariants in `docs/architecture.md` are intentionally stable and change only through explicit human direction. Everything else must evolve with implementation.
 
 ## CodeGraph
 

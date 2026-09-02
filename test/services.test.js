@@ -56,7 +56,7 @@ test("Codex provider config preserves unrelated settings and replaces its manage
   ].join("\n");
   const provider = {
     name: "51talk-cq",
-    baseUrl: "https://cq.example.com/v1",
+    baseUrl: "https://cq.example.com",
     apiKey: "cq-secret",
     mode: "auto",
     level: 1,
@@ -79,6 +79,20 @@ test("Codex provider config preserves unrelated settings and replaces its manage
     () => buildCodexProviderConfig(current, provider, "51talk-cq", "claude-opus-4-6"),
     /must be a GPT model/
   );
+});
+
+test("Codex provider config does not duplicate an existing v1 path", () => {
+  const updated = buildCodexProviderConfig("", {
+    name: "51talk-cq",
+    baseUrl: "https://cq.example.com/v1/",
+    apiKey: "cq-secret",
+    mode: "auto",
+    level: 1,
+    model: "gpt-5.5"
+  }, "51talk-cq");
+
+  assert.match(updated, /base_url = "https:\/\/cq\.example\.com\/v1"/);
+  assert.doesNotMatch(updated, /\/v1\/v1/);
 });
 
 test("Codex provider model selection keeps only GPT models and picks the newest flagship tier", () => {
@@ -578,6 +592,16 @@ test("getProviderStatuses refreshes health and aggregates weekly tokens", async 
             outputTokens: 5,
             totalTokens: 15,
             createdAt: new Date().toISOString()
+          },
+          {
+            provider: "api",
+            tool: "claude",
+            model: "claude-opus-5",
+            source: "proxy",
+            inputTokens: 3,
+            outputTokens: 2,
+            totalTokens: 5,
+            createdAt: new Date().toISOString()
           }
         ]
       })
@@ -586,7 +610,7 @@ test("getProviderStatuses refreshes health and aggregates weekly tokens", async 
     const statuses = await getProviderStatuses({ refresh: true });
     assert.equal(statuses[0].health, "ok");
     assert.equal(statuses[0].models.length, 1);
-    assert.equal(statuses[0].weeklyTokens, 15);
+    assert.equal(statuses[0].weeklyTokens, 20);
     assert.equal(statuses[0].usageShare, 100);
     assert.equal(statuses[0].codex.state, "ready");
     assert.equal(statuses[0].codex.baseUrl, "https://api.test/v1");

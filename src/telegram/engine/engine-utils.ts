@@ -4,6 +4,7 @@ import { resolveExactProviderForTool, resolveProviderForTool } from "../../core/
 import { buildRunnerEnv, cleanupTemporaryFiles, getToolBaseUrl, writeTemporaryClaudeSettings } from "../../core/runner/tool-runner.js";
 import { resolveClaudePermissionMode, type ClaudePermissionResolution } from "../../core/runner/claude-permission-policy.js";
 import { resolveToolCommand } from "../../core/runner/command-resolver.js";
+import { startOpenAiUsageProxy, type OpenAiUsageProxy } from "../../core/runner/openai-usage-proxy.js";
 import type { TelegramPermissionMode } from "../config.js";
 import type { PermissionRequest } from "./types.js";
 
@@ -15,6 +16,7 @@ export type RuntimeSelection = {
   temporaryFiles: string[];
   claudeSettingsPath: string | null;
   claudePermission: ClaudePermissionResolution | null;
+  usageProxy: OpenAiUsageProxy;
 };
 
 export async function prepareEngineRuntime(
@@ -38,26 +40,41 @@ export async function prepareEngineRuntime(
     ? resolveClaudePermissionMode(permissionMode ?? "default")
     : null;
   const effectiveProvider = claudePermission?.constrained ? { ...provider, mode: "ask" as const } : provider;
-  const env = {
-    ...buildRunnerEnv(tool, effectiveProvider, model),
-    AI_GATEWAY_SOURCE: "telegram"
-  };
   const temporaryFiles: string[] = [];
-  const claudeSettingsPath = tool === "claude"
-    ? writeTemporaryClaudeSettings(provider, {
-        permissionMode: permissionMode === "readOnly"
-          ? "readOnly"
-          : claudePermission?.privileged
-            ? "safeDefault"
-            : "provider"
-      })
-    : null;
-  if (claudeSettingsPath) temporaryFiles.push(claudeSettingsPath);
-  return { provider, model, env, command, temporaryFiles, claudeSettingsPath, claudePermission };
+  const usageProxy = await startOpenAiUsageProxy({
+    provider: effectiveProvider,
+    model,
+    tool: "telegram",
+    engine: tool
+  });
+
+  try {
+    const routedProvider = { ...effectiveProvider, baseUrl: usageProxy.baseUrl };
+    const env = {
+      ...buildRunnerEnv(tool, routedProvider, model),
+      AI_GATEWAY_SOURCE: "telegram"
+    };
+    const claudeSettingsPath = tool === "claude"
+      ? writeTemporaryClaudeSettings(routedProvider, {
+          permissionMode: permissionMode === "readOnly"
+            ? "readOnly"
+            : claudePermission?.privileged
+              ? "safeDefault"
+              : "provider"
+        })
+      : null;
+    if (claudeSettingsPath) temporaryFiles.push(claudeSettingsPath);
+    return { provider, model, env, command, temporaryFiles, claudeSettingsPath, claudePermission, usageProxy };
+  } catch (error) {
+    cleanupTemporaryFiles(temporaryFiles);
+    await usageProxy.close().catch(() => undefined);
+    throw error;
+  }
 }
 
-export function cleanupRuntime(runtime: RuntimeSelection): void {
+export async function cleanupRuntime(runtime: RuntimeSelection): Promise<void> {
   cleanupTemporaryFiles(runtime.temporaryFiles);
+  await runtime.usageProxy.close().catch(() => undefined);
 }
 
 export function resolveWorkingCommand(tool: CliToolType): string | null {

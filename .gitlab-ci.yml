@@ -2,17 +2,12 @@ image: node:22.19.0
 
 stages:
   - test
-  - build
-  - deploy
   - publish
 
 variables:
   GIT_DEPTH: "0"
   NPM_CONFIG_FUND: "false"
   NPM_CONFIG_AUDIT: "false"
-  DEPLOY_PATH: "/opt/AxiomRuntime"
-  CODEX_CLI_VERSION: "0.145.0"
-  CLAUDE_CODE_VERSION: "2.1.129"
 
 cache:
   key:
@@ -33,60 +28,6 @@ test:
     - when: on_success
   script:
     - npm test
-
-build_image:
-  stage: build
-  image: docker:29-cli
-  services:
-    - name: docker:29-dind
-      command: ["--tls=false"]
-  variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
-  before_script: []
-  needs:
-    - test
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "develop"'
-      when: on_success
-    - when: never
-  script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-    - docker build --pull --build-arg "CODEX_VERSION=$CODEX_CLI_VERSION" --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_CODE_VERSION" --label "org.opencontainers.image.revision=$CI_COMMIT_SHA" --tag "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" .
-    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
-
-deploy_production:
-  stage: deploy
-  cache: []
-  tags:
-    - axiomruntime-prod
-  before_script:
-    - docker info >/dev/null
-  needs:
-    - test
-    - build_image
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH == "develop"'
-      when: on_success
-    - when: never
-  resource_group: axiomruntime-production
-  environment:
-    name: production
-  interruptible: false
-  script:
-    - |
-      export DEPLOY_IMAGE="$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
-      export REMOTE_DOCKER_CONFIG="$DEPLOY_PATH/.docker-auth-$CI_PIPELINE_ID"
-      install -d -m 0700 "$REMOTE_DOCKER_CONFIG"
-      install -m 0640 deploy/docker-compose.prod.yml "$DEPLOY_PATH/docker-compose.prod.yml.next"
-      install -m 0750 deploy/remote-deploy.sh "$DEPLOY_PATH/remote-deploy.sh.next"
-      printf '%s' "$CI_REGISTRY_PASSWORD" | DOCKER_CONFIG="$REMOTE_DOCKER_CONFIG" docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-      "$DEPLOY_PATH/remote-deploy.sh.next" "$DEPLOY_PATH" "$DEPLOY_IMAGE" "$CI_REGISTRY" "$REMOTE_DOCKER_CONFIG"
-      mv "$DEPLOY_PATH/remote-deploy.sh.next" "$DEPLOY_PATH/remote-deploy.sh"
-  after_script:
-    - |
-      rm -f -- "$DEPLOY_PATH/.docker-auth-$CI_PIPELINE_ID/config.json"
-      rmdir -- "$DEPLOY_PATH/.docker-auth-$CI_PIPELINE_ID" 2>/dev/null || true
 
 publish_npm:
   stage: publish

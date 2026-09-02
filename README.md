@@ -1,6 +1,6 @@
-# AI Runtime（当前阶段：AI Gateway）
+# AxiomRuntime（当前阶段：Provider Gateway）
 
-本项目的长期目标是构建一套企业级 AI Runtime：让模型、Agent、记忆、知识、技能、工作流和工具在统一的运行、治理与学习体系中协作，并持续把个人经验沉淀为组织能力。
+本项目的长期目标是构建一套 AI Runtime：让模型、Agent、记忆、知识、技能、工作流和工具在统一的运行、治理与学习体系中协作，并持续把个人经验沉淀为可复用能力。
 
 Runtime 才是产品。Memory、Agent 和 LLM 都是可以替换和组合的能力模块。
 
@@ -10,19 +10,25 @@ Runtime 才是产品。Memory、Agent 和 LLM 都是可以替换和组合的能�
 
 ## 文档导航
 
-- [中文文档总览](./docs/README.md)
-- [doc_2.0 文档层总览](./docs/README.md)
-- [中文使用指南](./docs/usage.md)
-- [HTML 命令手册](./docs/USAGE.html)
-- [整体架构与当前实现快照](./docs/00-overview.md)
+文档共三份，均标注实现状态（🟢 已实现 / 🟡 部分实现 / 🔴 规划中）：
 
-AI 与维护者使用的英文权威文档位于 `AGENTS.md`、`docs/AI_RUNTIME_ARCHITECTURE.md` 和 `docs/CONVENTIONS.md`；产品规范、宪法摘要、记忆/学习与 Telegram 设计等构成 `doc_2.0` 文档层（现已展开在 `docs/` 与 `docs/modules/` 下，索引见 `docs/README.md`）。
+| 文档 | 读者 | 内容 |
+|---|---|---|
+| [使用指南](./docs/usage.md) | 使用者 | 安装、上手、每个命令怎么用 |
+| [技术架构](./docs/architecture.md) | 开发者 | 分层设计、执行主链、所有权边界、Mermaid 图 |
+| [产品需求文档](./docs/prd.md) | 开发者 + 产品 | 定位、能力清单、发布计划、交付风险、验收标准 |
+
+另有 [HTML 命令手册](./docs/USAGE.html)，`ai help` 会直接打开。
+
+维护者与 AI 协作规则见 `AGENTS.md` 和 `CLAUDE.md`（英文）。
 
 ## 当前边界
 
 - 已交付：本地 Provider Gateway、Claude/Codex 启动与 fallback、Telegram、会话、用量、诊断和早期 Memory。
 - 演进中：统一 Runtime 执行上下文、自动学习与记忆治理、Skill/Capability 生命周期、插件体系。
-- 长期方向：组织与租户隔离、能力注册与共享、企业集成、Web/Desktop/API 治理界面。
+- 长期方向：组织与租户隔离、能力注册与共享、外部系统集成、Web/Desktop/API 治理界面。
+
+完整的已实现与规划对照见 [产品需求文档 §3](./docs/prd.md)。
 
 ## 通过 npm 安装
 
@@ -85,9 +91,9 @@ npm run build
 npm test
 ```
 
-## 内网 Runtime 服务
+## 本机 Runtime 服务
 
-常驻服务为其他应用提供两类受鉴权接口，同时保留现有 `ai` CLI 和 Telegram 行为：
+从源码进行本地开发或集成时，可以启动受鉴权的 Runtime HTTP 服务，同时保留现有 `ai` CLI 和 Telegram 行为：
 
 - `POST /v1/chat/completions`、`/v1/responses`、`/v1/embeddings`：OpenAI 兼容模型调用，按 provider 优先级、模型目录、健康度和熔断状态自动切换。
 - `POST /v1/agent/runs`：复用 Telegram 背后的 Claude/Codex Engine。只接受受控 `workspace_id`，默认 `read_only`，服务端限制并发和超时。
@@ -98,23 +104,7 @@ npm run build
 AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 ```
 
-生产 Compose 位于 `deploy/docker-compose.prod.yml`，默认仅映射宿主机 `127.0.0.1:8020`，并加入外部 Docker 网络 `ai-runtime`。Provider 配置挂载到 `/var/lib/ai-gateway`，服务 Token 通过只读文件挂载，不写入镜像或仓库。
-
-### GitLab 自动部署
-
-默认分支提交通过测试后，GitLab CI 会构建以 commit SHA 标记的镜像，并由锁定当前项目的受保护 Runner（标签 `axiomruntime-prod`）部署到 `154.201.73.41:/opt/AxiomRuntime`。部署只操作 `axiomruntime` Compose 项目；健康检查失败时恢复上一镜像，不清理服务器上的其他容器或镜像。
-
-镜像构建会在一次性 build stage 中编译 `better-sqlite3` 原生 addon，再把裁掉开发依赖后的 production dependency tree 复制到相同 Node.js 版本的最终镜像；最终镜像不包含编译器。
-
-首次部署前，服务器必须已有 `/opt/AxiomRuntime/config/providers.json` 和 `/opt/AxiomRuntime/secrets/server-token`，且容器用户 `10001:10001` 可以读写配置目录。CI 只校验这些文件，不生成或覆盖凭据。
-
-Telegram 容器默认不启动，以免与现有 long polling 进程争抢消息。完成迁移并停止旧 Bot 后，在服务器 `/opt/AxiomRuntime/.env` 中设置：
-
-```dotenv
-COMPOSE_PROFILES=telegram
-```
-
-启用前还要把各 Bot 的 `defaultCwd` 改为容器内的 `/workspace/...`，对应宿主机 `/opt/AxiomRuntime/workspaces/...`。之后的自动部署会同时更新 Runtime API 和所有位于 `config/telegram/bots/*.json` 的 Telegram Bot。资源上限和工作目录可参考 `.env.server.example` 调整。
+项目不通过 GitLab CI 构建镜像或部署服务器。正式分发统一使用 npm：普通分支和合并请求运行测试，版本 tag 通过校验后发布 `@offerpilot/axiomruntime`，用户通过 `npm install --global @offerpilot/axiomruntime` 安装或升级。
 
 ## 本机注册 `ai` 命令
 
@@ -190,3 +180,4 @@ Telegram Bot 集成说明：
 
 - [docs/usage.md](./docs/usage.md)
 - [docs/USAGE.html](./docs/USAGE.html)
+- [docs/prd.md](./docs/prd.md) 的「已知限制」一节

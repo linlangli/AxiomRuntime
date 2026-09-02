@@ -11,6 +11,7 @@ import {
   type ClaudePermissionMode,
   type ProcessIdentityOptions
 } from "../../core/runner/claude-permission-policy.js";
+import { sumKnownProxyCosts, sumProxyUsage } from "../../core/runner/openai-usage-proxy.js";
 
 export class ClaudeEngine implements Engine {
   readonly name = "claude" as const;
@@ -26,45 +27,44 @@ export class ClaudeEngine implements Engine {
     const signal = params.signal ?? controller.signal;
     const startTime = Date.now();
 
-    if (permissionMode === "bypassPermissions" && requiresDangerousConfirmation(params.prompt)) {
-      const approved = await params.onPermission(createCommandPermissionRequest("Claude prompt", params.prompt));
-      if (!approved) {
-        cleanupRuntime(runtime);
-        throw new Error("Dangerous command denied.");
-      }
-    }
-
-    const args = buildClaudeArgs({
-      prompt: params.prompt,
-      model: runtime.model,
-      settingsPath: runtime.claudeSettingsPath,
-      permissionMode,
-      resume: params.resume,
-      allowedTools: params.allowedTools
-    });
-
-    const permissionWarning = runtime.claudePermission?.constrained ? CLAUDE_ROOT_PERMISSION_WARNING : null;
-    await params.onProgress?.({ phase: "thinking", message: permissionWarning ?? "Claude started" });
-    if (permissionWarning) {
-      await writeTelegramLog({
-        level: "warn",
-        action: "claude_permission_constrained",
-        message: permissionWarning,
-        metadata: { requestedPermissionMode, effectivePermissionMode: permissionMode, reason: runtime.claudePermission?.reason }
-      });
-    }
-    await writeTelegramLog({
-      action: "claude_start",
-      message: `Starting Claude for Telegram chat ${params.chatId}`,
-      metadata: {
-        ...summarizeRuntime(runtime.provider, runtime.model, "claude"),
-        cwd: params.cwd,
-        requestedPermissionMode,
-        effectivePermissionMode: permissionMode
-      }
-    });
-
     try {
+      if (permissionMode === "bypassPermissions" && requiresDangerousConfirmation(params.prompt)) {
+        const approved = await params.onPermission(createCommandPermissionRequest("Claude prompt", params.prompt));
+        if (!approved) {
+          throw new Error("Dangerous command denied.");
+        }
+      }
+
+      const args = buildClaudeArgs({
+        prompt: params.prompt,
+        model: runtime.model,
+        settingsPath: runtime.claudeSettingsPath,
+        permissionMode,
+        resume: params.resume,
+        allowedTools: params.allowedTools
+      });
+
+      const permissionWarning = runtime.claudePermission?.constrained ? CLAUDE_ROOT_PERMISSION_WARNING : null;
+      await params.onProgress?.({ phase: "thinking", message: permissionWarning ?? "Claude started" });
+      if (permissionWarning) {
+        await writeTelegramLog({
+          level: "warn",
+          action: "claude_permission_constrained",
+          message: permissionWarning,
+          metadata: { requestedPermissionMode, effectivePermissionMode: permissionMode, reason: runtime.claudePermission?.reason }
+        });
+      }
+      await writeTelegramLog({
+        action: "claude_start",
+        message: `Starting Claude for Telegram chat ${params.chatId}`,
+        metadata: {
+          ...summarizeRuntime(runtime.provider, runtime.model, "claude"),
+          cwd: params.cwd,
+          requestedPermissionMode,
+          effectivePermissionMode: permissionMode
+        }
+      });
+
       const progressParser = createJsonLineAccumulator((event) => handleClaudeProgressEvent(event, params.onProgress));
       const result = await spawnCapture({
         command: runtime.command,
@@ -93,13 +93,15 @@ export class ClaudeEngine implements Engine {
       await params.onProgress?.({ phase: "done" });
       return {
         ...parsed,
+        cost: parsed.cost ?? sumKnownProxyCosts(runtime.usageProxy.getRecords()),
+        usage: sumProxyUsage(runtime.usageProxy.getRecords()),
         provider: runtime.provider.name,
         model: runtime.model
       };
     } finally {
       this.processes.delete(params.chatId);
       this.controllers.delete(params.chatId);
-      cleanupRuntime(runtime);
+      await cleanupRuntime(runtime);
     }
   }
 

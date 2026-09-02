@@ -531,6 +531,12 @@ ai setup</pre>
                 <td>用默认 provider 和默认模型启动 Claude Code 或 Codex。</td>
                 <td>不指定时使用 <code>level: 1</code>。</td>
               </tr>
+              <tr data-search="image generate image prompt model b64 url">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai image 51talk-image "一只戴墨镜的猫"</code></td>
+                <td>调用已配置的图片 Provider 和默认模型生成图片并保存到当前目录。</td>
+                <td>支持 Provider fallback；真实 usage 写入 <code>usage.json</code>。</td>
+              </tr>
               <tr data-search="use provider model named">
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai use claude 51talk claude-opus-4-6</code><br /><code class="cmd">ai use codex 51talk gpt-5.5</code></td>
@@ -633,6 +639,20 @@ ai use codex 51talk gpt-5.5</pre>
                 <p>不指定 provider 时使用 <code>level: 1</code>；不指定模型时使用 provider 默认 <code>model</code>。</p>
               </div>
               <div class="note">
+                <h3>生成图片</h3>
+                <pre>ai image
+ai image 51talk-image "一只戴墨镜的猫，数字插画"
+ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
+                <ul>
+                  <li>直接运行 <code>ai image</code> 时，会依次选择 Provider、具体模型并输入提示词。</li>
+                  <li>第一个参数是 Provider 名；第二个参数匹配模型缓存时作为具体模型，否则从第二个参数开始作为提示词并使用默认模型。</li>
+                  <li>命令执行前会自动刷新模型缓存；也可以先运行 <code>ai status</code> 检查。指定模型时建议给提示词加引号。</li>
+                  <li><code>b64_json</code> 会以 <code>0600</code> 权限保存到当前目录并输出绝对路径；远程响应只接受无凭证的 <code>https</code> URL。</li>
+                  <li>图片请求最长等待 120 秒；超时会自动失败并尝试下一个 Provider。</li>
+                  <li>请求经过 execution-scoped Transport Proxy，真实 usage 复用唯一 <code>UsageObserver</code> 账本。</li>
+                </ul>
+              </div>
+              <div class="note">
                 <h3>运行规则</h3>
                 <ul>
                   <li>provider 不可用时按 <code>level</code> 自动降级。</li>
@@ -640,6 +660,7 @@ ai use codex 51talk gpt-5.5</pre>
                   <li><code>ai use codex</code> 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
                   <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，非 root 执行 Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。root 下请求 <code>auto</code> 会被安全约束为默认权限，临时 settings 中继承的 bypass 配置也会被清除。</li>
                   <li>OpenAI 兼容地址用于 Codex 时会使用 <code>/v1</code>，用于 Claude 时会去掉 <code>/v1</code>。</li>
+                  <li>Claude 与 Codex 的本次子进程都会通过 execution-scoped 本地代理转发；原生终端交互不变，provider 返回的真实 usage 会按 provider/model 写入 <code>usage.json</code>。</li>
                   <li>日志只记录 Key 指纹，不记录完整 API Key。</li>
                 </ul>
               </div>
@@ -658,6 +679,7 @@ ai set codex proxy off</pre>
                   <li><code>provider name model-id</code> 显式选择该 provider 已探测的 <code>gpt-*</code> 模型；只给 provider 时自动选最新 GPT。</li>
                   <li><code>provider</code> 不带名称时依次交互选择已添加的 provider 和 GPT 模型；没有可用 GPT 时提示运行 <code>ai status</code>，不修改配置。</li>
                   <li>自动选择先比较 GPT 数字版本，同版本优先 <code>sol</code>、<code>pro</code>、alias、<code>codex</code>、<code>terra</code>、<code>mini</code>、<code>luna</code>、<code>nano</code>，并优先滚动 alias。API Key 只写入 mode <code>0600</code> 的 <code>auth.json</code>。</li>
+                  <li>写入 <code>config.toml</code> 前会规范化 <code>base_url</code>：末尾没有 <code>/v1</code> 时自动补上，已有时不重复追加。</li>
                   <li>原有 project、MCP、plugin、feature 设置会保留；任一步失败会恢复原 <code>config.toml</code> 和 <code>auth.json</code>。</li>
                   <li>切换自定义 provider 会替换当前 ChatGPT token；切回 ChatGPT 时需重新登录。</li>
                   <li>成功后 macOS 会重启 <code>Codex.app</code> 或当前名称的 <code>ChatGPT.app</code>；无法自动重启时按提示手动操作。</li>
@@ -799,7 +821,7 @@ ai provider list
 ai log
 ai log --print
 ai context</pre>
-                <p><code>status</code> 会刷新 provider 健康度和模型缓存，展示 Claude/Codex 各自实际 baseUrl、兼容模型、token 使用量和使用占比。</p>
+                <p><code>status</code> 会刷新 provider 健康度和模型缓存，展示 Claude/Codex 各自实际 baseUrl、兼容模型、token 使用量和使用占比。CLI 与 Telegram 的 Claude/Codex 新请求只要 provider 返回结构化 usage 都会计入；周统计按 provider 精确名称聚合，同一 provider 的不同模型合并，事件仍保留 model 明细。升级前未经过代理的旧历史不会估算补录。</p>
               </div>
               <div class="note">
                 <h3>诊断与自动修复</h3>

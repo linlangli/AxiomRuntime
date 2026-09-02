@@ -1,6 +1,6 @@
 export type CliToolType = "claude" | "codex";
 
-export type RunToolType = CliToolType | "provider" | "telegram";
+export type RunToolType = CliToolType | "provider" | "telegram" | "image";
 
 export type ProviderMode = "ask" | "auto";
 

@@ -19,20 +19,30 @@ const RESPONSE_HEADERS_TO_DROP = new Set([
   "content-length"
 ]);
 
-export function buildUpstreamUrl(upstreamBaseUrl: string, incomingUrl: string): string {
+export function buildUpstreamUrl(
+  upstreamBaseUrl: string,
+  incomingUrl: string,
+  options: { stripV1Prefix?: boolean } = {}
+): string {
   const local = new URL(incomingUrl, "http://127.0.0.1");
   let suffix = local.pathname;
-  if (suffix === "/v1") {
-    suffix = "";
-  } else if (suffix.startsWith("/v1/")) {
-    suffix = suffix.slice(3);
+  if (options.stripV1Prefix !== false) {
+    if (suffix === "/v1") {
+      suffix = "";
+    } else if (suffix.startsWith("/v1/")) {
+      suffix = suffix.slice(3);
+    }
   }
   const upstream = new URL(`${upstreamBaseUrl.replace(/\/+$/, "")}${suffix}`);
   upstream.search = local.search;
   return upstream.toString();
 }
 
-export function buildUpstreamHeaders(headers: IncomingHttpHeaders, apiKey: string): Record<string, string> {
+export function buildUpstreamHeaders(
+  headers: IncomingHttpHeaders,
+  apiKey: string,
+  options: { includeAnthropicApiKey?: boolean; includeAuthorization?: boolean } = {}
+): Record<string, string> {
   const next: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     const normalized = key.toLowerCase();
@@ -43,7 +53,12 @@ export function buildUpstreamHeaders(headers: IncomingHttpHeaders, apiKey: strin
       next[key] = value;
     }
   }
-  next.authorization = `Bearer ${apiKey}`;
+  if (options.includeAuthorization !== false) {
+    next.authorization = `Bearer ${apiKey}`;
+  }
+  if (options.includeAnthropicApiKey) {
+    next["x-api-key"] = apiKey;
+  }
   next["accept-encoding"] = "identity";
   return next;
 }
@@ -58,22 +73,68 @@ export function writeResponseHead(res: http.ServerResponse, response: Response):
   }
 }
 
-export async function streamResponse(response: Response, res: http.ServerResponse): Promise<Buffer> {
+export async function streamResponse(
+  response: Response,
+  res: http.ServerResponse,
+  options: { maxCaptureBytes?: number } = {}
+): Promise<Buffer> {
+  const maxCaptureBytes = normalizeCaptureLimit(options.maxCaptureBytes);
   const chunks: Buffer[] = [];
   let capturedBytes = 0;
+  const tailChunks: Buffer[] = [];
+  let tailBytes = 0;
+  let responseBytes = 0;
+  const tailLimit = Math.floor(maxCaptureBytes / 2);
   if (!response.body) return Buffer.alloc(0);
 
   for await (const chunk of response.body) {
     const buffer = Buffer.from(chunk);
-    if (capturedBytes < MAX_USAGE_CAPTURE_BYTES) {
-      const remaining = MAX_USAGE_CAPTURE_BYTES - capturedBytes;
+    responseBytes += buffer.length;
+    if (capturedBytes < maxCaptureBytes) {
+      const remaining = maxCaptureBytes - capturedBytes;
       chunks.push(buffer.length > remaining ? buffer.subarray(0, remaining) : buffer);
       capturedBytes += Math.min(buffer.length, remaining);
     }
+    tailBytes = appendTailChunk(tailChunks, buffer, tailLimit, tailBytes);
     res.write(buffer);
   }
 
-  return Buffer.concat(chunks);
+  const captured = Buffer.concat(chunks, capturedBytes);
+  if (responseBytes <= maxCaptureBytes) return captured;
+  return Buffer.concat([
+    captured.subarray(0, tailLimit),
+    Buffer.from("\n"),
+    Buffer.concat(tailChunks, tailBytes)
+  ]);
+}
+
+function normalizeCaptureLimit(value: number | undefined): number {
+  if (!Number.isFinite(value) || value === undefined || value <= 0) return MAX_USAGE_CAPTURE_BYTES;
+  return Math.max(1024, Math.floor(value));
+}
+
+function appendTailChunk(
+  chunks: Buffer[],
+  buffer: Buffer,
+  limit: number,
+  currentBytes: number
+): number {
+  if (buffer.length >= limit) {
+    chunks.splice(0, chunks.length, buffer.subarray(buffer.length - limit));
+    return limit;
+  }
+
+  chunks.push(buffer);
+  let bytes = currentBytes + buffer.length;
+  while (chunks.length && bytes - chunks[0]!.length >= limit) {
+    bytes -= chunks.shift()!.length;
+  }
+  if (bytes > limit && chunks.length) {
+    const excess = bytes - limit;
+    chunks[0] = chunks[0]!.subarray(excess);
+    bytes = limit;
+  }
+  return bytes;
 }
 
 export async function readRequestBody(req: http.IncomingMessage): Promise<Buffer> {
