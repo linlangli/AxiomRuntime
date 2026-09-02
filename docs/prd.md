@@ -125,6 +125,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 服务商返回成本优先 | 🟢 | 有 `cost_usd` 用真实值 |
 | 本地定价估算 | 🟢 | `model-pricing.json`，美元/百万 token |
 | 唯一账本 | 🟢 | Telegram 投影同一批 records，不产生第二份 |
+| Codex Provider URL 规范化 | 🟢 | 持久配置 `base_url` 时保证末尾恰好一个 `/v1` |
 | 历史补录 | ❌ 刻意不做 | 避免归错服务商或重复计数 |
 | 幂等计费键 | 🟡 | 目标是从 attempt 身份派生，保证 exactly-once |
 | 组织/项目用量归属 | 🔴 | 当前只按服务商聚合 |

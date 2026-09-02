@@ -6,6 +6,7 @@ import path from "node:path";
 import lockfile from "proper-lockfile";
 import type { Provider } from "../types.js";
 import { resolveToolCommand } from "../runner/command-resolver.js";
+import { getRunnerEngine } from "../runner/engine-registry.js";
 
 const LOCK_OPTIONS = {
   realpath: false,
@@ -211,6 +212,7 @@ export function buildCodexProviderConfig(
   if (!provider.baseUrl.trim()) throw new Error(`Provider ${provider.name} has no base URL.`);
   if (!provider.apiKey.trim()) throw new Error(`Provider ${provider.name} has no API key.`);
   const selectedModel = assertCodexGptModel(model);
+  const baseUrl = getRunnerEngine("codex").normalizeBaseUrl(provider.baseUrl);
   const eol = current.includes("\r\n") ? "\r\n" : "\n";
   let next = removeProviderTables(current, providerId);
   next = setTopLevelTomlString(next, "cli_auth_credentials_store", "file");
@@ -220,7 +222,7 @@ export function buildCodexProviderConfig(
   const table = [
     `[model_providers.${providerId}]`,
     `name = ${tomlString(provider.name)}`,
-    `base_url = ${tomlString(provider.baseUrl.trim().replace(/\/+$/, ""))}`,
+    `base_url = ${tomlString(baseUrl)}`,
     `env_key = ${tomlString("OPENAI_API_KEY")}`,
     `wire_api = ${tomlString("responses")}`
   ].join(eol);

@@ -679,6 +679,7 @@ ai set codex proxy off</pre>
                   <li><code>provider name model-id</code> 显式选择该 provider 已探测的 <code>gpt-*</code> 模型；只给 provider 时自动选最新 GPT。</li>
                   <li><code>provider</code> 不带名称时依次交互选择已添加的 provider 和 GPT 模型；没有可用 GPT 时提示运行 <code>ai status</code>，不修改配置。</li>
                   <li>自动选择先比较 GPT 数字版本，同版本优先 <code>sol</code>、<code>pro</code>、alias、<code>codex</code>、<code>terra</code>、<code>mini</code>、<code>luna</code>、<code>nano</code>，并优先滚动 alias。API Key 只写入 mode <code>0600</code> 的 <code>auth.json</code>。</li>
+                  <li>写入 <code>config.toml</code> 前会规范化 <code>base_url</code>：末尾没有 <code>/v1</code> 时自动补上，已有时不重复追加。</li>
                   <li>原有 project、MCP、plugin、feature 设置会保留；任一步失败会恢复原 <code>config.toml</code> 和 <code>auth.json</code>。</li>
                   <li>切换自定义 provider 会替换当前 ChatGPT token；切回 ChatGPT 时需重新登录。</li>
                   <li>成功后 macOS 会重启 <code>Codex.app</code> 或当前名称的 <code>ChatGPT.app</code>；无法自动重启时按提示手动操作。</li>

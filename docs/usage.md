@@ -237,7 +237,7 @@ ai set codex                              # 全交互，先选做什么
 - 服务商必须已经通过 `ai provider add` 添加过
 - 模型候选只来自该服务商**已探测缓存**的 `gpt-*` 列表。没有 GPT 模型时会让你先跑 `ai status` 刷新，**不会**改动 Codex 配置
 - 省略模型时按 GPT 版本号从新到旧选，同版本优先 `sol` > `pro` > 无后缀 > `codex` > `terra` > `mini` > `luna` > `nano`，且优先滚动别名而非日期快照
-- `config.toml` 只写服务商信息和选中的模型，**不写 API Key**；你原有的 project、MCP、plugin 设置都保留
+- `config.toml` 只写服务商信息和选中的模型，**不写 API Key**；写入 `base_url` 前会检查末尾是否已有 `/v1`，没有则自动补上，已有则不会重复；你原有的 project、MCP、plugin 设置都保留
 - API Key 写入 `auth.json`，权限强制 `0600`
 - 两个文件都用临时文件原子替换。任何一步失败（登录取消、认证无效、写入失败）都会**回滚到原状**
 - macOS 上配置一致后会自动重启 `Codex.app` 或 `ChatGPT.app`。找不到应用或在其他平台，配置照样生效，但需要手动重启
