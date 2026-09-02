@@ -1,6 +1,6 @@
 {
   "name": "@offerpilot/axiomruntime",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "CLI-first foundation for an enterprise AI Runtime with provider routing and governed execution.",
   "homepage": "https://gitlab.com/linlangli/agent-router",
   "repository": {
