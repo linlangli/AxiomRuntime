@@ -531,6 +531,12 @@ ai setup</pre>
                 <td>用默认 provider 和默认模型启动 Claude Code 或 Codex。</td>
                 <td>不指定时使用 <code>level: 1</code>。</td>
               </tr>
+              <tr data-search="review code commit adversarial codex claude consensus fix">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai review "审核 commit abc1234"</code><br /><code class="cmd">ai review --commit abc1234 "检查并发安全"</code><br /><code class="cmd">ai review config</code></td>
+                <td>Codex 与 Claude Code 交叉审阅，人工选择问题后修复并创建本地 commit。</td>
+                <td>修复后交换模型继续复审；不会自动 push。</td>
+              </tr>
               <tr data-search="image generate image prompt model b64 url">
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai image 51talk-image "一只戴墨镜的猫"</code></td>
@@ -665,6 +671,28 @@ ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
                 </ul>
               </div>
             </div>
+            <details open>
+              <summary>双模型对抗代码审阅</summary>
+              <div class="detail-body">
+                <pre>ai review "审核一下 commitid 为 abc1234 的代码"
+ai review --commit abc1234 "重点检查并发安全和资源泄漏"
+ai review
+ai review config
+ai review config show
+ai review reset</pre>
+                <ul>
+                  <li>第一次运行先选择首审引擎，再分别选择 Codex 与 Claude Code 的 Provider 和模型；配置只保存名称，不保存 API Key。</li>
+                  <li>首审模型输出问题，第二模型逐条给出 <code>agree</code>、<code>disagree</code> 或 <code>uncertain</code>，并可补充遗漏。</li>
+                  <li>每条问题显示 <code>R1-001</code> 形式的编号、严重度、文件位置、证据、修复建议和具体模型来源；双方同意时标记 <code>CONSENSUS</code>。</li>
+                  <li>用户可只修复共识问题、修复全部、按编号多选，或选择放弃立即结束。没有问题时自动结束。</li>
+                  <li>修复模型只处理所选问题；Runtime 随后创建本地 commit，交换两个模型角色并继续审阅新 commit。</li>
+                  <li>工作区必须干净。审阅阶段只读；Claude 修复不开放 Bash，Codex 修复固定使用 <code>workspace-write</code> sandbox 和 <code>approval=never</code>。</li>
+                  <li>模型不得自行修改 Git 历史；Runtime 检测意外的 <code>HEAD</code> 变化。自动提交记录轮次、finding IDs 与模型来源，永不自动 push。</li>
+                  <li>进程中断时不自动 reset 或丢弃修改；先人工检查工作区。Review 尚未提供跨进程 checkpoint 恢复。</li>
+                  <li>每次模型调用默认最多等待 20 分钟，可用 <code>AI_GATEWAY_REVIEW_TIMEOUT_MS</code> 调整。</li>
+                </ul>
+              </div>
+            </details>
             <details open>
               <summary>持久设置 Codex App provider</summary>
               <div class="detail-body">
@@ -872,6 +900,7 @@ ai session clear</pre>
                 <pre>~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
 ~/.ai-gateway/sessions.json
+~/.ai-gateway/review.json
 ~/.ai-gateway/telegram.json
 ~/.ai-gateway/telegram.sqlite
 ~/.ai-gateway/telegram.log

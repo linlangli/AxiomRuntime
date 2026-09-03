@@ -1,7 +1,7 @@
 {
   "name": "@offerpilot/axiomruntime",
   "version": "0.0.3",
-  "description": "CLI-first foundation for an enterprise AI Runtime with provider routing and governed execution.",
+  "description": "CLI-first AI Runtime for managing Providers, Claude Code, Codex CLI, Telegram remote execution, usage and sessions.",
   "homepage": "https://gitlab.com/linlangli/agent-router",
   "repository": {
     "type": "git",

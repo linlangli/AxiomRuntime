@@ -79,6 +79,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 服务商故障降级 | 自动 | 按 level 顺序自动试下一个 |
 | 用量记账 | `ai status` / `ai report` | 真实用量，按服务商/模型归属 |
 | 图片生成 | `ai image 51talk-image "提示词"` | 使用指定 Provider 的默认图片模型生成并安全保存 |
+| 双模型代码审阅 | `ai review` | Codex 与 Claude Code 交叉验证，人工选问题，修复提交后交换角色复审 |
 | 远程执行 | Telegram Bot | 手机上跑，带进度和审批 |
 | Codex 桌面端配置 | `ai set codex` | 原子写 + 失败回滚 |
 | 环境诊断 | `ai doctor` | 自动修复损坏的内部状态文件 |
@@ -112,6 +113,9 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | root 权限约束 | 🟢 | UID 0 下 `bypassPermissions` 强制降级为 `default` |
 | 会话记录 | 🟢 | 工具、服务商、模型、路径、起止、退出状态 |
 | 会话续用 | 🟡 | **复用启动参数**，不恢复 Claude/Codex 原生聊天上下文 |
+| 对抗式代码审阅 | 🟢 | Review 专用双模型配置；首审、裁决、来源标记和共识筛选 |
+| 人工控制修复闭环 | 🟢 | 用户选择问题后才写工作区；本地自动提交、交换模型复审，不自动 push |
+| Review 崩溃恢复 | 🔴 | 当前只在单次 CLI 进程内循环；失败后保留工作区供人工检查 |
 | 统一 Agent 契约 | 🔴 | Telegram `Engine` 仍是本地兼容 facade，直接 spawn CLI |
 | 工具调用逐步授权 | 🔴 | Agent 提议的工具动作尚未回到统一 Kernel 授权 |
 
@@ -436,7 +440,7 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 | 命令 | 用途 |
 |---|---|
 | `ai do` | 智能路由，自动选工具和模型 |
-| `ai review` / `ai fix` / `ai commit` / `ai pr` | Git 工作流 |
+| `ai fix` / `ai commit` / `ai pr` | 其余 Git 工作流；`ai review` 已作为受控双模型闭环交付 |
 | `.ai-gateway/project.json` | 项目级 profile |
 | `ai last --cwd` | 项目级上次选择 |
 | 统一 MCP 与 Skill 管理 | 跨 Claude Code / Codex |
@@ -485,6 +489,7 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 | **编辑时 apiKey 预填当前值** | 同上 | 同上 |
 | **Telegram Engine 是本地 facade** | 与 CLI 执行路径未完全统一 | R0.1 |
 | **无版本化 migrations** | 记忆表直建 | Phase 0 |
+| **Review 无持久 checkpoint** | CLI 中断后不能自动恢复到原轮次；已有修改保持原样 | 后续接入 `WorkflowCheckpointBackend` |
 | **Node.js ≥ 22.19.0 硬要求** | Node 20 不可用 | 不变 |
 
 ---

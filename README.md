@@ -1,38 +1,107 @@
-# AxiomRuntime（当前阶段：Provider Gateway）
+# AxiomRuntime
 
-本项目的长期目标是构建一套 AI Runtime：让模型、Agent、记忆、知识、技能、工作流和工具在统一的运行、治理与学习体系中协作，并持续把个人经验沉淀为可复用能力。
+> 一条命令管理 Claude Code 和 Codex CLI 的多 Provider 运行环境。
 
-Runtime 才是产品。Memory、Agent 和 LLM 都是可以替换和组合的能力模块。
+AxiomRuntime 是一个以 CLI 为核心的本地 AI Runtime 基础层。它不提供模型，也不替代 Claude Code 或 Codex CLI，而是把多个 Provider（官方 API、中转站或其他兼容服务）集中管理，再以**每次进程独立注入**的方式启动原生 CLI。
 
-当前可用版本是 Runtime 的 Gateway 基础层：通过统一的 `ai` 命令管理 Claude Code 和 Codex CLI 的 provider、模型、优先级、健康度、故障转移、用量、会话、诊断与 Telegram 入口。后续能力会在保持现有命令稳定的基础上，逐步演进到统一执行、受治理学习、Skill/Capability 沉淀和组织级共享。
+它最适合这样的工作方式：同时开多个终端窗口，每个窗口使用不同的 Provider 或模型；需要时再从 Telegram 远程启动任务。窗口之间互不覆盖配置，AxiomRuntime 也不会接管你的原生 Claude Code / Codex 配置。
 
-北极星目标：**每一次交互，都让 Runtime 更有能力。**
+## 先看实现状态
 
-## 文档导航
+README 需要区分“已经能用”和“只是规划”。下面的状态以当前仓库代码和 npm `0.0.4` 为准：
 
-文档共三份，均标注实现状态（🟢 已实现 / 🟡 部分实现 / 🔴 规划中）：
+| 标记 | 含义 |
+|---|---|
+| ✅ | 已实现，并随 npm `0.0.4` 提供 |
+| 🧪 | 当前仓库源码已实现，但尚未包含在 npm `0.0.4` |
+| 🟡 | 有可用实现，但能力范围或接入面仍有限制 |
+| 🚧 | 尚未实现，仅代表后续方向 |
 
-| 文档 | 读者 | 内容 |
-|---|---|---|
-| [使用指南](./docs/usage.md) | 使用者 | 安装、上手、每个命令怎么用 |
-| [技术架构](./docs/architecture.md) | 开发者 | 分层设计、执行主链、所有权边界、Mermaid 图 |
-| [产品需求文档](./docs/prd.md) | 开发者 + 产品 | 定位、能力清单、发布计划、交付风险、验收标准 |
+| 能力 | npm `0.0.4` | 当前源码 | 说明 |
+|---|---:|---:|---|
+| Provider 增删改查、模型发现、优先级 | ✅ | ✅ | `ai provider`、`ai status` |
+| Claude Code / Codex 启动与运行时 fallback | ✅ | ✅ | 按健康度、兼容模型和 `level` 选择 |
+| 多窗口使用不同 Provider，互不影响 | ✅ | ✅ | 配置只注入对应子进程 |
+| 不修改原生 Claude / Codex 配置 | ✅ | ✅ | `ai use` 的默认行为 |
+| 用量统计、成本展示、会话和报告 | ✅ | ✅ | 记录新产生的请求，不补录历史 |
+| Telegram 远程执行与多 Bot 隔离 | ✅ | ✅ | 带进度、审批、附件和 Provider 管理 |
+| 图片生成 | ✅ | ✅ | OpenAI-compatible Images API |
+| `ai set codex` 持久配置 Codex App | ✅ | ✅ | 这是显式修改原生配置的命令 |
+| 本地 HTTP Runtime API | ✅ | ✅ | Bearer 鉴权，适合本机集成 |
+| Telegram 显式记忆 | 🟡 | 🟡 | `/remember` 等命令可用，普通聊天不会自动记忆 |
+| 双模型 `ai review` | — | 🧪 | 当前源码可用，尚未随 npm `0.0.4` 发布 |
+| 自动记忆、向量检索、终端记忆 | 🚧 | 🚧 | embedding 配置已就绪，入库和召回尚未接入 |
+| 加密凭证、Skill 沉淀、学习治理、插件和 Web 界面 | 🚧 | 🚧 | 仍是后续路线，不要按已实现能力使用 |
 
-另有 [HTML 命令手册](./docs/USAGE.html)，`ai help` 会直接打开。
+如果你通过 npm 安装，实际可用的是 npm `0.0.4` 那一列。当前源码中的 🧪 功能会在单独版本发布后再变为 ✅。
 
-维护者与 AI 协作规则见 `AGENTS.md` 和 `CLAUDE.md`（英文）。
+## 它解决什么问题
 
-## 当前边界
+### 1. Provider 管理从“手改配置”变成一条命令
 
-- 已交付：本地 Provider Gateway、Claude/Codex 启动与 fallback、Telegram、会话、用量、诊断和早期 Memory。
-- 演进中：统一 Runtime 执行上下文、自动学习与记忆治理、Skill/Capability 生命周期、插件体系。
-- 长期方向：组织与租户隔离、能力注册与共享、外部系统集成、Web/Desktop/API 治理界面。
+你可以把多个 API Provider 放进统一配置中，记录名称、Base URL、API Key、默认模型、模式和优先级：
 
-完整的已实现与规划对照见 [产品需求文档 §3](./docs/prd.md)。
+```bash
+ai provider add main https://api.example.com sk-xxx
+ai provider add backup https://backup.example.com sk-yyy
+ai provider list
+ai status
+```
 
-## 通过 npm 安装
+添加时会测试连通性、探测模型并建立缓存。`ai use` 会根据 Provider 健康状态、当前 CLI 可兼容的模型和 `level` 顺序选择候选；实际子进程非零退出时，还会继续尝试下一个 Provider。
 
-运行环境需要 Node.js `22.19.0` 或更高版本。先确认版本，再执行全局安装；npm 会把本包注册为 `ai` 命令：
+### 2. 多开窗口，每个窗口使用不同 Provider
+
+这是 AxiomRuntime 的核心使用体验：
+
+```bash
+# 窗口 A：主力 Provider
+ai use claude main
+
+# 窗口 B：备用 Provider + 指定模型
+ai use claude backup claude-opus-4-6
+
+# 窗口 C：Codex 使用另一家 Provider
+ai use codex fenno gpt-5.5
+```
+
+每次 `ai use` 都为对应子进程单独准备路由和凭证。不同窗口的 Provider、模型和运行状态不会互相覆盖；并行数量只受本机资源和上游额度影响。
+
+### 3. 与 Claude Code、Codex 的原生配置保持独立
+
+`ai use` 是临时注入，不是全局切换：
+
+- **Claude Code**：生成临时 `--settings` 文件，注入 `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY` 和模型，进程结束后清理；不修改 `~/.claude/settings.json`。
+- **Codex CLI**：通过本次进程的 `-c model_provider=...`、Provider 的 `base_url` 和 `env_key`，配合进程级 `OPENAI_API_KEY` 环境变量完成路由；不修改全局 `auth.json` 或 `config.toml`。Codex 本身也支持环境变量，AxiomRuntime 只是把它们限制在当前进程内。
+- **直接运行原生命令**：你仍然可以直接执行 `claude` 或 `codex`，它们继续使用自己的原生配置，不受 `ai use` 影响。
+
+只有明确执行 `ai set codex` 时，AxiomRuntime 才会按你的选择持久写入 Codex 配置。这个命令与日常的临时启动是两条不同路径。
+
+### 4. Telegram 远程控制
+
+在手机上发一条消息，让本机的 Claude Code 或 Codex 执行任务，并把进度、结果、文件和图片发回 Telegram。它不是完成通知，而是一个真正的远程执行入口：
+
+- 多 Bot 配置、进程、日志、会话数据库相互隔离
+- 默认白名单鉴权；高风险 `/terminal` 命令必须二次确认
+- 长任务编辑同一条进度消息，显示阶段、工具和回答预览
+- 支持附件、图片、最近对话、引用和固定上下文
+- `/provider` 可直接在手机上查看、添加、编辑、删除和检查 Provider
+- Telegram 使用同一套顶层 Provider 配置和用量账本，不维护另一套路由规则
+
+### 5. 看见用量，而不是凭感觉猜成本
+
+Claude Code 和 Codex 的请求会经过本次执行专属的本地用量代理。Runtime 读取 Provider 返回的真实 token 和成本，写入同一份 `usage.json`：
+
+- 有 Provider 返回的 `cost_usd` 时优先使用真实成本
+- 只有 token、没有成本时，才按 `model-pricing.json` 估算
+- 没有价格配置时显示未知，不伪造精确数字
+- 安装 AxiomRuntime 之前产生的历史请求不会被扫描补录
+
+## 已发布功能
+
+### 安装与初始化
+
+运行环境要求 Node.js `22.19.0` 或更高版本，Node.js 20 不支持。Claude Code 和 Codex CLI 是外部依赖，不会被打包进 AxiomRuntime。
 
 ```bash
 node --version
@@ -41,143 +110,212 @@ ai --version
 ai setup
 ```
 
-如果 npm 显示 `EBADENGINE`，说明当前 Node.js 版本不受支持。请先升级到 `22.19.0+`，不要继续使用警告状态下安装的 CLI。
+`ai setup` 会创建 `~/.ai-gateway/`，引导添加第一个 Provider，测试连通性、探测模型，并询问是否安装缺失的 Claude Code / Codex。
 
-`ai --version` 用于验证 npm 包和命令安装成功；`ai setup` 初始化 Runtime 配置，并可在确认后安装缺失的 Claude Code/Codex。之后可直接运行 `ai`。
-
-可用 root 完成全局安装，但日常执行 `ai` 和常驻服务应使用专用非 root 用户。若仍以 root 启动 Claude，Runtime 会把 `auto`/`bypassPermissions` 安全约束为默认权限、输出告警，并且绝不会传递 Claude Code 禁止 root 使用的 `--dangerously-skip-permissions`。
-
-## 通过 Homebrew 安装
-
-维护者发布新版本时可直接双击仓库根目录的 `发布.command`，交互选择 npm、Homebrew 或发布条件检查，无需记发布命令。npm 发布成功后，再选择 Homebrew；助手会读取 npm Registry 的真实 tarball 与 SHA256，并把 `Formula/axiomruntime.rb` 同步到 GitLab 项目 `linlangli/axiom`。
-
-用户首次安装需要显式提供 GitLab 地址：
+无人值守场景可以使用：
 
 ```bash
-brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
-brew install linlangli/axiom/axiomruntime
-ai --version
-ai setup
+ai setup --yes --skip-tools
+ai setup --yes --install-tools
+ai setup --skip-provider
 ```
 
-## 安装开发依赖
+如果 npm 报 `EBADENGINE`，请先升级 Node.js，再重新安装，不要忽略警告继续运行。
 
-运行和开发需要 Node.js `22.19.0` 或更高版本。该下限与锁定依赖的运行时要求一致；Node.js 20 不受支持。
+### Provider、启动与诊断
+
+```bash
+ai add                                             # 交互式添加 Provider
+ai provider add <name> <base-url> <api-key>
+ai provider list                                   # 只读配置，不联网
+ai provider edit
+ai provider delete <name>
+
+ai status                                          # 刷新健康度、模型缓存和用量
+ai use claude [provider] [model]
+ai use codex [provider] [model]
+ai last                                            # 沿用上次选择
+ai doctor                                          # 检查并安全修复内部状态
+```
+
+`ai status` 默认只做连通性和模型检查，不发真实对话请求。`ai doctor` 可以重建缺失或损坏的缓存、用量和会话文件，但 Provider 配置无效时只报告，不会覆盖凭证。
+
+### 会话、日志、上下文与图片
+
+```bash
+ai session list
+ai session resume <session-id>
+ai session clear
+ai report
+ai report --print <session-id>
+ai log --print 100
+ai context --print
+
+ai image                                          # 交互选择 Provider、模型和提示词
+ai image <provider> "一只戴墨镜的猫"
+ai image <provider> <model> "数字插画"
+```
+
+图片生成调用已配置 Provider 的 OpenAI-compatible `/v1/images/generations`。`b64_json` 会以 `0600` 权限保存到当前目录；远程 `https` 图片只输出 URL，不会自动下载不受信任的地址。图片请求最长等待 120 秒，失败后会尝试下一个兼容 Provider。
+
+### Codex App 的持久配置
+
+如果需要让 Codex App 或直接执行的 `codex` 持续使用某个 Provider，显式运行：
+
+```bash
+ai set codex provider <provider> <gpt-model>
+ai set codex provider <provider>
+ai set codex chatgpt
+ai set codex proxy 127.0.0.1:7890
+ai set codex proxy off
+```
+
+这条命令会原子更新 Codex 的 `config.toml` / `auth.json`，保留无关配置，失败时回滚；macOS 上会尝试重启 Codex App。切换到自定义 Provider 会替换当前 ChatGPT token，切回官方账号时需要重新登录。
+
+### Telegram Bot
+
+```bash
+ai telegram add ops
+ai telegram config set token <bot-token> --bot ops
+ai telegram config set allowedUserIds <telegram-user-id> --bot ops
+ai telegram start --bot ops
+```
+
+常用管理命令：
+
+```bash
+ai telegram list
+ai telegram status --bot ops
+ai telegram logs --bot ops -f
+ai telegram edit --bot ops
+ai telegram stop --bot ops
+ai telegram delete --bot ops
+```
+
+Bot 中可使用 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/provider`、`/usage`、`/remember`、`/forget`、`/memories`、`/pin`、`/unpin`、`/terminal`、`/restart` 和 `/help`。如果本机无法直连 Telegram API，可设置：
+
+```bash
+ai telegram config set proxyUrl http://127.0.0.1:7890 --bot ops
+```
+
+## 🟡 记忆：现在能做什么、不能做什么
+
+当前记忆能力只接入 Telegram，且以**显式操作**为主：
+
+```text
+/remember 记住：这个项目使用 pnpm
+/memories
+/forget <memory-id>
+```
+
+已经实现：
+
+- Telegram 中的 `global` / `bot` 两级 scope
+- 显式新增、查看、删除和固定记忆
+- 最近会话与可见记忆注入当前 Telegram prompt
+- SQLite 存储和短期记忆 TTL
+- embedding Provider 的配置和连通性检查
+
+尚未实现：
+
+- 普通聊天自动抽取和自动写入
+- 终端 `ai use` 的记忆接入
+- 向量入库、向量召回和语义搜索
+- Claim / Evidence 权威账本、多源召回、冲突与时序处理
+- credential 类记忆的安全存储
+
+因此，`ai memory embedding` 目前只是为未来检索准备模型配置；它不会让当前记忆自动变成向量搜索。
+
+## 🧪 当前源码中的双模型代码审阅
+
+当前仓库源码已经包含 `ai review`，但 npm `0.0.4` 尚未包含该命令。等包含它的版本发布后，再把它视为 npm 用户可用功能。
+
+```bash
+ai review "审核一下 commit abc1234"
+ai review --commit abc1234 "重点检查并发安全和资源泄漏"
+ai review config
+```
+
+它的流程是：首审模型只读检查 → 第二模型交叉判断 → 你选择要修复的问题 → 受限写入工作区 → Runtime 创建本地 commit → 交换两个模型角色复审。它不会自动 push，也不会把 API Key 写进 review 配置。
+
+当前限制：审阅循环只存在于单次 CLI 进程中，没有持久 checkpoint；进程中断后不会自动 reset 或恢复，请先人工检查工作区。
+
+## 本地 Runtime API
+
+从源码构建后，可以启动带 Bearer 鉴权的本地 HTTP 服务：
 
 ```bash
 npm install
-```
-
-## 本机 CLI 前置条件
-
-AI Gateway 不内置 Claude Code 或 Codex。它们作为彼此独立的外部 CLI 使用，需要先在本机安装并能通过 `PATH` 或常见安装路径找到。
-
-可用下面的命令初始化和检查：
-
-```bash
-ai setup
-ai doctor
-```
-
-## 构建
-
-```bash
-npm run build
-```
-
-## 本地测试
-
-```bash
-npm test
-```
-
-## 本机 Runtime 服务
-
-从源码进行本地开发或集成时，可以启动受鉴权的 Runtime HTTP 服务，同时保留现有 `ai` CLI 和 Telegram 行为：
-
-- `POST /v1/chat/completions`、`/v1/responses`、`/v1/embeddings`：OpenAI 兼容模型调用，按 provider 优先级、模型目录、健康度和熔断状态自动切换。
-- `POST /v1/agent/runs`：复用 Telegram 背后的 Claude/Codex Engine。只接受受控 `workspace_id`，默认 `read_only`，服务端限制并发和超时。
-- `GET /health/live`、`/health/ready`：不含 Secret 的存活与就绪检查；其他接口必须使用 Bearer Token。
-
-```bash
 npm run build
 AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 ```
 
-项目不通过 GitLab CI 构建镜像或部署服务器。正式分发统一使用 npm：普通分支和合并请求运行测试，版本 tag 通过校验后发布 `@offerpilot/axiomruntime`，用户通过 `npm install --global @offerpilot/axiomruntime` 安装或升级。
+已实现路由：
 
-## 本机注册 `ai` 命令
+| 路由 | 用途 |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI 兼容对话 |
+| `POST /v1/responses` | OpenAI Responses 协议 |
+| `POST /v1/embeddings` | 向量化接口 |
+| `GET /v1/models` | 当前模型列表 |
+| `POST /v1/agent/runs` | 受控的 Claude/Codex Agent Run |
+
+服务只接受受控 `workspace_id`，默认只读，限制请求体、并发和执行时长；不提供任意目录访问，也不提供 `bypassPermissions`。
+
+## 配置文件与安全边界
+
+默认配置目录是 `~/.ai-gateway/`，可以用 `AI_GATEWAY_HOME` 覆盖：
+
+```text
+~/.ai-gateway/providers.json       Provider 配置
+~/.ai-gateway/.ai-cache.json       模型缓存、健康状态和上次选择
+~/.ai-gateway/usage.json           用量账本
+~/.ai-gateway/model-pricing.json   本地成本估算价格
+~/.ai-gateway/sessions.json        CLI 会话记录
+~/.ai-gateway/memory.json          embedding 配置
+~/.ai-gateway/memory.sqlite        Telegram 记忆
+~/.ai-gateway/telegram/bots/       多 Bot 配置、PID、日志和数据库
+~/.ai-gateway/reports/             会话报告
+~/.ai-gateway/.ai-gateway.log      结构化日志
+```
+
+请注意：
+
+- `providers.json` 和 `memory.json` 中的 API Key 当前仍是明文保存。请限制目录权限，绝不要提交到仓库；加密凭证库尚未实现。
+- `ai use` 的临时注入文件会在进程结束后清理；`ai set codex` 是例外，因为它就是明确的持久配置操作。
+- 配置写入使用文件锁、临时文件和原子重命名，降低 CLI 与 Telegram 并发写入时损坏文件的风险。
+- 日志不会记录完整 API Key，但会记录脱敏指纹；Provider 名称、模型和部分运行元数据会进入日志。
+- root 用户运行 Claude 的自动权限模式时，Runtime 会收紧权限，不会传递官方禁止 root 使用的危险参数。
+- Telegram 默认只允许白名单用户；如果显式开启 `allowAllUsers`，任何能访问 Bot 的人都可能在你的机器上执行命令。
+
+## 🚧 尚未实现与未来路线
+
+以下内容不要按当前功能使用：
+
+1. **更完整的记忆**：自动抽取、向量检索、终端接入、Claim / Evidence、冲突和时序治理。
+2. **可复用能力沉淀**：把经过验证的重复流程沉淀为 Skill 或 Workflow，并支持评测、激活和回滚。
+3. **统一 Runtime 契约**：统一 CLI、Telegram、HTTP 的身份、权限、事件、取消、幂等和恢复语义。
+4. **更完整的安全能力**：加密凭证、登录态托管、细粒度策略和可审计的权限决策。
+5. **更多接入面**：Web、桌面、调度和插件体系。当前 `ai web` 只是占位命令。
+
+这些是产品路线，不是已经发布的功能。README、使用指南和产品文档会继续按 🟢 / 🟡 / 🔴 状态同步。
+
+## 开发
 
 ```bash
+npm install
+npm run build
+npm test
 npm link
 ```
 
-注册后可直接使用：
+完整命令说明见：
 
-```bash
-ai
-ai --version
-ai setup
-ai help
-ai provider add
-ai provider list
-ai provider edit
-ai provider delete
-ai set codex chatgpt
-ai set codex provider 51talk-cq gpt-5.6-sol
-ai set codex provider 51talk-cq
-ai set codex proxy 127.0.0.1:7890
-ai telegram
-ai telegram list
-ai telegram start --bot ops
-ai telegram status --bot ops
-ai status
-ai log
-ai log --print
-ai context
-ai context --print
-ai session
-ai session list
-ai session clear
-ai report
-ai doctor
-```
+- [使用指南](./docs/usage.md)
+- [技术架构](./docs/architecture.md)
+- [产品需求文档](./docs/prd.md)
+- [HTML 命令手册](./docs/USAGE.html)
 
-## 配置文件
+## 许可
 
-默认从全局配置目录读取：
-
-```text
-~/.ai-gateway/providers.json
-~/.ai-gateway/.ai-cache.json
-~/.ai-gateway/usage.json
-~/.ai-gateway/model-pricing.json
-~/.ai-gateway/sessions.json
-~/.ai-gateway/telegram.json
-~/.ai-gateway/telegram.sqlite
-~/.ai-gateway/telegram.log
-~/.ai-gateway/reports/
-~/.ai-gateway/exports/
-~/.ai-gateway/.ai-gateway.log
-```
-
-可通过 `AI_GATEWAY_HOME` 覆盖配置目录。
-
-`providers.json` 包含 provider 配置和 SecretStore 引用，不要提交到仓库。
-
-Telegram Bot 集成说明：
-
-- 多 Bot 使用 `ai telegram add <name>` 创建，并以统一的 `--bot <name>` 选择目标；例如 `ai telegram edit --bot ops`、`start|stop|status --bot ops`、`delete --bot ops`。裸 `ai telegram` 会先选操作再选 Bot，删除有二次确认；批量生命周期操作使用 `--all`。
-- `ai telegram config set <key> <value> --bot <name>` 只修改指定 Bot；旧位置参数写法继续兼容。
-- 如果本机不能直连 Telegram API，可设置 `ai telegram config set proxyUrl http://127.0.0.1:7890 --bot <name>`；代理地址需包含协议，交互式新增或编辑 Bot 时也会显示该完整示例。
-- Bot 首次 `/start` 或 `/reset` 会先选择工作路径，再选择 Claude Code/Codex，并展示当前会话、provider 和模型卡片。
-- Bot 会记录选择过的工作路径；自定义路径会按 `~/输入名称` 创建或复用。
-- Telegram 默认命令菜单只保留 `/claude`、`/codex`、`/reset`、`/cwd` 和 `/help`；选择 CLI 后，会在当前 chat 的 `/` 菜单追加该 CLI 的 slash 命令映射。
-- Telegram 远程执行复用 AI Gateway 顶层 provider，不维护另一套 provider 配置。
-- Telegram Codex 执行会自动走本地 OpenAI 兼容代理记录 provider usage；`/usage` 有 provider cost 时直接展示，否则按 `model-pricing.json` 估算。
-
-更多命令用法见：
-
-- [docs/usage.md](./docs/usage.md)
-- [docs/USAGE.html](./docs/USAGE.html)
-- [docs/prd.md](./docs/prd.md) 的「已知限制」一节
+本项目当前未在 README 中声明开源许可证。使用前请以仓库中的许可证文件和项目发布说明为准。

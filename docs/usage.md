@@ -13,7 +13,7 @@
 
 AxiomRuntime 提供一个 `ai` 命令，帮你统一管理 Claude Code 和 Codex CLI 的**服务商（Provider）**。
 
-它解决四个日常问题：
+它解决六个日常问题：
 
 | 问题 | AxiomRuntime 的做法 |
 |---|---|
@@ -22,6 +22,7 @@ AxiomRuntime 提供一个 `ai` 命令，帮你统一管理 Claude Code 和 Codex
 | 不知道 token 花在哪 | 本地代理记录真实用量，`ai status` 查看 |
 | 想在手机上用 Claude Code | Telegram Bot 远程执行 |
 | 需要生成图片 | `ai image <provider> <prompt>` 调用已配置的图片 Provider 并保存结果 |
+| 想让两个模型交叉审代码 | `ai review` 让 Codex 与 Claude Code 审阅、裁决并按人工选择修复 |
 
 它**不是**模型，也不替代 Claude Code / Codex —— 这两个 CLI 需要你自己安装，AxiomRuntime 负责给它们喂对的配置并在后台记账。
 
@@ -187,6 +188,43 @@ ai last                                # 沿用上次的工具、服务商和模
 **用量记录**：两个引擎的模型请求都经过一个本次执行专属的本地代理转发，服务商返回的真实用量按服务商/模型写入 `usage.json`。终端交互方式完全不变。
 
 **日志**：记录服务商、Base URL、模型、启动参数和 API Key 指纹，**不记完整 Key**。
+
+### 双模型对抗审阅
+
+`ai review` 让 Codex 与 Claude Code 交替完成「首审 → 交叉判断 → 人工选择 → 修复 → 自动提交 → 交换角色复审」：
+
+```bash
+ai review "审核一下 commitid 为 abc1234 的代码"
+ai review --commit abc1234 "重点检查并发安全和资源泄漏"
+ai review                         # 交互输入审阅要求，默认审 HEAD
+```
+
+第一次运行时会进入模型设置流程：选择首审引擎，再分别为 Codex 和 Claude Code 选择 Provider 与模型。配置保存在 `~/.ai-gateway/review.json`，只含 Provider 名和模型名，不保存 API Key。
+
+```bash
+ai review config                 # 重新选择首审顺序、Provider 和模型
+ai review config show            # 查看当前审阅配置
+ai review reset                  # 清除审阅配置
+```
+
+每轮流程：
+
+1. 首审模型只读检查目标 commit，输出带严重级别、文件、行号、证据和修复建议的问题。
+2. 第二个模型独立验证每条问题，可以同意、反对、不确定或补充遗漏。
+3. Runtime 为问题分配 `R1-001` 形式的稳定编号，并显示具体 Provider/模型来源；双方同意的条目标记为 `CONSENSUS`。
+4. 你可以选择只修复双方共识、修复全部、按编号多选，或放弃并立即结束。
+5. 首审模型只修改所选问题。Runtime 检查改动后创建本地 commit，然后交换两个模型的角色，让另一个模型审阅新 commit。
+6. 没有问题时自动结束；否则继续循环，直到你选择放弃。
+
+安全与失败边界：
+
+- 开始审阅以及每次修复前都要求 Git 工作区干净，防止自动提交混入原有改动。
+- 审阅阶段是只读；修复阶段只给受限工作区写权限。Claude Code 不获得 Bash，Codex 使用 `workspace-write` sandbox 和 `approval=never`。
+- 模型不得自行 commit、amend、reset、stash 或 push；Runtime 会检测意外的 HEAD 变化并停止。
+- 自动提交只发生在本地，提交信息会记录轮次、问题 ID 和两个模型；**永不自动 push**。
+- Git diff 超过约 1.5 MB 会拒绝自动审阅。中断或失败后不会丢弃已有修改，也不会自动重置，请先人工检查再继续。
+- 每次模型调用默认最多等待 20 分钟，可用 `AI_GATEWAY_REVIEW_TIMEOUT_MS` 调整。
+- 审阅要求会在 command usage log 中脱敏；模型请求仍经过 execution-scoped Transport Proxy，真实 token 进入同一份用量账本。
 
 ## 6. 生成图片
 
@@ -493,6 +531,7 @@ AI_GATEWAY_HOME=/path/to/config ai provider list
 ~/.ai-gateway/usage.json            用量账本
 ~/.ai-gateway/sessions.json         会话记录
 ~/.ai-gateway/memory.json           记忆检索的 embedding 配置
+~/.ai-gateway/review.json           双模型审阅的引擎、Provider 与模型选择
 ~/.ai-gateway/memory.sqlite         Telegram 记忆库
 ~/.ai-gateway/telegram/bots/        各 Bot 的配置、PID、日志、会话
 ~/.ai-gateway/reports/              会话报告

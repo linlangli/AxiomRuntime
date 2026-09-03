@@ -35,6 +35,10 @@ export function getIntegrationStatePath(): string {
   return path.join(getConfigRoot(), "integrations.json");
 }
 
+export function getReviewConfigPath(): string {
+  return path.join(getConfigRoot(), "review.json");
+}
+
 export function getReportsDir(): string {
   return path.join(getConfigRoot(), "reports");
 }

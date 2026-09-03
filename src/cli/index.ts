@@ -9,6 +9,7 @@ import { runListCommand } from "./commands/list.js";
 import { runLogCommand } from "./commands/log.js";
 import { runMemoryCommand } from "./commands/memory.js";
 import { runReportCommand } from "./commands/report.js";
+import { runReviewCommand } from "./commands/review.js";
 import { runLastCommand, runUseCommand } from "./commands/use.js";
 import { runSessionCommand } from "./commands/session.js";
 import { runSetCommand } from "./commands/set.js";
@@ -79,6 +80,9 @@ export function sanitizeArgs(command: string | undefined, args: string[]): strin
   if (command === "image" && args.length > 1) {
     return [args[0]!, `[prompt ${args.slice(1).join(" ").length} chars]`];
   }
+  if (command === "review" && args[0] !== "config" && args[0] !== "reset") {
+    return [`[review request ${args.join(" ").length} chars]`];
+  }
   return args.map((arg, index) => {
     const previous = args[index - 1]?.toLowerCase();
     if (previous === "--api-key" || previous === "--apikey" || previous === "--key") {
@@ -137,7 +141,7 @@ function maskSecretArg(value: string): string {
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["setup", "use", "image", "set", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["setup", "use", "review", "image", "set", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -258,6 +262,11 @@ function registerBuiltInCommands(): void {
     name: "image",
     description: "generate image",
     run: (args) => runImageCommand(args)
+  });
+  registerCliCommand({
+    name: "review",
+    description: "adversarial code review",
+    run: (args) => runReviewCommand(args)
   });
   registerCliCommand({
     name: "set",

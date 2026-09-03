@@ -61,7 +61,7 @@ Provider Gateway            ← 当前位置
 ```text
 src/
 ├── cli/                    CLI 接入面
-│   ├── commands/           17 个命令：use/image/set/add/status/doctor/telegram/session/...
+│   ├── commands/           18 个命令：use/review/image/set/add/status/doctor/telegram/session/...
 │   ├── output/  prompts/   终端渲染与交互
 │   └── registry.ts         命令注册表
 ├── core/                   核心逻辑
@@ -73,6 +73,7 @@ src/
 │   ├── models/             模型发现与兼容性过滤
 │   ├── providers/          Provider 健康检查与刷新
 │   ├── reports/            会话报告
+│   ├── review/             双模型审阅、裁决、Git 修复提交循环
 │   ├── runner/             执行引擎 + 用量代理（详见 §5）
 │   ├── sessions/           CLI 会话管理
 │   ├── status/             doctor / status 诊断
@@ -93,7 +94,7 @@ src/
 
 | 目录 | 状态 |
 |---|---|
-| `core/config`、`core/providers`、`core/models`、`core/runner`、`core/images`、`core/usage`、`core/sessions` | 🟢 |
+| `core/config`、`core/providers`、`core/models`、`core/runner`、`core/images`、`core/review`、`core/usage`、`core/sessions` | 🟢 |
 | `core/memory` | 🟡 仅 embedding 配置 |
 | `telegram/memory` | 🟡 单表 + 关键词匹配 |
 | `core/contracts`、`core/transport-proxy`、`core/policy`、`core/learning`、`core/auth-session`、`core/skills`、`plugins/`、`web/` | 🔴 目录不存在 |
@@ -225,7 +226,7 @@ flowchart TD
 
 ### Runner 模块构成
 
-`src/core/runner/` 当前 12 个文件，职责如下：
+`src/core/runner/` 当前 13 个文件，职责如下：
 
 | 文件 | 职责 | 目标归属 |
 |---|---|---|
@@ -233,6 +234,7 @@ flowchart TD
 | `engine-registry.ts` | Claude/Codex 策略注册 | ③ Capabilities |
 | `claude-permission-policy.ts` | UID 0 下约束 `bypassPermissions` 为 `default` | ⑨ Security |
 | `tool-runner.ts` | 运行环境 + 密钥注入 + 临时文件 | ④ Kernel |
+| `process-capture.ts` | headless 子进程捕获、超时、中止与 JSONL 基础解析 | ④ Kernel |
 | `fallback.ts` | 候选排序与逐个执行 | ③ + ④ |
 | `openai-usage-*.ts`（7 个） | 本地 HTTP 代理、协议翻译、用量记录 | ⑤ Transport |
 | `images/image-generation-service.ts` | 图片模型解析、请求、响应校验和安全落盘 | ③ Capability + ⑤ Transport |
@@ -259,6 +261,35 @@ flowchart TD
 `spawnCapture({onStdout})` 通过跨 chunk 的 JSONL accumulator 实时解析 `tool_calling` / `writing` 等 `ProgressUpdate`。`ProgressReporter` 默认节流 1500ms，编辑**同一条**状态消息展示阶段、工具和有界响应预览。
 
 **刻意不做逐 token 编辑**：Telegram `editMessageText` 有频率限制，按完整 JSON stream event 合并预览可以避免 429 和重复执行。
+
+### 双模型 Review workflow 🟢
+
+`ai review` 是当前 core 层的受控 workflow service，不由 CLI 自己编排业务状态：
+
+```mermaid
+flowchart LR
+  CLI["CLI Surface"] --> RS["ReviewService"]
+  RS --> GIT["ReviewGitPort<br/>commit snapshot / clean guard / local commit"]
+  RS --> A["ReviewAgentPort<br/>first reviewer"]
+  A --> B["ReviewAgentPort<br/>second-opinion judge"]
+  B --> MERGE["deterministic merge<br/>finding id / source / verdict"]
+  MERGE --> HUMAN["human selection"]
+  HUMAN -->|"abandon"| STOP["stop"]
+  HUMAN -->|"selected IDs"| FIX["reviewer workspace fix"]
+  FIX --> COMMIT["Runtime local commit"]
+  COMMIT --> SWAP["swap reviewer / judge"]
+  SWAP --> RS
+```
+
+- `ReviewService` 只依赖 `ReviewAgentPort` 与 `ReviewGitPort`，CLI 只渲染进度和收集用户选择
+- `CliReviewAgent` 通过 Claude/Codex headless JSON stream 与同一个 execution-scoped Transport Proxy 执行；没有第二份 usage ledger
+- 首审与裁决使用只读权限；只有用户选择具体 finding 后才调用 `workspaceWrite`
+- Claude 修复适配器不开放 Bash；Codex 修复适配器固定 `workspace-write + approval=never`
+- Git adapter 在开始和每次修复前要求 clean worktree；模型不得拥有提交步骤，Runtime 检查 `HEAD` 未变化后才精确执行本地 commit
+- commit 带 `Review-Round`、`Review-Findings`、`Review-Fixer`、`Review-Judge` trailer，不执行 push
+- finding 合并是确定性的：第二模型 `agree` 才标为 `consensus`；`disagree`、`uncertain` 与第二模型新增问题仍显示来源，由用户决定
+
+🟡 限制：循环当前由单个 CLI 进程持有，没有 durable checkpoint；执行中断后保留已有文件状态且 fail-closed，不自动 reset 或继续提交。它是 `WorkflowExecutorPort` 落地前的 core-local service，不代表目标 Workflow 契约已经完成。
 
 ---
 
@@ -660,6 +691,7 @@ Cost 视图在**查询时**关联 UsageObserver 拥有的读模型；telemetry *
 | `src/core/runner/fallback.ts`、`tool-runner.ts` | ③ + ④ | 重组进 Capabilities 与 Kernel |
 | `src/core/runner/claude-permission-policy.ts` | ⑨ Security | 收敛进统一 Security |
 | `src/core/context/`、`sessions/` | ② Orchestration | 合并上移 |
+| `src/core/review/` | ② + ③ + ④ | 保留当前 Port 边界，后续接入 canonical `WorkflowExecutorPort` checkpoint 与 Agent adapters |
 | `src/core/providers/`、`models/` | ③ Capabilities | 暴露稳定契约 |
 | `src/core/integrations/` | ⑩ Adapters | 已提供通用集成状态注册 |
 | `src/telegram/memory/` | ⑥ Memory | 升级为 core 层账本初始实现 |
