@@ -710,7 +710,7 @@ ai set codex proxy off</pre>
                   <li>写入 <code>config.toml</code> 前会规范化 <code>base_url</code>：末尾没有 <code>/v1</code> 时自动补上，已有时不重复追加。</li>
                   <li>原有 project、MCP、plugin、feature 设置会保留；任一步失败会恢复原 <code>config.toml</code> 和 <code>auth.json</code>。</li>
                   <li>切换自定义 provider 会替换当前 ChatGPT token；切回 ChatGPT 时需重新登录。</li>
-                  <li>成功后 macOS 会重启 <code>Codex.app</code> 或当前名称的 <code>ChatGPT.app</code>；无法自动重启时按提示手动操作。</li>
+                  <li>成功后 macOS 会重启 <code>Codex.app</code> 或当前名称的 <code>ChatGPT.app</code>，并清理重启进程继承的 <code>OPENAI_API_KEY</code>，确保客户端读取刚写入的 <code>auth.json</code>；无法自动重启时按提示手动操作。</li>
                   <li><code>proxy</code> 把裸 <code>host:port</code> 规范化为 HTTP origin，只更新 <code>shell_environment_policy.set</code> 的大小写 HTTP(S)/ALL proxy keys；<code>off</code> 清除这些 managed keys，不修改 <code>auth.json</code>。</li>
                   <li>Proxy URL 禁止包含账号密码、path、query 或 fragment，command usage log 会整体脱敏。macOS 会同步当前登录会话的 user launchd environment；失败时恢复原 config 且不重启，注销或重启 macOS 后需重新运行本命令。</li>
                 </ul>

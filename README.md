@@ -170,7 +170,7 @@ ai set codex proxy 127.0.0.1:7890
 ai set codex proxy off
 ```
 
-这条命令会原子更新 Codex 的 `config.toml` / `auth.json`，保留无关配置，失败时回滚；macOS 上会尝试重启 Codex App。切换到自定义 Provider 会替换当前 ChatGPT token，切回官方账号时需要重新登录。
+这条命令会原子更新 Codex 的 `config.toml` / `auth.json`，保留无关配置，失败时回滚；macOS 上会重启 Codex App，并清理重启进程继承的旧 `OPENAI_API_KEY`，确保新 Provider 的凭证生效。切换到自定义 Provider 会替换当前 ChatGPT token，切回官方账号时需要重新登录。
 
 ### Telegram Bot
 
