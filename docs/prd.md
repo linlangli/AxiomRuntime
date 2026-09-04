@@ -80,7 +80,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 用量记账 | `ai status` / `ai report` | 真实用量，按服务商/模型归属 |
 | 图片生成 | `ai image 51talk-image "提示词"` | 使用指定 Provider 的默认图片模型生成并安全保存 |
 | 远程执行 | Telegram Bot | 手机上跑，带进度和审批 |
-| Codex 桌面端配置 | `ai set codex` | 原子写 + 失败回滚 |
+| Codex 桌面端配置 | `ai set codex` | 原子写 + 失败回滚 + 重启时清理旧凭证环境 |
 | 环境诊断 | `ai doctor` | 自动修复损坏的内部状态文件 |
 | 内网 API | `npm run server` | OpenAI 兼容 + Agent Run |
 

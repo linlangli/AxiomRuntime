@@ -77,6 +77,10 @@ export type SetCodexProxyOptions = {
   scheduleRestart?: () => Promise<CodexAppRestartResult>;
 };
 
+type SpawnDetachedOptions = {
+  env?: NodeJS.ProcessEnv;
+};
+
 type FileSnapshot = {
   content: Buffer;
   mode: number;
@@ -318,7 +322,7 @@ export async function scheduleCodexAppRestart(options: {
   homeDir?: string;
   appCandidates?: string[];
   pathExists?: (filePath: string) => Promise<boolean>;
-  spawnDetached?: (command: string, args: string[]) => void;
+  spawnDetached?: (command: string, args: string[], options?: SpawnDetachedOptions) => void;
 } = {}): Promise<CodexAppRestartResult> {
   const platform = options.platform ?? process.platform;
   if (platform !== "darwin") {
@@ -358,7 +362,11 @@ export async function scheduleCodexAppRestart(options: {
     "  setTimeout(() => spawnSync('/usr/bin/open', [appPath], { stdio: 'ignore' }), 1000);",
     "}, 750);"
   ].join("\n");
-  (options.spawnDetached ?? defaultSpawnDetached)(process.execPath, ["-e", helper]);
+  const restartEnvironment = { ...process.env };
+  delete restartEnvironment.OPENAI_API_KEY;
+  (options.spawnDetached ?? defaultSpawnDetached)(process.execPath, ["-e", helper], {
+    env: restartEnvironment
+  });
   return { scheduled: true, appPath };
 }
 
@@ -654,8 +662,8 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-function defaultSpawnDetached(command: string, args: string[]): void {
-  const child = spawn(command, args, { detached: true, stdio: "ignore" });
+function defaultSpawnDetached(command: string, args: string[], options: SpawnDetachedOptions = {}): void {
+  const child = spawn(command, args, { detached: true, stdio: "ignore", ...options });
   child.unref();
 }
 
