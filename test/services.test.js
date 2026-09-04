@@ -419,18 +419,26 @@ test("Codex provider ids preserve safe names and isolate reserved or free-form n
 
 test("Codex app restart scheduler prefers an installed app and detaches the helper", async () => {
   const spawned = [];
-  const result = await scheduleCodexAppRestart({
-    platform: "darwin",
-    appCandidates: ["/Applications/Codex.app", "/Applications/ChatGPT.app"],
-    pathExists: async (candidate) => candidate.endsWith("ChatGPT.app"),
-    spawnDetached: (command, args) => spawned.push({ command, args })
-  });
+  const previousApiKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "stale-key-from-shell";
+  try {
+    const result = await scheduleCodexAppRestart({
+      platform: "darwin",
+      appCandidates: ["/Applications/Codex.app", "/Applications/ChatGPT.app"],
+      pathExists: async (candidate) => candidate.endsWith("ChatGPT.app"),
+      spawnDetached: (command, args, options) => spawned.push({ command, args, options })
+    });
 
-  assert.equal(result.scheduled, true);
-  assert.equal(result.appPath, "/Applications/ChatGPT.app");
-  assert.equal(spawned.length, 1);
-  assert.equal(spawned[0].command, process.execPath);
-  assert.match(spawned[0].args[1], /tell application \\"ChatGPT\\" to quit/);
+    assert.equal(result.scheduled, true);
+    assert.equal(result.appPath, "/Applications/ChatGPT.app");
+    assert.equal(spawned.length, 1);
+    assert.equal(spawned[0].command, process.execPath);
+    assert.match(spawned[0].args[1], /tell application \\"ChatGPT\\" to quit/);
+    assert.equal(spawned[0].options.env.OPENAI_API_KEY, undefined);
+  } finally {
+    if (previousApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousApiKey;
+  }
 });
 
 test("Codex app restart scheduler degrades to a manual restart when unsupported or missing", async () => {

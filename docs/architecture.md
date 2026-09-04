@@ -481,7 +481,7 @@ Claude adapter **必须**在构造参数和临时 settings **之前**检测 UID 
 
 该 service 的约束：ChatGPT OAuth 委托 `codex login`；持久写入限于用户级 `CODEX_HOME/config.toml` 和 `auth.json`；使用原子替换 + 回滚；API Key **不进入** TOML 和日志；凭证文件权限强制 `0600`。Provider 变更只从该 provider 已发现的模型缓存中解析模型；写入 Codex `base_url` 时复用 Codex Runner 的规范化规则，保证末尾恰好一个 `/v1`。
 
-代理变更保留无关 TOML 状态，只管理 `shell_environment_policy.set` 下的标准 HTTP(S)/ALL 代理键，拒绝命令行代理凭证；macOS 上事务性同步用户 launchd 环境。**只有在请求的持久状态一致后**才重启桌面客户端。
+代理变更保留无关 TOML 状态，只管理 `shell_environment_policy.set` 下的标准 HTTP(S)/ALL 代理键，拒绝命令行代理凭证；macOS 上事务性同步用户 launchd 环境。**只有在请求的持久状态一致后**才重启桌面客户端。重启辅助进程必须移除继承的 `OPENAI_API_KEY`，让客户端读取刚写入的 `auth.json`，避免旧 Shell 凭证覆盖新 Provider。
 
 ---
 
@@ -646,7 +646,7 @@ Cost 视图在**查询时**关联 UsageObserver 拥有的读模型；telemetry *
 
 ### 当前安全实现 🟢
 
-- `ai set codex` 是迁移到统一 `SecretStore` 前的本地兼容路径：ChatGPT token 只由 `codex login` OAuth 生成；自定义 provider 的 API key 只写 `auth.json`，权限固定 `0600`；`config.toml` 只存 provider metadata 和已验证的缓存 GPT model id。**Provider/model 校验必须发生在凭证/配置变更之前。** 两文件更新使用 snapshot、原子重命名和失败回滚，日志和终端不输出 secret
+- `ai set codex` 是迁移到统一 `SecretStore` 前的本地兼容路径：ChatGPT token 只由 `codex login` OAuth 生成；自定义 provider 的 API key 只写 `auth.json`，权限固定 `0600`；`config.toml` 只存 provider metadata 和已验证的缓存 GPT model id。**Provider/model 校验必须发生在凭证/配置变更之前。** 两文件更新使用 snapshot、原子重命名和失败回滚，日志和终端不输出 secret；macOS 自动重启时清理继承的 `OPENAI_API_KEY`，不让旧进程环境覆盖已更新凭证
 - 常驻 Runtime 服务使用独立 Bearer Token，**constant-time 比较**后才允许访问 `/v1/*`。生产 Token 与 provider 凭证通过挂载注入，**不进入镜像**
 - Agent Run **禁止任意 cwd**，只接受规范化 `workspace_id`；默认 `read_only`，服务 API **不暴露** `bypassPermissions`，并设置请求体、并发与执行超时上限
 

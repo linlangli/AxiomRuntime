@@ -240,7 +240,7 @@ ai set codex                              # 全交互，先选做什么
 - `config.toml` 只写服务商信息和选中的模型，**不写 API Key**；写入 `base_url` 前会检查末尾是否已有 `/v1`，没有则自动补上，已有则不会重复；你原有的 project、MCP、plugin 设置都保留
 - API Key 写入 `auth.json`，权限强制 `0600`
 - 两个文件都用临时文件原子替换。任何一步失败（登录取消、认证无效、写入失败）都会**回滚到原状**
-- macOS 上配置一致后会自动重启 `Codex.app` 或 `ChatGPT.app`。找不到应用或在其他平台，配置照样生效，但需要手动重启
+- macOS 上配置一致后会自动重启 `Codex.app` 或 `ChatGPT.app`，并清理重启进程继承的 `OPENAI_API_KEY`，确保客户端读取刚写入的 `auth.json`；找不到应用或在其他平台，配置照样生效，但需要手动重启
 
 > 切到自定义服务商会**替换掉当前的 ChatGPT token**。以后想切回去需要重新走一次浏览器登录。
 
