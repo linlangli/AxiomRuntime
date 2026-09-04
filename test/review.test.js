@@ -6,10 +6,11 @@ import path from "node:path";
 import test from "node:test";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
-import { buildReviewAgentArgs, parseReviewAgentResponse } from "../dist/core/review/review-agent.js";
+import { buildReviewAgentArgs, formatReviewAgentFailure, parseReviewAgentResponse } from "../dist/core/review/review-agent.js";
 import { clearReviewConfig, normalizeReviewConfig, readReviewConfig, writeReviewConfig } from "../dist/core/review/review-config.js";
 import { LocalReviewGit } from "../dist/core/review/review-git.js";
 import { mergeReviewFindings, parseInitialReview, parseJudgeReview } from "../dist/core/review/review-parser.js";
+import { buildFixPrompt, buildInitialReviewPrompt, buildJudgePrompt } from "../dist/core/review/review-prompts.js";
 import { inferReviewTarget, ReviewService } from "../dist/core/review/review-service.js";
 import { configureReviewModels, getReviewModelOptions, parseReviewCommandArgs } from "../dist/cli/commands/review.js";
 
@@ -35,7 +36,7 @@ test("review config is normalized and stored without credentials", async () => {
 test("review config rejects missing engine models", () => {
   assert.throws(
     () => normalizeReviewConfig({ ...REVIEW_CONFIG, claude: { provider: "primary", model: "" } }),
-    /claude\.model cannot be empty/
+    /claude\.model 不能为空/
   );
 });
 
@@ -83,7 +84,8 @@ test("review model choices are separated by engine compatibility", () => {
   const cache = {
     providers: {
       primary: { status: "ok", models: ["gpt-5.6-sol", "claude-sonnet-4-6"], lastCheckedAt: "now", lastError: null },
-      "claude-only": { status: "ok", models: ["claude-opus-4-6"], lastCheckedAt: "now", lastError: null }
+      "claude-only": { status: "ok", models: ["claude-opus-4-6"], lastCheckedAt: "now", lastError: null },
+      "image-only": { status: "ok", models: ["gpt-image-2"], lastCheckedAt: "now", lastError: null }
     }
   };
   assert.deepEqual(getReviewModelOptions("codex", providers, cache).map((item) => item.provider.name), ["primary"]);
@@ -104,8 +106,8 @@ test("review setup interactively stores both models and the first engine", async
     const prompts = [];
     const config = await configureReviewModels(async (message, choices) => {
       prompts.push(message);
-      if (message === "Select the first review engine") return "claude";
-      if (message.startsWith("Select provider")) return "primary";
+      if (message === "选择首审引擎") return "claude";
+      if (message.includes("Provider")) return "primary";
       return choices[0].value;
     });
 
@@ -114,11 +116,11 @@ test("review setup interactively stores both models and the first engine", async
     assert.equal(config.claude.model, "claude-opus-4-6");
     assert.deepEqual(await readReviewConfig(), config);
     assert.deepEqual(prompts, [
-      "Select the first review engine",
-      "Select provider for codex",
-      "Select model for codex / primary",
-      "Select provider for claude",
-      "Select model for claude / primary"
+      "选择首审引擎",
+      "选择 Claude Code 的 Provider",
+      "选择 Claude Code / primary 的模型",
+      "选择 Codex 的 Provider",
+      "选择 Codex / primary 的模型"
     ]);
   });
 });
@@ -144,17 +146,60 @@ test("review agent builds sandboxed arguments and extracts responses", () => {
     engine: "claude",
     model: "claude-opus-4-6",
     mode: "workspaceWrite",
-    settingsPath: "/tmp/settings.json"
+    settingsPath: "/tmp/settings.json",
+    scopeFiles: ["src/a.ts"]
   });
   assert.ok(claudeArgs.includes("acceptEdits"));
-  assert.ok(claudeArgs.includes("Read,Grep,Glob,Edit,Write"));
+  assert.ok(claudeArgs.includes("Read,Edit,Write"));
+  assert.ok(claudeArgs.includes("Read(./AGENTS.md),Read(./CLAUDE.md),Read(./src/a.ts),Edit(./src/a.ts),Write(./src/a.ts)"));
+  assert.ok(claudeArgs.includes("--bare"));
+  assert.ok(claudeArgs.includes("--no-session-persistence"));
+  assert.ok(claudeArgs.includes("--disable-slash-commands"));
   assert.ok(!claudeArgs.includes("Bash"));
+
+  const unscopedClaudeArgs = buildReviewAgentArgs({
+    ...base,
+    engine: "claude",
+    model: "claude-opus-4-6",
+    mode: "workspaceWrite",
+    settingsPath: "/tmp/settings.json"
+  });
+  assert.ok(unscopedClaudeArgs.includes("Read"));
+  assert.ok(unscopedClaudeArgs.includes("Read(./AGENTS.md),Read(./CLAUDE.md)"));
+  assert.ok(!unscopedClaudeArgs.includes("Read,Edit,Write"));
 
   assert.equal(parseReviewAgentResponse("claude", '{"type":"result","result":"claude result"}\n'), "claude result");
   assert.equal(
     parseReviewAgentResponse("codex", '{"type":"item.completed","item":{"type":"agent_message","text":"codex result"}}\n'),
     "codex result"
   );
+});
+
+test("review agent summarizes structured failures without dumping Claude hooks", () => {
+  const hookEvent = JSON.stringify({
+    type: "system",
+    subtype: "hook_response",
+    output: "x".repeat(20_000)
+  });
+  const failureEvent = JSON.stringify({
+    type: "result",
+    is_error: true,
+    terminal_reason: "blocking_limit",
+    result: "Prompt is too long"
+  });
+  const message = formatReviewAgentFailure("claude", `${hookEvent}\n${failureEvent}`, "", 1);
+  assert.equal(message, "审阅模型执行失败：审阅内容过长，超出模型上下文限制；请缩小提交范围后重试。");
+  assert.doesNotMatch(message, /hook_response/);
+});
+
+test("review agent explains Claude context thrashing in Chinese", () => {
+  const message = formatReviewAgentFailure(
+    "claude",
+    JSON.stringify({ type: "error", message: "Autocompact is thrashing: the context refilled to the limit" }),
+    "",
+    1
+  );
+  assert.equal(message, "审阅模型执行失败：修复模型上下文在连续压缩后仍超出限制；已限制修复范围，请拆分问题后重试。");
 });
 
 test("review parser preserves model provenance and consensus", () => {
@@ -178,6 +223,76 @@ test("review parser preserves model provenance and consensus", () => {
   assert.deepEqual(findings[0].sources.map((source) => source.engine), ["codex", "claude"]);
 });
 
+test("judge prompt hands the complete first review report to the second model", () => {
+  const initialPrompt = buildInitialReviewPrompt({
+    request: "review concurrency",
+    commit: "a".repeat(40),
+    commitText: "diff --git a/src/a.ts b/src/a.ts"
+  });
+  assert.match(initialPrompt, /human-readable value in Simplified Chinese/);
+  assert.match(initialPrompt, /所有自然语言内容必须使用简体中文/);
+  assert.match(initialPrompt, /用简体中文写简短的总体结论/);
+
+  const prompt = buildJudgePrompt({
+    request: "review concurrency",
+    commit: "a".repeat(40),
+    commitText: "diff --git a/src/a.ts b/src/a.ts",
+    reviewer: { engine: "claude", provider: "primary", model: "claude-opus-4-6" },
+    initial: {
+      summary: "Claude found one concurrency risk.",
+      findings: [{
+        severity: "high",
+        title: "Race in stop",
+        file: "src/a.ts",
+        line: 12,
+        evidence: "stop can overlap start",
+        recommendation: "serialize lifecycle operations"
+      }]
+    }
+  });
+  assert.match(prompt, /required handoff/);
+  assert.match(prompt, /First reviewer report handed off for adjudication/);
+  assert.match(prompt, /Claude found one concurrency risk/);
+  assert.match(prompt, /Race in stop/);
+  assert.match(prompt, /exactly one .* assessment for every numbered first-review finding/);
+  assert.match(prompt, /human-readable value in Simplified Chinese/);
+  assert.match(prompt, /所有自然语言内容必须使用简体中文/);
+  assert.match(prompt, /用简体中文写验证依据/);
+});
+
+test("fix prompt constrains the fixing agent to selected files and local context", () => {
+  const prompt = buildFixPrompt({
+    request: "review concurrency",
+    commit: "a".repeat(40),
+    selected: [{
+      id: "R1-001",
+      severity: "medium",
+      title: "并发状态未失效",
+      file: "src/a.ts",
+      line: 120,
+      evidence: "旧回调可能影响新会话",
+      recommendation: "校验会话代次",
+      sources: [],
+      verdict: "agree",
+      verdictReason: "已确认",
+      consensus: true
+    }]
+  });
+  assert.match(prompt, /Allowed finding files:/);
+  assert.match(prompt, /src\/a\.ts/);
+  assert.match(prompt, /只能读取或修改下面列出的 finding 文件/);
+  assert.match(prompt, /前后最多 120 行/);
+  assert.match(prompt, /根目录 AGENTS\.md 或 CLAUDE\.md 仅在确有必要时读取/);
+});
+
+test("review parser uses Chinese fallback text", () => {
+  assert.equal(parseInitialReview(JSON.stringify({ findings: [] })).summary, "模型未提供总结。");
+  assert.equal(
+    parseJudgeReview(JSON.stringify({ assessments: [{ index: 1 }], findings: [] })).assessments[0].reason,
+    "模型未提供验证依据。"
+  );
+});
+
 test("local review git enforces a clean tree and creates a traceable local commit", async () => {
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-review-git-test-"));
   try {
@@ -195,7 +310,7 @@ test("local review git enforces a clean tree and creates a traceable local commi
     assert.match(await git.readCommit(repo, initial), /initial/);
 
     await fs.writeFile(path.join(repo, "value.txt"), "after\n", "utf8");
-    await assert.rejects(git.assertClean(repo), /requires a clean working tree/);
+    await assert.rejects(git.assertClean(repo), /审阅要求 Git 工作区干净/);
     const commit = await git.commitAll(repo, "fix(review): test", "Review-Round: 1\nReview-Findings: R1-001");
 
     assert.notEqual(commit, initial);
@@ -261,7 +376,11 @@ test("review service fixes selected consensus findings, commits, and swaps revie
       "claude:readOnly",
       "codex:readOnly"
     ]);
+    assert.deepEqual(calls[2].scopeFiles, ["src/a.ts"]);
     assert.equal(rounds.length, 2);
+    assert.match(calls[1].prompt, /First reviewer report handed off for adjudication/);
+    assert.match(calls[1].prompt, /found one/);
+    assert.match(calls[1].prompt, /Null crash/);
     assert.match(git.commitBody, /Review-Findings: R1-001/);
     assert.match(git.commitBody, /Review-Fixer: codex/);
   });

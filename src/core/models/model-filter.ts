@@ -5,6 +5,7 @@ export function isModelCompatible(tool: CliToolType, model: string): boolean {
   if (tool === "claude") {
     return value.includes("claude");
   }
+  if (isImageGenerationModel(value)) return false;
   return value.includes("gpt") || value.includes("codex") || value.includes("grok") || /^o\d/.test(value) || value.includes("openai");
 }
 
@@ -13,4 +14,8 @@ export function pickCompatibleModel(tool: CliToolType, preferredModel: string, m
     return preferredModel;
   }
   return models.find((model) => isModelCompatible(tool, model)) ?? null;
+}
+
+function isImageGenerationModel(value: string): boolean {
+  return /(^|[-_])images?([._-]|$)/.test(value);
 }

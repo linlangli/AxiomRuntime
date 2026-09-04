@@ -282,9 +282,11 @@ flowchart LR
 ```
 
 - `ReviewService` 只依赖 `ReviewAgentPort` 与 `ReviewGitPort`，CLI 只渲染进度和收集用户选择
-- `CliReviewAgent` 通过 Claude/Codex headless JSON stream 与同一个 execution-scoped Transport Proxy 执行；没有第二份 usage ledger
+- Review 配置先询问 `firstEngine`，再按首审引擎、另一个引擎的顺序选择缓存中的兼容 Provider/模型；图片生成模型不参与 Codex 候选
+- 第二模型收到首模型的完整结构化报告，逐条返回 `agree` / `disagree` / `uncertain`；双方模型的自然语言字段要求使用简体中文，文件路径、代码符号、Provider/模型名和状态码保留原样；第二模型新增的问题单独标记为尚未交叉验证
+- `CliReviewAgent` 通过 Claude/Codex headless JSON stream 与同一个 execution-scoped Transport Proxy 执行；Claude 使用 `--bare`、`--no-session-persistence` 和 `--disable-slash-commands` 跳过用户 Hook、插件、技能与会话写入，避免外部项目上下文污染；没有第二份 usage ledger
 - 首审与裁决使用只读权限；只有用户选择具体 finding 后才调用 `workspaceWrite`
-- Claude 修复适配器不开放 Bash；Codex 修复适配器固定 `workspace-write + approval=never`
+- 每个选中的 finding 都在独立修复会话中处理；Claude 修复适配器只开放 `Read`、`Edit`、`Write`，并把根目录 `AGENTS.md`、`CLAUDE.md`（仅只读）及该 finding 的文件作为 `Read(path)` / `Edit(path)` / `Write(path)` 白名单；提示要求按行号读取有限窗口，禁止全仓扫描和测试构建，避免修复会话触发上下文压缩循环；Codex 修复适配器固定 `workspace-write + approval=never`
 - Git adapter 在开始和每次修复前要求 clean worktree；模型不得拥有提交步骤，Runtime 检查 `HEAD` 未变化后才精确执行本地 commit
 - commit 带 `Review-Round`、`Review-Findings`、`Review-Fixer`、`Review-Judge` trailer，不执行 push
 - finding 合并是确定性的：第二模型 `agree` 才标为 `consensus`；`disagree`、`uncertain` 与第二模型新增问题仍显示来源，由用户决定

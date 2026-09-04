@@ -15,7 +15,7 @@ export class CliReviewAgent implements ReviewAgentPort {
     const { provider, model } = await resolveExactProviderForTool(request.engine, request.provider, request.model);
     const command = resolveToolCommand(request.engine);
     if (!command) {
-      throw new Error(`Failed to find ${request.engine} CLI. Run \`ai doctor\` to check local CLI installation.`);
+      throw new Error(`找不到 ${displayEngine(request.engine)} CLI，请运行 \`ai doctor\` 检查本地安装。`);
     }
 
     const usageProxy = await startOpenAiUsageProxy({
@@ -64,17 +64,21 @@ export class CliReviewAgent implements ReviewAgentPort {
       const result = await spawnCapture({ command, args, cwd: request.cwd, env, timeoutMs });
 
       if (result.timedOut) {
-        throw new Error(`${request.engine} review timed out after ${formatDuration(timeoutMs)}.`);
+        throw new Error(`${displayEngine(request.engine)} 审阅超过 ${formatDuration(timeoutMs)} 仍未完成，已超时。`);
       }
       if (result.aborted) {
-        throw new Error(`${request.engine} review was aborted.`);
+        throw new Error(`${displayEngine(request.engine)} 审阅已中止。`);
+      }
+      const structuredFailure = extractReviewFailure(request.engine, result.stdout, result.stderr);
+      if (structuredFailure) {
+        throw new Error(`审阅模型执行失败：${structuredFailure}`);
       }
       if (result.code !== 0) {
-        throw new Error(formatAgentFailure(request.engine, result.stdout, result.stderr, result.code));
+        throw new Error(formatReviewAgentFailure(request.engine, result.stdout, result.stderr, result.code));
       }
       const response = parseReviewAgentResponse(request.engine, result.stdout);
       if (!response.trim()) {
-        throw new Error(`${request.engine} review completed without a response.`);
+        throw new Error(`${displayEngine(request.engine)} 审阅结束但没有返回内容。`);
       }
       await recordProviderRuntimeSuccess(provider.name);
       return { engine: request.engine, provider: provider.name, model, response };
@@ -93,12 +97,17 @@ export function buildReviewAgentArgs(input: ReviewAgentRequest & {
   settingsPath: string | null;
 }): string[] {
   if (input.engine === "claude") {
-    const allowedTools = input.mode === "readOnly"
+    const allowedTools = buildClaudeAllowedTools(input);
+    const availableTools = input.mode === "readOnly"
       ? "Read,Grep,Glob"
-      : "Read,Grep,Glob,Edit,Write";
+      : input.scopeFiles?.length
+        ? "Read,Edit,Write"
+        : "Read";
     return [
       "-p",
       input.prompt,
+      "--bare",
+      "--no-session-persistence",
       "--output-format",
       "stream-json",
       "--verbose",
@@ -108,8 +117,11 @@ export function buildReviewAgentArgs(input: ReviewAgentRequest & {
       input.settingsPath ?? "",
       "--permission-mode",
       input.mode === "readOnly" ? "default" : "acceptEdits",
+      "--tools",
+      availableTools,
       "--allowedTools",
       allowedTools,
+      "--disable-slash-commands",
       "--max-budget-usd",
       "20"
     ].filter(Boolean);
@@ -161,10 +173,94 @@ export function parseReviewAgentResponse(engine: ReviewAgentRequest["engine"], r
   return response.trim() || stripAnsi(raw).trim();
 }
 
-function formatAgentFailure(engine: ReviewAgentRequest["engine"], stdout: string, stderr: string, code: number | null): string {
+export function formatReviewAgentFailure(engine: ReviewAgentRequest["engine"], stdout: string, stderr: string, code: number | null): string {
+  const structuredFailure = extractReviewFailure(engine, stdout, stderr);
+  if (structuredFailure) return `审阅模型执行失败：${structuredFailure}`;
+
   const text = stripAnsi([stderr, stdout].filter((value) => value.trim()).join("\n")).trim();
-  const tail = text.split(/\r?\n/).filter(Boolean).slice(-12).join("\n");
-  return tail || `${engine} exited with code ${code ?? "unknown"}.`;
+  const tail = text
+    .split(/\r?\n/)
+    .filter((line) => line.trim() && !isHookDiagnostic(line))
+    .map((line) => line.length > 1000 ? `${line.slice(0, 1000)}…` : line)
+    .slice(-8)
+    .join("\n");
+  return tail ? `审阅模型执行失败：\n${tail}` : `${displayEngine(engine)} 进程异常退出（退出码：${code ?? "未知"}）。`;
+}
+
+function extractReviewFailure(engine: ReviewAgentRequest["engine"], stdout: string, stderr: string): string | null {
+  const events = [...extractJsonLines(stdout), ...extractJsonLines(stderr)];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (!isRecord(event)) continue;
+    const type = typeof event.type === "string" ? event.type : "";
+    const terminalReason = typeof event.terminal_reason === "string" ? event.terminal_reason : "";
+    const isFailure = event.is_error === true
+      || type === "error"
+      || type.endsWith(".failed")
+      || terminalReason === "blocking_limit";
+    if (!isFailure) continue;
+
+    const message = readFailureMessage(event);
+    if (message) return normalizeFailureMessage(message);
+  }
+  if (engine === "claude" && /prompt is too long/i.test(`${stdout}\n${stderr}`)) {
+    return normalizeFailureMessage("Prompt is too long");
+  }
+  return null;
+}
+
+function readFailureMessage(event: Record<string, unknown>): string | null {
+  for (const value of [event.result, event.message, event.error, event.detail]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (isRecord(value)) {
+      for (const nested of [value.message, value.error, value.detail]) {
+        if (typeof nested === "string" && nested.trim()) return nested.trim();
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeFailureMessage(message: string): string {
+  if (/prompt is too long/i.test(message)) {
+    return "审阅内容过长，超出模型上下文限制；请缩小提交范围后重试。";
+  }
+  if (/autocompact is thrashing|context refilled to the limit/i.test(message)) {
+    return "修复模型上下文在连续压缩后仍超出限制；已限制修复范围，请拆分问题后重试。";
+  }
+  return message.length > 2000 ? `${message.slice(0, 2000)}…` : message;
+}
+
+function buildClaudeAllowedTools(input: ReviewAgentRequest): string {
+  if (input.mode === "readOnly") {
+    return "Read,Grep,Glob";
+  }
+  if (!input.scopeFiles?.length) {
+    return "Read(./AGENTS.md),Read(./CLAUDE.md)";
+  }
+  const paths = new Set(["AGENTS.md", "CLAUDE.md", ...input.scopeFiles]);
+  const tools: string[] = [];
+  for (const file of paths) {
+    const scopedPath = `./${file.replace(/^\.\//, "")}`;
+    tools.push(`Read(${scopedPath})`);
+    if (file !== "AGENTS.md" && file !== "CLAUDE.md") {
+      tools.push(`Edit(${scopedPath})`, `Write(${scopedPath})`);
+    }
+  }
+  return tools.join(",");
+}
+
+function isHookDiagnostic(line: string): boolean {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    return isRecord(parsed) && parsed.type === "system" && parsed.subtype === "hook_response";
+  } catch {
+    return false;
+  }
+}
+
+function displayEngine(engine: ReviewAgentRequest["engine"]): string {
+  return engine === "claude" ? "Claude Code" : "Codex";
 }
 
 function readReviewTimeout(): number {
@@ -173,7 +269,7 @@ function readReviewTimeout(): number {
 }
 
 function formatDuration(milliseconds: number): string {
-  return `${Math.ceil(milliseconds / 60_000)} minute(s)`;
+  return `${Math.ceil(milliseconds / 60_000)} 分钟`;
 }
 
 function tomlString(value: string): string {

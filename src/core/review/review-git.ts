@@ -14,9 +14,9 @@ export class LocalReviewGit implements ReviewGitPort {
     const status = await this.readStatus(cwd);
     if (status.trim()) {
       throw new Error([
-        "Review requires a clean working tree so automatic commits cannot include unrelated changes.",
+        "审阅要求 Git 工作区干净，以免自动提交包含无关改动。",
         status,
-        "Commit, stash, or discard these changes before running `ai review`."
+        "请在运行 `ai review` 前提交、暂存或丢弃这些改动。"
       ].join("\n"));
     }
   }
@@ -25,7 +25,7 @@ export class LocalReviewGit implements ReviewGitPort {
     try {
       return (await runGit(cwd, ["rev-parse", "--verify", `${target}^{commit}`])).trim();
     } catch {
-      throw new Error(`Git commit or ref not found: ${target}`);
+      throw new Error(`找不到 Git commit 或 ref：${target}`);
     }
   }
 
@@ -43,7 +43,7 @@ export class LocalReviewGit implements ReviewGitPort {
       ], MAX_COMMIT_BYTES);
     } catch (error) {
       if (isMaxBufferError(error)) {
-        throw new Error(`Commit ${commit.slice(0, 12)} is too large for automated review (limit ${MAX_COMMIT_BYTES} bytes).`);
+        throw new Error(`提交 ${commit.slice(0, 12)} 过大，无法自动审阅（上限 ${MAX_COMMIT_BYTES} 字节）。`);
       }
       throw error;
     }
@@ -56,7 +56,7 @@ export class LocalReviewGit implements ReviewGitPort {
   async commitAll(cwd: string, subject: string, body: string): Promise<string> {
     const status = await this.readStatus(cwd);
     if (!status.trim()) {
-      throw new Error("The fixing model did not change any files.");
+      throw new Error("修复模型没有修改任何文件。");
     }
     await runGit(cwd, ["diff", "--check"]);
     await runGit(cwd, ["add", "--all"]);

@@ -681,12 +681,14 @@ ai review config
 ai review config show
 ai review reset</pre>
                 <ul>
-                  <li>第一次运行先选择首审引擎，再分别选择 Codex 与 Claude Code 的 Provider 和模型；配置只保存名称，不保存 API Key。</li>
-                  <li>首审模型输出问题，第二模型逐条给出 <code>agree</code>、<code>disagree</code> 或 <code>uncertain</code>，并可补充遗漏。</li>
+                  <li>第一次运行先选择首审引擎，再按首审顺序选择两个引擎的 Provider 和模型；候选只包含对应引擎兼容的缓存模型，配置只保存名称，不保存 API Key。</li>
+                  <li>Runtime 会把首审模型的完整结构化报告（总结和 findings）交给第二模型；两个模型的总结、问题标题、证据、修复建议和裁决理由均要求使用简体中文，文件路径、代码符号、Provider/模型名和状态码保留原样；第二模型逐条给出 <code>agree</code>、<code>disagree</code> 或 <code>uncertain</code>，并可补充遗漏。</li>
                   <li>每条问题显示 <code>R1-001</code> 形式的编号、严重度、文件位置、证据、修复建议和具体模型来源；双方同意时标记 <code>CONSENSUS</code>。</li>
                   <li>用户可只修复共识问题、修复全部、按编号多选，或选择放弃立即结束。没有问题时自动结束。</li>
                   <li>修复模型只处理所选问题；Runtime 随后创建本地 commit，交换两个模型角色并继续审阅新 commit。</li>
-                  <li>工作区必须干净。审阅阶段只读；Claude 修复不开放 Bash，Codex 修复固定使用 <code>workspace-write</code> sandbox 和 <code>approval=never</code>。</li>
+                  <li>终端输出会分开显示首审问题的裁决结果，以及第二模型新增的尚未交叉验证问题。</li>
+                  <li>工作区必须干净。审阅阶段允许只读检查；每个选中的 finding 都单独启动修复会话。Claude 审阅使用 <code>--bare</code>、<code>--no-session-persistence</code> 和 <code>--disable-slash-commands</code> 跳过用户 Hook、插件、技能和会话持久化，修复时不开放 Bash，并且只允许 <code>Read</code>/<code>Edit</code>/<code>Write</code> 访问当前问题文件，根目录 <code>AGENTS.md</code>/<code>CLAUDE.md</code> 仅可只读、按行号读取有限上下文；Codex 修复固定使用 <code>workspace-write</code> sandbox 和 <code>approval=never</code>。</li>
+                  <li>如果修复模型提示上下文连续压缩失败，Runtime 会保留工作区改动并停止流程；请检查当前 diff 后拆分问题重新运行，不会自动 reset 或丢弃文件。</li>
                   <li>模型不得自行修改 Git 历史；Runtime 检测意外的 <code>HEAD</code> 变化。自动提交记录轮次、finding IDs 与模型来源，永不自动 push。</li>
                   <li>进程中断时不自动 reset 或丢弃修改；先人工检查工作区。Review 尚未提供跨进程 checkpoint 恢复。</li>
                   <li>每次模型调用默认最多等待 20 分钟，可用 <code>AI_GATEWAY_REVIEW_TIMEOUT_MS</code> 调整。</li>

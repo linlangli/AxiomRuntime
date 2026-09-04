@@ -21,7 +21,7 @@ export async function clearReviewConfig(): Promise<void> {
 
 export function normalizeReviewConfig(value: unknown): ReviewConfig {
   if (!isRecord(value)) {
-    throw new Error("review.json must contain a JSON object.");
+    throw new Error("review.json 必须是 JSON 对象。");
   }
   const firstEngine = normalizeEngine(value.firstEngine);
   return {
@@ -34,12 +34,12 @@ export function normalizeReviewConfig(value: unknown): ReviewConfig {
 
 function normalizeEngine(value: unknown): ReviewEngineName {
   if (value === "claude" || value === "codex") return value;
-  throw new Error("review.json firstEngine must be claude or codex.");
+  throw new Error("review.json 的 firstEngine 必须是 claude 或 codex。");
 }
 
 function normalizeEngineConfig(value: unknown, engine: ReviewEngineName): ReviewEngineConfig {
   if (!isRecord(value)) {
-    throw new Error(`review.json ${engine} config is missing.`);
+    throw new Error(`review.json 缺少 ${engine} 配置。`);
   }
   const provider = readNonEmptyString(value.provider, `${engine}.provider`);
   const model = readNonEmptyString(value.model, `${engine}.model`);
@@ -48,7 +48,7 @@ function normalizeEngineConfig(value: unknown, engine: ReviewEngineName): Review
 
 function readNonEmptyString(value: unknown, field: string): string {
   const text = typeof value === "string" ? value.trim() : "";
-  if (!text) throw new Error(`review.json ${field} cannot be empty.`);
+  if (!text) throw new Error(`review.json 的 ${field} 不能为空。`);
   return text;
 }
 

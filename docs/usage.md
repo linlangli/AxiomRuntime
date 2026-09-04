@@ -199,7 +199,7 @@ ai review --commit abc1234 "重点检查并发安全和资源泄漏"
 ai review                         # 交互输入审阅要求，默认审 HEAD
 ```
 
-第一次运行时会进入模型设置流程：选择首审引擎，再分别为 Codex 和 Claude Code 选择 Provider 与模型。配置保存在 `~/.ai-gateway/review.json`，只含 Provider 名和模型名，不保存 API Key。
+第一次运行时会进入模型设置流程：先选择首审引擎，再为首审引擎、另一个引擎依次选择 Provider 与模型。候选只来自模型缓存中与对应引擎兼容的模型，图片生成模型不会出现在 Codex 候选中。配置保存在 `~/.ai-gateway/review.json`，只含 Provider 名和模型名，不保存 API Key。
 
 ```bash
 ai review config                 # 重新选择首审顺序、Provider 和模型
@@ -210,7 +210,7 @@ ai review reset                  # 清除审阅配置
 每轮流程：
 
 1. 首审模型只读检查目标 commit，输出带严重级别、文件、行号、证据和修复建议的问题。
-2. 第二个模型独立验证每条问题，可以同意、反对、不确定或补充遗漏。
+2. Runtime 将首审模型的完整结构化报告（总结 + findings）交给第二个模型；第二个模型可用只读方式检查仓库，逐条验证，可以同意、反对、不确定或补充遗漏。两个模型的总结、问题标题、证据、修复建议和裁决理由均要求使用简体中文；文件路径、代码符号、Provider/模型名和状态码保留原样。
 3. Runtime 为问题分配 `R1-001` 形式的稳定编号，并显示具体 Provider/模型来源；双方同意的条目标记为 `CONSENSUS`。
 4. 你可以选择只修复双方共识、修复全部、按编号多选，或放弃并立即结束。
 5. 首审模型只修改所选问题。Runtime 检查改动后创建本地 commit，然后交换两个模型的角色，让另一个模型审阅新 commit。
@@ -219,7 +219,8 @@ ai review reset                  # 清除审阅配置
 安全与失败边界：
 
 - 开始审阅以及每次修复前都要求 Git 工作区干净，防止自动提交混入原有改动。
-- 审阅阶段是只读；修复阶段只给受限工作区写权限。Claude Code 不获得 Bash，Codex 使用 `workspace-write` sandbox 和 `approval=never`。
+- 审阅阶段是只读；修复阶段只给受限工作区写权限，并为每个选中的 finding 单独启动修复会话。Claude Code 不获得 Bash，并使用 `--bare`、`--no-session-persistence` 和 `--disable-slash-commands` 跳过用户 Hook、插件、技能和会话持久化；修复时只允许 `Read`、`Edit`、`Write` 访问当前问题对应的文件，根目录 `AGENTS.md`/`CLAUDE.md` 仅可只读，按行号读取有限上下文，不扫描整个仓库；Codex 使用 `workspace-write` sandbox 和 `approval=never`。
+- 如果修复模型仍提示上下文连续压缩失败，Runtime 会保留工作区改动并停止流程；请检查当前 diff 后拆分问题重新运行，不会自动 reset 或丢弃文件。
 - 模型不得自行 commit、amend、reset、stash 或 push；Runtime 会检测意外的 HEAD 变化并停止。
 - 自动提交只发生在本地，提交信息会记录轮次、问题 ID 和两个模型；**永不自动 push**。
 - Git diff 超过约 1.5 MB 会拒绝自动审阅。中断或失败后不会丢弃已有修改，也不会自动重置，请先人工检查再继续。

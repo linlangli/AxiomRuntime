@@ -33,7 +33,7 @@ export type ParsedJudgeReview = ParsedInitialReview & {
 export function parseInitialReview(response: string): ParsedInitialReview {
   const payload = readJsonObject(response);
   return {
-    summary: readText(payload.summary, "No summary provided."),
+    summary: readText(payload.summary, "模型未提供总结。"),
     findings: readFindings(payload.findings)
   };
 }
@@ -44,7 +44,7 @@ export function parseJudgeReview(response: string): ParsedJudgeReview {
     ? payload.assessments.flatMap((value) => normalizeAssessment(value))
     : [];
   return {
-    summary: readText(payload.summary, "No summary provided."),
+    summary: readText(payload.summary, "模型未提供裁决总结。"),
     findings: readFindings(payload.findings),
     assessments
   };
@@ -69,7 +69,7 @@ export function mergeReviewFindings(input: {
       ...finding,
       sources: verdict === "agree" ? [reviewerSource, judgeSource] : [reviewerSource],
       verdict,
-      verdictReason: assessment?.reason ?? "The second model did not return a verdict for this finding.",
+      verdictReason: assessment?.reason ?? "第二模型未返回该问题的裁决。",
       consensus: verdict === "agree"
     });
   });
@@ -80,7 +80,7 @@ export function mergeReviewFindings(input: {
       ...finding,
       sources: [judgeSource],
       verdict: "unverified",
-      verdictReason: "New finding added by the second model; it has not been cross-checked yet.",
+      verdictReason: "该问题由第二模型新增，尚未完成交叉验证。",
       consensus: false
     });
   }
@@ -116,7 +116,7 @@ function normalizeAssessment(value: unknown): ParsedAssessment[] {
   const verdict = value.verdict === "agree" || value.verdict === "disagree" || value.verdict === "uncertain"
     ? value.verdict
     : "uncertain";
-  return [{ index, verdict, reason: readText(value.reason, "No reason provided.").slice(0, 2000) }];
+  return [{ index, verdict, reason: readText(value.reason, "模型未提供验证依据。").slice(0, 2000) }];
 }
 
 function normalizeSeverity(value: unknown): ReviewSeverity {
@@ -138,7 +138,7 @@ function readJsonObject(response: string): Record<string, unknown> {
       // Try the next representation.
     }
   }
-  throw new Error("Review model returned invalid structured JSON. Run the review again.");
+  throw new Error("审阅模型未返回有效的结构化 JSON，请重新运行审阅。");
 }
 
 function extractFirstObject(value: string): string | null {

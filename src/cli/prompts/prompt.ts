@@ -1,6 +1,11 @@
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
+export type PromptSelectOptions = {
+  inputLabel?: string;
+  invalidInputMessage?: (choiceCount: number) => string;
+};
+
 export async function promptText(message: string, options: { defaultValue?: string; secret?: boolean } = {}): Promise<string> {
   const rl = readline.createInterface({ input, output });
   try {
@@ -21,7 +26,8 @@ export async function promptConfirm(message: string, defaultValue = false): Prom
 
 export async function promptSelect<T extends string | number>(
   message: string,
-  choices: Array<{ label: string; value: T }>
+  choices: Array<{ label: string; value: T }>,
+  options: PromptSelectOptions = {}
 ): Promise<T> {
   if (!choices.length) {
     throw new Error(`No choices available for: ${message}`);
@@ -33,11 +39,11 @@ export async function promptSelect<T extends string | number>(
   });
 
   while (true) {
-    const raw = await promptText("Select");
+    const raw = await promptText(options.inputLabel ?? "Select");
     const index = Number(raw);
     if (Number.isInteger(index) && index >= 1 && index <= choices.length) {
       return choices[index - 1]!.value;
     }
-    console.log(`Please enter a number between 1 and ${choices.length}.`);
+    console.log(options.invalidInputMessage?.(choices.length) ?? `Please enter a number between 1 and ${choices.length}.`);
   }
 }

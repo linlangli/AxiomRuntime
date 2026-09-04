@@ -70,6 +70,7 @@ export type ReviewAgentRequest = ReviewSource & {
   cwd: string;
   prompt: string;
   mode: ReviewAgentMode;
+  scopeFiles?: string[];
 };
 
 export type ReviewAgentResult = ReviewSource & {

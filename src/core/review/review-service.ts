@@ -1,4 +1,5 @@
 import { writeLog } from "../logs/log-service.js";
+import path from "node:path";
 import { buildFixPrompt, buildInitialReviewPrompt, buildJudgePrompt } from "./review-prompts.js";
 import { mergeReviewFindings, parseInitialReview, parseJudgeReview } from "./review-parser.js";
 import type {
@@ -32,7 +33,7 @@ export class ReviewService {
       const reviewer = sourceFor(input.config, reviewerEngine);
       const judge = sourceFor(input.config, judgeEngine);
       const commitText = await this.git.readCommit(root, targetCommit);
-      await callbacks.onStage?.(`Round ${roundNumber}: ${formatSource(reviewer)} is reviewing ${targetCommit.slice(0, 12)}.`);
+      await callbacks.onStage?.(`第 ${roundNumber} 轮：${formatDisplaySource(reviewer)} 正在审阅提交 ${targetCommit.slice(0, 12)}。`);
       const initialResult = await this.agent.execute({
         ...reviewer,
         cwd: root,
@@ -41,7 +42,7 @@ export class ReviewService {
       });
       const initial = parseInitialReview(initialResult.response);
 
-      await callbacks.onStage?.(`Round ${roundNumber}: ${formatSource(judge)} is validating the first review.`);
+      await callbacks.onStage?.(`第 ${roundNumber} 轮：${formatDisplaySource(judge)} 正在裁决 ${formatDisplaySource(reviewer)} 的首审报告。`);
       const judgeResult = await this.agent.execute({
         ...judge,
         cwd: root,
@@ -69,36 +70,39 @@ export class ReviewService {
       await writeReviewRoundLog(reviewRound);
 
       if (!reviewRound.findings.length) {
-        await callbacks.onStage?.("Both review passes completed without actionable findings.");
+        await callbacks.onStage?.("两轮审阅均未发现需要处理的问题。");
         return { status: "clean", rounds, commits };
       }
 
       const selection = await callbacks.selectFindings(reviewRound);
       if (selection.action === "abandon") {
-        await callbacks.onStage?.("Review stopped by user. No additional changes were made.");
+        await callbacks.onStage?.("审阅已由用户停止，未做其他修改。");
         return { status: "abandoned", rounds, commits };
       }
       const selected = reviewRound.findings.filter((finding) => selection.findingIds.includes(finding.id));
       if (!selected.length) {
-        throw new Error("No valid review findings were selected.");
+        throw new Error("没有选择有效的审阅问题。");
       }
 
       await this.git.assertClean(root);
       const headBeforeFix = await this.git.resolveCommit(root, "HEAD");
-      await callbacks.onStage?.(`Round ${roundNumber}: ${formatSource(reviewer)} is applying ${selected.length} selected finding(s).`);
-      await this.agent.execute({
-        ...reviewer,
-        cwd: root,
-        mode: "workspaceWrite",
-        prompt: buildFixPrompt({ request: input.request, commit: targetCommit, selected })
-      });
-      const headAfterFix = await this.git.resolveCommit(root, "HEAD");
-      if (headAfterFix !== headBeforeFix) {
-        throw new Error("The fixing model created a Git commit unexpectedly. Review the repository manually before continuing.");
+      for (const finding of selected) {
+        await callbacks.onStage?.(`第 ${roundNumber} 轮：${formatDisplaySource(reviewer)} 正在处理问题 ${finding.id}。`);
+        await this.agent.execute({
+          ...reviewer,
+          cwd: root,
+          mode: "workspaceWrite",
+          scopeFiles: collectFixScopeFiles(root, [finding]),
+          prompt: buildFixPrompt({ request: input.request, commit: targetCommit, selected: [finding] })
+        });
+        const headAfterFinding = await this.git.resolveCommit(root, "HEAD");
+        if (headAfterFinding !== headBeforeFix) {
+          throw new Error("修复模型意外创建了 Git 提交，请人工检查仓库后再继续。");
+        }
       }
       const status = await this.git.readStatus(root);
       if (!status.trim()) {
-        await callbacks.onStage?.("The fixing model made no file changes; the review loop stopped without a commit.");
+        await callbacks.onStage?.("修复模型没有修改文件，审阅循环已停止且未创建提交。");
         return { status: "no_changes", rounds, commits };
       }
 
@@ -108,11 +112,25 @@ export class ReviewService {
         buildCommitBody(reviewRound, selected.map((finding) => finding.id))
       );
       commits.push(commit);
-      await callbacks.onStage?.(`Created ${commit.slice(0, 12)}. The other model will review this commit next.`);
+      await callbacks.onStage?.(`已创建提交 ${commit.slice(0, 12)}。下一轮将由另一个模型审阅该提交。`);
       targetCommit = commit;
       [reviewerEngine, judgeEngine] = [judgeEngine, reviewerEngine];
     }
   }
+}
+
+function collectFixScopeFiles(root: string, findings: ReviewRound["findings"]): string[] {
+  const files = new Set<string>();
+  for (const finding of findings) {
+    if (!finding.file) continue;
+    const candidate = finding.file.trim().replaceAll("\\", "/");
+    if (!candidate || candidate.includes("\0") || path.isAbsolute(candidate) || candidate.startsWith("/") || /^[A-Za-z]:\//.test(candidate)) continue;
+    const absolute = path.resolve(root, candidate);
+    const relative = path.relative(root, absolute);
+    if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+    files.add(relative.split(path.sep).join("/"));
+  }
+  return [...files];
 }
 
 export function inferReviewTarget(request: string): string {
@@ -139,6 +157,10 @@ function otherEngine(engine: ReviewEngineName): ReviewEngineName {
 
 function formatSource(source: ReviewSource): string {
   return `${source.engine} ${source.provider}/${source.model}`;
+}
+
+function formatDisplaySource(source: ReviewSource): string {
+  return `${source.engine === "claude" ? "Claude Code" : "Codex"} ${source.provider}/${source.model}`;
 }
 
 function buildCommitBody(round: ReviewRound, findingIds: string[]): string {
