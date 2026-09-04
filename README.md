@@ -143,6 +143,15 @@ ai report
 ai doctor
 ```
 
+### Codex App 持久切换
+
+`ai set codex` 用于持久切换 Codex App 的 ChatGPT 账号、Provider、模型或 HTTP proxy：
+
+- Provider 和模型写入 Codex 的 `config.toml`，凭证写入 `auth.json`，两个文件使用原子替换，失败会回滚。
+- 原有 project、MCP、plugin 等无关配置会保留；当前 Shell 的环境变量不会被修改。
+- macOS 上成功后会自动重启 `Codex.app` 或 `ChatGPT.app`，并清理重启进程继承的 `OPENAI_API_KEY`，避免旧凭证覆盖刚选择的 Provider。
+- 找不到桌面应用或使用其他操作系统时，配置仍会生效，但需要手动重启 Codex 客户端。
+
 ## 配置文件
 
 默认从全局配置目录读取：
