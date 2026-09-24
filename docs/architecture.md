@@ -291,7 +291,7 @@ flowchart TD
 | **目标传输代理** | Usage Proxy **原位演进**为单一 Transport Proxy；UsageObserver 与 MemoryExtension 共用 listener | 保留 usage/compat 能力，避免双代理、环境变量回环、重复解析 |
 | **成熟能力复用** | 自研 Runtime/Evidence/Policy/Capability 控制面；抽取/检索/向量/图/队列/策略求值走可替换 adapter | 保留产品差异化，避免重建通用问题 |
 
-🟢 `ai proxy` 的控制面配置保存在 `runtime.json`。`core/network` 负责把分离的 host/port、裸 `host:port` 或完整 URL 规范成同一 HTTP(S) origin，并将代理应用于 Runtime 的全局出站 dispatcher。CLI 子进程继承大小写 HTTP(S)/ALL proxy 变量，同时强制保留本地回环地址于 `NO_PROXY`，因此 execution-scoped Transport Proxy 仍是每次执行唯一的数据面入口。Telegram 可拥有独立 `proxyUrl`，但复用同一规范化规则；Surface 只负责采集输入。
+🟢 `ai proxy` 的控制面配置保存在 `runtime.json`。`core/network` 负责把分离的 host/port、裸 `host:port` 或完整 URL 规范成同一 HTTP(S) origin，并在提交前用零 Token TCP 检查验证代理端点；失败不得覆盖旧配置。配置应用于 Runtime 的全局出站 dispatcher。CLI 子进程继承大小写 HTTP(S)/ALL proxy 变量，同时强制保留本地回环地址于 `NO_PROXY`，因此 execution-scoped Transport Proxy 仍是每次执行唯一的数据面入口。Telegram 可拥有独立 `proxyUrl`，复用同一规范化与端点检查，并额外通过候选代理调用 `getMe` 完成端到端验证；Surface 负责显示当前状态、采集编辑/关闭决策与渲染检查结果。
 
 ### 自研 vs 复用的边界
 

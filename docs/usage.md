@@ -211,10 +211,10 @@ ai proxy                              # 交互输入代理主机/IP与端口
 ai proxy 127.0.0.1 8081               # 自动补全为 http://127.0.0.1:8081
 ai proxy 127.0.0.1:8081               # 兼容 host:port
 ai proxy http://127.0.0.1:8081        # 兼容完整 URL
-ai proxy off                          # 清除
+ai proxy --disable                    # 非交互清除
 ```
 
-配置写入 `~/.ai-gateway/runtime.json`。之后 AxiomRuntime 的 Provider 探测、状态检查等网络请求，以及通过 `ai use` 启动的 Claude Code / Codex 都使用该代理。子 CLI 仍先连接本次执行的本地 Transport Proxy，Runtime 会自动把 `127.0.0.1`、`localhost` 和 `::1` 加入 `NO_PROXY`，避免代理回环。
+已有代理时，交互命令会先显示当前地址，再提供 `Edit proxy`、`Disable proxy`、`Cancel` 三个选项，不再通过输入 `off` 关闭。新增或编辑会先做一次零 Token 的代理 host/port TCP 连通检查；失败时显示原因并保留原配置。配置成功后写入 `~/.ai-gateway/runtime.json`。之后 AxiomRuntime 的 Provider 探测、状态检查等网络请求，以及通过 `ai use` 启动的 Claude Code / Codex 都使用该代理。子 CLI 仍先连接本次执行的本地 Transport Proxy，Runtime 会自动把 `127.0.0.1`、`localhost` 和 `::1` 加入 `NO_PROXY`，避免代理回环。
 
 `ai proxy` 不修改 `~/.claude`、`~/.codex` 或原生命令的永久配置；直接运行 `claude` / `codex` 不受影响。需要持久修改 Codex App 时，继续使用后文的 `ai set codex proxy`。
 
@@ -362,7 +362,7 @@ ai telegram config set defaultCwd /workspace/ops --bot ops
 | 执行命令 | `/terminal <命令>` 在工作目录执行，最长 60 秒，高风险命令仍需确认 |
 | 费用 | `/usage` 优先用服务商返回的 cost，只有 token 时按 `model-pricing.json` 估算 |
 
-**代理**：本机连不上 `api.telegram.org` 时，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。交互新增或编辑 Bot 时会分别询问主机/IP与端口；输入 `127.0.0.1` 和 `8081` 会自动保存为 `http://127.0.0.1:8081`。旧的 `host:port` 和完整 URL 仍兼容。
+**代理**：本机连不上 `api.telegram.org` 时，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。交互新增或编辑 Bot 时会分别询问主机/IP与端口；输入 `127.0.0.1` 和 `8081` 会自动保存为 `http://127.0.0.1:8081`。已有代理会先显示当前地址并提供编辑、关闭和取消选项；新地址会先做零 Token 端点连通检查，再通过该代理调用 Telegram `getMe`。失败时提示并回退：新增 Bot 不保存代理，编辑已有 Bot 则保留旧代理。旧的 `host:port` 和完整 URL 仍兼容。
 
 **多 Bot 隔离**：每个 Bot 的配置、PID、日志、会话分别存在 `~/.ai-gateway/telegram/bots/<name>.json|.pid|.log|.sqlite`。在某个 Bot 里改服务商只影响它自己。
 

@@ -168,10 +168,10 @@ ai image <provider> <model> "数字插画"
 ai proxy                                      # 交互输入主机/IP与端口
 ai proxy 127.0.0.1 8081                       # 自动补为 http://127.0.0.1:8081
 ai proxy http://127.0.0.1:8081                # 也兼容完整 URL
-ai proxy off                                  # 清除
+ai proxy --disable                            # 非交互清除
 ```
 
-该代理保存在 `~/.ai-gateway/runtime.json`，用于 AxiomRuntime 自身请求，以及通过 `ai use` 启动的 Claude Code / Codex。它不会修改两个原生 CLI 的永久配置；本地 execution-scoped Transport Proxy 会自动加入 `NO_PROXY`，避免代理回环。
+已有代理时，`ai proxy` 会先显示当前地址，再提供编辑、关闭和取消选项。新增或编辑会先做一次不消耗模型 Token 的代理端点连接检查；连接失败时显示原因并保留原配置。该代理保存在 `~/.ai-gateway/runtime.json`，用于 AxiomRuntime 自身请求，以及通过 `ai use` 启动的 Claude Code / Codex。它不会修改两个原生 CLI 的永久配置；本地 execution-scoped Transport Proxy 会自动加入 `NO_PROXY`，避免代理回环。
 
 ### Codex App 的持久配置
 
@@ -207,7 +207,7 @@ ai telegram stop --bot ops
 ai telegram delete --bot ops
 ```
 
-Bot 中可使用 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/provider`、`/usage`、`/remember`、`/forget`、`/memories`、`/pin`、`/unpin`、`/terminal`、`/restart` 和 `/help`。如果本机无法直连 Telegram API，可在新增或编辑 Bot 时按提示分别输入代理主机/IP与端口；也兼容直接设置完整地址：
+Bot 中可使用 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/provider`、`/usage`、`/remember`、`/forget`、`/memories`、`/pin`、`/unpin`、`/terminal`、`/restart` 和 `/help`。如果本机无法直连 Telegram API，可在新增或编辑 Bot 时按提示分别输入代理主机/IP与端口；已有代理会显示编辑、关闭和取消选项。新地址会依次检查代理端点和 Telegram `getMe`，失败时回退原配置，也兼容直接设置完整地址：
 
 ```bash
 ai telegram config set proxyUrl http://127.0.0.1:7890 --bot ops

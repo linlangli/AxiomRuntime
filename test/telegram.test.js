@@ -87,13 +87,34 @@ test("proxy prompt collects host and port separately", async () => {
   const prompts = [];
   const answers = ["127.0.0.1", "8081"];
   const proxyUrl = await promptProxyUrl({
-    text: async (message) => {
-      prompts.push(message);
+    text: async (message, options) => {
+      prompts.push({ message, defaultValue: options?.defaultValue });
       return answers.shift() ?? "";
     }
   });
-  assert.deepEqual(prompts, [PROXY_HOST_PROMPT, PROXY_PORT_PROMPT]);
+  assert.deepEqual(prompts, [
+    { message: PROXY_HOST_PROMPT, defaultValue: undefined },
+    { message: PROXY_PORT_PROMPT, defaultValue: undefined }
+  ]);
   assert.equal(proxyUrl, "http://127.0.0.1:8081");
+
+  const currentProxy = await promptProxyUrl({
+    currentUrl: "http://127.0.0.1:8081",
+    select: async () => "edit",
+    text: async () => "",
+    write: () => {}
+  });
+  assert.equal(currentProxy, "http://127.0.0.1:8081");
+
+  const clearedProxy = await promptProxyUrl({
+    currentUrl: "http://127.0.0.1:8081",
+    select: async () => "disable",
+    text: async () => {
+      throw new Error("disable should not prompt for an address");
+    },
+    write: () => {}
+  });
+  assert.equal(clearedProxy, null);
 });
 
 test("normalizes telegram config and parses config values", async () => {
@@ -286,7 +307,7 @@ test("telegram CLI redacts a targeted bot token from command logs and output", a
     assert.equal(result.stderr.includes(token), false);
     assert.equal((await loadBotConfig("ops")).token, token);
 
-    const proxyAddress = "10.20.30.40:8081";
+    const proxyAddress = "127.0.0.1:1";
     const proxyResult = spawnSync(process.execPath, [
       path.join(process.cwd(), "dist", "cli", "index.js"),
       "telegram", "config", "set", "proxyUrl", proxyAddress, "--bot", "ops"
@@ -294,10 +315,10 @@ test("telegram CLI redacts a targeted bot token from command logs and output", a
       encoding: "utf8",
       env: { ...process.env, AI_GATEWAY_HOME: tempDir }
     });
-    assert.equal(proxyResult.status, 0, proxyResult.stderr);
+    assert.equal(proxyResult.status, 1);
     const updatedLog = await fs.readFile(path.join(tempDir, ".ai-gateway.log"), "utf8");
     assert.equal(updatedLog.includes(proxyAddress), false);
-    assert.equal((await loadBotConfig("ops")).proxyUrl, `http://${proxyAddress}`);
+    assert.equal((await loadBotConfig("ops")).proxyUrl, undefined);
   });
 });
 

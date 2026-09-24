@@ -1,4 +1,4 @@
-import { ProxyAgent, setGlobalDispatcher } from "undici";
+import { getGlobalDispatcher, ProxyAgent, setGlobalDispatcher } from "undici";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import type { ApiClientOptions } from "grammy";
 import { normalizeProxyUrl } from "../core/network/proxy.js";
@@ -39,6 +39,7 @@ export async function checkTelegramApi(token: string, proxyUrl?: string): Promis
   username?: string;
   error?: string;
 }> {
+  const previousDispatcher = getGlobalDispatcher();
   if (proxyUrl) {
     setGlobalDispatcher(new ProxyAgent(proxyUrl));
   }
@@ -63,5 +64,7 @@ export async function checkTelegramApi(token: string, proxyUrl?: string): Promis
       ok: false,
       error: error instanceof Error ? `${error.name}: ${error.message}` : String(error)
     };
+  } finally {
+    if (proxyUrl) setGlobalDispatcher(previousDispatcher);
   }
 }

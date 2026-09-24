@@ -110,7 +110,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 启动 Claude Code | 🟢 | 临时 `--settings`，不碰 `~/.claude/settings.json` |
 | 启动 Codex | 🟢 | `-c model_provider=` + `env_key`，不碰全局 `auth.json`/`config.toml` |
 | 运行时降级 | 🟢 | 子进程非 0 退出后自动试下一候选 |
-| Runtime 出站代理 | 🟢 | `ai proxy` 分离输入 host/port，自动补协议并作用于 Runtime 请求及其启动的 Claude/Codex；不修改原生配置 |
+| Runtime 出站代理 | 🟢 | `ai proxy` 显示当前状态并提供编辑/关闭选项；分离输入 host/port、自动补协议，零 Token 连通检查成功后才保存并作用于 Runtime 请求及其启动的 Claude/Codex；不修改原生配置 |
 | root 权限约束 | 🟢 | UID 0 下 `bypassPermissions` 强制降级为 `default` |
 | 会话记录 | 🟢 | 工具、服务商、模型、路径、起止、退出状态 |
 | 会话续用 | 🟡 | **复用启动参数**，不恢复 Claude/Codex 原生聊天上下文 |
@@ -159,7 +159,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 命令执行 | 🟢 | `/terminal`，60 秒上限，高风险需确认 |
 | 显式记忆 | 🟢 | `/remember` `/forget` `/memories` |
 | 自动记忆 | 🔴 | **普通聊天不自动记录** |
-| 代理支持 | 🟢 | `proxyUrl` 或 `HTTPS_PROXY`/`ALL_PROXY`；交互式分离输入 host/port，复用 Runtime 规范化规则 |
+| 代理支持 | 🟢 | `proxyUrl` 或 `HTTPS_PROXY`/`ALL_PROXY`；交互显示当前状态和编辑/关闭选项，分离输入 host/port，并在保存前验证端点与 Telegram `getMe`，失败回退旧配置 |
 
 ### 3.6 记忆 🟡
 

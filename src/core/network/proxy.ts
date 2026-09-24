@@ -1,4 +1,5 @@
 import { Agent, ProxyAgent, setGlobalDispatcher } from "undici";
+import net from "node:net";
 
 const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -10,8 +11,6 @@ const PROXY_ENV_KEYS = [
 ] as const;
 
 const LOCAL_NO_PROXY_HOSTS = ["127.0.0.1", "localhost", "::1"];
-const DISABLED_PROXY_VALUES = new Set(["off", "none", "clear", "disable"]);
-
 export type ProxyAddressParts = {
   host: string;
   port: string;
@@ -22,7 +21,9 @@ export function normalizeProxyUrl(hostOrUrl: string, port = ""): string | null {
   if (!trimmedHost) {
     throw new Error("Proxy host is required. Example: 127.0.0.1");
   }
-  if (DISABLED_PROXY_VALUES.has(trimmedHost.toLowerCase())) return null;
+  if (["off", "none", "clear", "disable"].includes(trimmedHost.toLowerCase())) {
+    throw new Error("Use the Disable proxy action instead of entering off as an address.");
+  }
 
   const normalizedPort = normalizeProxyPort(port);
   const hostInput = normalizedPort ? trimmedHost.replace(/:$/, "") : trimmedHost;
@@ -76,6 +77,36 @@ export function applyProxyToEnv(env: NodeJS.ProcessEnv, proxyUrl: string | null)
 
 export function configureGlobalProxy(proxyUrl: string | null): void {
   setGlobalDispatcher(proxyUrl ? new ProxyAgent(proxyUrl) : new Agent());
+}
+
+export async function checkProxyEndpoint(
+  proxyUrl: string,
+  timeoutMs = 3_000
+): Promise<{ ok: boolean; durationMs: number; error: string | null }> {
+  const normalized = normalizeProxyUrl(proxyUrl);
+  if (!normalized) return { ok: false, durationMs: 0, error: "Proxy is disabled." };
+  const parsed = new URL(normalized);
+  const host = parsed.hostname.replace(/^\[(.*)\]$/, "$1");
+  const port = Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80));
+  const startedAt = Date.now();
+
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    let finished = false;
+    const finish = (ok: boolean, error: string | null): void => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve({ ok, durationMs: Date.now() - startedAt, error });
+    };
+    const timeout = setTimeout(
+      () => finish(false, `Connection timed out after ${timeoutMs}ms.`),
+      timeoutMs
+    );
+    socket.once("connect", () => finish(true, null));
+    socket.once("error", (error) => finish(false, error.message));
+  });
 }
 
 function normalizeProxyPort(value: string): string {

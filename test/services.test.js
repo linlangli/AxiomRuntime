@@ -531,11 +531,21 @@ test("ai proxy persists a normalized Runtime proxy and supports clearing", async
     const originalLog = console.log;
     console.log = (...values) => output.push(values.join(" "));
     try {
-      await runProxyCommand(["127.0.0.1", "8081"]);
+      await runProxyCommand(["127.0.0.1", "8081"], {
+        check: async () => ({ ok: true, durationMs: 1, error: null })
+      });
       assert.equal((await loadRuntimeConfig()).proxyUrl, "http://127.0.0.1:8081");
       assert.equal(output.some((line) => line.includes("AI Runtime proxy set")), true);
 
-      await runProxyCommand(["off"]);
+      await assert.rejects(
+        runProxyCommand(["127.0.0.1", "9090"], {
+          check: async () => ({ ok: false, durationMs: 1, error: "connection refused" })
+        }),
+        /Previous proxy kept/
+      );
+      assert.equal((await loadRuntimeConfig()).proxyUrl, "http://127.0.0.1:8081");
+
+      await runProxyCommand(["--disable"]);
       assert.equal((await loadRuntimeConfig()).proxyUrl, undefined);
       assert.equal(output.some((line) => line.includes("AI Runtime proxy cleared")), true);
     } finally {
