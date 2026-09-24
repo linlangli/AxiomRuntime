@@ -80,7 +80,11 @@ export async function probeProviderConfiguration(provider: Provider): Promise<Pr
       let configuredProvider: Provider = { ...provider, baseUrl, requestProfile: profile };
       const modelChecks: CallableModelCheck[] = [];
 
-      const openaiModel = discoveredModels.find((model) => isModelCompatible("codex", model));
+      const requestedOpenAiModel = provider.model && isModelCompatible("codex", provider.model)
+        ? provider.model
+        : null;
+      const openaiModel = requestedOpenAiModel
+        ?? discoveredModels.find((model) => isModelCompatible("codex", model));
       if (openaiModel) {
         const verified = await probeModelAuth(configuredProvider, openaiModel, "openai");
         attempts += verified.attempts;
@@ -92,7 +96,11 @@ export async function probeProviderConfiguration(provider: Provider): Promise<Pr
         }
       }
 
-      const anthropicModel = discoveredModels.find((model) => isModelCompatible("claude", model));
+      const requestedAnthropicModel = provider.model && isModelCompatible("claude", provider.model)
+        ? provider.model
+        : null;
+      const anthropicModel = requestedAnthropicModel
+        ?? discoveredModels.find((model) => isModelCompatible("claude", model));
       if (anthropicModel) {
         const verified = await probeModelAuth(configuredProvider, anthropicModel, "anthropic");
         attempts += verified.attempts;
@@ -105,7 +113,14 @@ export async function probeProviderConfiguration(provider: Provider): Promise<Pr
       }
 
       configuredProvider = { ...configuredProvider, requestProfile: profile };
-      const models = discoveredModels.filter((model) => {
+      const requestedModelVerified = Boolean(
+        (requestedOpenAiModel && profile.verifiedProtocols.includes("openai"))
+        || (requestedAnthropicModel && profile.verifiedProtocols.includes("anthropic"))
+      );
+      const verifiedModels = provider.model && requestedModelVerified
+        ? [...new Set([...discoveredModels, provider.model])]
+        : discoveredModels;
+      const models = verifiedModels.filter((model) => {
         if (isModelCompatible("claude", model)) return profile.verifiedProtocols.includes("anthropic");
         if (isModelCompatible("codex", model)) return profile.verifiedProtocols.includes("openai");
         return true;
@@ -126,6 +141,48 @@ export async function probeProviderConfiguration(provider: Provider): Promise<Pr
         provider: configuredProvider,
         modelChecks
       };
+    }
+  }
+
+  if (provider.model) {
+    const protocol = isModelCompatible("codex", provider.model)
+      ? "openai"
+      : isModelCompatible("claude", provider.model)
+        ? "anthropic"
+        : null;
+    if (!protocol) {
+      errors.push(`Configured model ${provider.model} is not compatible with Claude or Codex.`);
+    } else {
+      for (const baseUrl of buildBaseUrlCandidates(provider.baseUrl)) {
+        const profile: ProviderRequestProfile = {
+          discoveryAuth: "bearer",
+          openaiAuth: "bearer",
+          anthropicAuth: "bearer",
+          verifiedProtocols: []
+        };
+        const candidate: Provider = { ...provider, baseUrl, requestProfile: profile };
+        const verified = await probeModelAuth(candidate, provider.model, protocol);
+        attempts += verified.attempts;
+        retryErrors.push(...verified.retryErrors);
+        if (verified.authScheme) {
+          if (protocol === "openai") profile.openaiAuth = verified.authScheme;
+          else profile.anthropicAuth = verified.authScheme;
+          profile.verifiedProtocols.push(protocol);
+          return {
+            status: "ok",
+            models: [provider.model],
+            checkedAt,
+            error: null,
+            attempts,
+            durationMs: Date.now() - startedAt,
+            retryErrors,
+            provider: { ...candidate, requestProfile: profile },
+            modelChecks: verified.checks
+          };
+        }
+        const lastError = verified.checks.at(-1)?.error ?? "model verification failed";
+        errors.push(`${baseUrl} (${protocol}, model ${provider.model}): ${lastError}`);
+      }
     }
   }
 
@@ -296,7 +353,7 @@ async function checkCallableModel(
   const lower = model.toLowerCase();
   return lower.includes("claude")
     ? checkAnthropicMessagesModel(provider, model, options)
-    : checkChatCompletionsModel(provider, model, options);
+    : checkOpenAiModel(provider, model, options);
 }
 
 async function checkAnthropicMessagesModel(
@@ -391,7 +448,11 @@ function isAuthenticationFailure(error: string | null): boolean {
   return Boolean(error && /(?:\b401\b|\b403\b|unauthori[sz]ed|forbidden|authentication|invalid api key)/i.test(error));
 }
 
-async function checkOpenAiModel(provider: Provider, model: string): Promise<CallableModelCheck> {
+async function checkOpenAiModel(
+  provider: Provider,
+  model: string,
+  options: CallableModelCheckOptions = {}
+): Promise<CallableModelCheck> {
   const headers = {
     ...buildProviderAuthHeaders(provider.apiKey, getProviderAuthScheme(provider, "openai")),
     "Content-Type": "application/json",
@@ -401,10 +462,12 @@ async function checkOpenAiModel(provider: Provider, model: string): Promise<Call
     `${provider.baseUrl.replace(/\/+$/, "")}/responses`,
     headers,
     { model, input: ".", max_output_tokens: 1, stream: false },
-    model
+    model,
+    options
   );
   if (responsesResult.status === "ok" || responsesResult.status === "unknown") return responsesResult;
-  const chatResult = await checkChatCompletionsModel(provider, model);
+  if (!shouldFallbackFromResponses(responsesResult.error)) return responsesResult;
+  const chatResult = await checkChatCompletionsModel(provider, model, options);
   return chatResult.status === "ok"
     ? chatResult
     : {
@@ -414,6 +477,10 @@ async function checkOpenAiModel(provider: Provider, model: string): Promise<Call
         durationMs: (responsesResult.durationMs ?? 0) + (chatResult.durationMs ?? 0),
         retryErrors: [...(responsesResult.retryErrors ?? []), ...(chatResult.retryErrors ?? [])]
       };
+}
+
+function shouldFallbackFromResponses(error: string | null): boolean {
+  return Boolean(error && /(?:\b400\b|\b404\b|\b405\b|\b422\b|unsupported|not supported)/i.test(error));
 }
 
 async function postModelProbe(

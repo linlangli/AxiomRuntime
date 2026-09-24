@@ -126,7 +126,7 @@ ai setup --skip-provider
 
 ```bash
 ai add                                             # 交互式添加 Provider
-ai provider add <name> <base-url> <api-key>
+ai provider add <name> <base-url> <api-key> [model] # /models 不可用时可显式指定模型验证
 ai provider list                                   # 只读配置，不联网
 ai provider edit
 ai provider delete <name>
@@ -141,6 +141,8 @@ ai doctor                                          # 检查并安全修复内部
 ```
 
 `ai status` 会先执行不消耗 Token 的模型发现，再为每个 Provider 最多选择一个 Claude 和一个 Codex 代表模型做真实调用；请求使用最短输入、输出上限为 1 Token，且不会自动重试产生 Token 的请求。代表模型最多等待 30 秒；如果本地超时但上游可能已经完成，状态显示为 `unknown`，不会误判为 Provider 不可用。`ai doctor` 可以重建缺失或损坏的缓存、用量和会话文件，但 Provider 配置无效时只报告，不会覆盖凭证。
+
+如果 Provider 不开放 `GET /models`，交互式 `ai add` 会提示输入官网给出的模型名并直接验证对应协议；脚本可将模型作为第四个参数传入。只有真实模型请求成功才会保存配置，Runtime 不会自动猜测模型名。
 
 ### 会话、日志、上下文与图片
 

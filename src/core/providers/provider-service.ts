@@ -233,35 +233,52 @@ type RefreshProviderOptions = {
 
 export async function refreshProvider(provider: Provider, options: RefreshProviderOptions = {}): Promise<void> {
   const result = await checkProvider(provider);
-  const representative = options.verifyRepresentativeModels && result.status === "ok"
-    ? await verifyRepresentativeModels(provider, result.models, result.checkedAt)
+  const cache = await readCache();
+  const previous = cache.providers[provider.name];
+  const canUseVerifiedCatalogFallback = Boolean(
+    result.status !== "ok"
+    && previous?.models.length
+    && provider.requestProfile?.verifiedProtocols.length
+  );
+  const availableModels = result.status === "ok"
+    ? result.models
+    : canUseVerifiedCatalogFallback ? previous!.models : [];
+  const representative = options.verifyRepresentativeModels && availableModels.length
+    ? await verifyRepresentativeModels(provider, availableModels, result.checkedAt)
     : null;
-  const callable = options.verifyCallableModels && !representative && result.models.length
-    ? await filterCallableModels(provider, result.models)
-    : { models: result.models, failed: 0, attempts: 0, durationMs: 0, retryErrors: [] as string[] };
+  const callable = options.verifyCallableModels && !representative && availableModels.length
+    ? await filterCallableModels(provider, availableModels)
+    : { models: availableModels, failed: 0, attempts: 0, durationMs: 0, retryErrors: [] as string[] };
   const models = callable.models;
   const representativeChecks = representative ? Object.values(representative.toolChecks) : [];
   const applicableChecks = representativeChecks.filter((check) => check?.status !== "not_applicable");
   const representativePassed = applicableChecks.some((check) => check?.status === "ok");
   const representativeFailed = Boolean(representative && applicableChecks.length && applicableChecks.every((check) => check?.status === "error"));
   const representativeUnknown = Boolean(representative && applicableChecks.length && !representativePassed && !representativeFailed);
-  const status = result.status !== "ok"
-    ? result.status
-    : (options.verifyCallableModels && !models.length) || representativeFailed
+  const status = representativePassed
+    ? "ok"
+    : representativeFailed
       ? "error"
       : representativeUnknown
         ? "unknown"
-        : "ok";
+        : result.status !== "ok" && canUseVerifiedCatalogFallback
+          ? previous?.status ?? "unknown"
+          : result.status !== "ok" || (options.verifyCallableModels && !models.length)
+            ? "error"
+            : "ok";
   const lastError = representativeFailed
     ? "No representative Claude or Codex model passed a real request."
     : representativeUnknown
       ? "Representative model verification timed out; the upstream may still have completed the request."
-      : status === "error" && options.verifyCallableModels && !models.length
-        ? `No callable models found. ${result.error ?? ""}`.trim()
-        : result.error;
+      : representativePassed && result.status !== "ok"
+        ? `Model catalog unavailable (${result.error ?? "unknown error"}); live verification passed using cached models.`
+        : result.status !== "ok" && canUseVerifiedCatalogFallback
+          ? previous?.lastError ?? null
+          : status === "error" && options.verifyCallableModels && !models.length
+            ? `No callable models found. ${result.error ?? ""}`.trim()
+            : result.error;
 
-  const cache = await readCache();
-  await upsertProviderCache(provider.name, buildProviderHealthCache(cache.providers[provider.name], {
+  await upsertProviderCache(provider.name, buildProviderHealthCache(previous, {
     status,
     models,
     lastCheckedAt: result.checkedAt,
@@ -269,7 +286,7 @@ export async function refreshProvider(provider: Provider, options: RefreshProvid
     ...(representative ? { toolChecks: representative.toolChecks } : {})
   }));
   await writeLog({
-    level: status === "ok" ? "info" : "error",
+    level: status === "ok" ? "info" : status === "unknown" ? "warn" : "error",
     category: "provider",
     action: "provider_health_check",
     message: `${provider.name}: ${status}${lastError ? ` (${lastError})` : ""}`,

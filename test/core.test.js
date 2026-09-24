@@ -519,6 +519,49 @@ test("provider probe can select x-api-key without trying arbitrary headers", asy
   }
 });
 
+test("provider probe verifies an explicit model when the model catalog is blocked", async () => {
+  const requests = [];
+  const server = await startTestServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    requests.push({ url: req.url, method: req.method, authorization: req.headers.authorization, body });
+    if (req.method === "GET" && (req.url === "/v1/models" || req.url === "/models")) {
+      res.writeHead(451, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "model catalog unavailable" }));
+      return;
+    }
+    if (req.method === "POST" && req.url === "/v1/responses" && req.headers.authorization === "Bearer key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+
+  try {
+    const result = await probeProviderConfiguration({
+      name: "manual-catalog",
+      baseUrl: `${server.url}/v1`,
+      apiKey: "key",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.5"
+    });
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.provider.baseUrl, `${server.url}/v1`);
+    assert.equal(result.provider.requestProfile?.openaiAuth, "bearer");
+    assert.deepEqual(result.provider.requestProfile?.verifiedProtocols, ["openai"]);
+    assert.deepEqual(result.models, ["gpt-5.5"]);
+    assert.equal(requests.filter((request) => request.method === "POST").length, 1);
+    assert.equal(requests.some((request) => request.url === "/v1/chat/completions"), false);
+    assert.equal(JSON.parse(requests.find((request) => request.url === "/v1/responses").body).model, "gpt-5.5");
+  } finally {
+    await server.close();
+  }
+});
+
 test("estimates token cost from model pricing table", () => {
   const usage = { inputTokens: 1000, outputTokens: 500, totalTokens: 1500 };
   assert.equal(

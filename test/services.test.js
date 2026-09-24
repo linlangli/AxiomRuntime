@@ -3,12 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { addProvider, deleteProvider, updateProvider } from "../dist/core/providers/provider-service.js";
+import { addProvider, deleteProvider, refreshAllProviders, updateProvider } from "../dist/core/providers/provider-service.js";
 import { readCache, recordProviderRuntimeFailure, upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
 import { getProviderStatus, getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runCheckCommand } from "../dist/cli/commands/check.js";
 import { runModelsCommand } from "../dist/cli/commands/models.js";
+import { runAddCommand } from "../dist/cli/commands/add.js";
 import { getExecutionUserDoctorItem, runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveExactProviderForTool, resolveProviderForTool, resolveProviderCandidatesForTool } from "../dist/core/runner/fallback.js";
 import { checkAndRecordMemoryEmbeddingConfig } from "../dist/core/memory/embedding-check.js";
@@ -521,6 +522,57 @@ test("addProvider refuses failed probes without writing provider state", async (
   });
 });
 
+test("interactive add accepts a manually verified model when GET models is unavailable", async () => {
+  await withTempHome(async () => {
+    const requests = [];
+    mockFetch((url, init) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET" });
+      if (init?.method === "POST" && String(url).endsWith("/responses")) {
+        return jsonResponse({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+      }
+      return jsonResponse({ error: "catalog blocked" }, { status: 451 });
+    });
+    const answers = new Map([
+      ["Provider name", "manual"],
+      ["Base URL", "https://manual.test/v1"],
+      ["API key", "secret"],
+      ["Model name", "gpt-5.5"]
+    ]);
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    try {
+      await runAddCommand([], {
+        text: async (message) => answers.get(message) ?? "",
+        select: async () => {
+          throw new Error("model selector should not run after manual verification");
+        }
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const [provider] = await readProviders();
+    assert.equal(provider.name, "manual");
+    assert.equal(provider.model, "gpt-5.5");
+    assert.equal(provider.requestProfile.openaiAuth, "bearer");
+    assert.deepEqual((await readCache()).providers.manual.models, ["gpt-5.5"]);
+    assert.equal(requests.filter((request) => request.method === "POST").length, 1);
+    assert.equal(output.some((line) => line.includes("Automatic model discovery failed")), true);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+    assert.equal(status.health, "ok");
+    assert.equal(status.codex.state, "ready");
+    assert.match(status.lastError, /Model catalog unavailable/);
+    assert.equal(requests.filter((request) => request.method === "POST").length, 2);
+
+    await refreshAllProviders();
+    const cache = await readCache();
+    assert.equal(cache.providers.manual.status, "ok");
+    assert.deepEqual(cache.providers.manual.models, ["gpt-5.5"]);
+  });
+});
+
 test("updateProvider edits mode, swaps level, and renames cache", async () => {
   await withTempHome(async () => {
     mockFetchModels(["claude-opus-4-6"]);
@@ -753,7 +805,7 @@ test("getProviderStatuses skips token probes for missing tool families", async (
     assert.equal(status.claude.state, "no-model");
     assert.equal(status.claude.attempts, 0);
     assert.equal(status.codex.state, "ready");
-    assert.deepEqual(postUrls, ["https://api.test/v1/chat/completions"]);
+    assert.deepEqual(postUrls, ["https://api.test/v1/responses"]);
     assert.deepEqual(status.models, ["gpt-5.5", "image-model"]);
   });
 });

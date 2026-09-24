@@ -118,11 +118,14 @@ Provider 就是你的 API 服务商（官方 API 或中转站）。
 ```bash
 ai add                                              # 交互式，推荐
 ai provider add 我的站 https://example.com sk-xxx   # 一行搞定
+ai provider add 我的站 https://example.com sk-xxx gpt-5.5  # 显式模型回退
 ```
 
-添加时自动完成：探测 Base URL 与认证方式 → 获取非空模型列表 → 用每种实际存在的文本协议各一个代表模型做最多 1 token 的可用性验证 → 设 `mode: auto` → 分配下一个优先级 → 写入配置和模型缓存 → 选择默认模型。全部候选均失败时不会写入 Provider。
+添加时自动完成：探测 Base URL 与认证方式 → 获取模型列表 → 用每种实际存在的文本协议各一个代表模型做最多 1 token 的可用性验证 → 设 `mode: auto` → 分配下一个优先级 → 写入配置和模型缓存 → 选择默认模型。全部候选均失败时不会写入 Provider。
 
 Runtime 会先尝试你输入的 Base URL，再按需增加或移除末尾 `/v1`；认证只在 `Bearer`、`x-api-key`、`api-key` 等可由当前 API Key 安全派生的已知方式中选择，不会暴力猜测任意私有 header。探测成功后终端会列出最终 URL、认证方式和模型。只有超时、`429`、`5xx` 会短暂重试，确定性的认证或路径错误不会重复请求。
+
+部分 Provider 不开放 `GET /models`，会返回 `404`、`451` 等状态。交互式添加会在自动发现失败后要求输入官网明确提供的模型名，并优先通过 Responses API（Claude 模型则通过 Messages API）做一次最小真实验证；脚本可把模型作为第四个参数传入。验证成功后只缓存该手工模型，失败则不保存配置。Runtime 不会自动猜测模型名。
 
 ### 查看
 
@@ -139,9 +142,11 @@ ai status             # 联网刷新健康度 + 看用量
 
 `ai models [provider]` 只调用选中 Provider 的 `GET /models`，更新该 Provider 的完整模型缓存并逐行列出模型名，不会调用任何模型做推理，因此不产生推理 Token。省略名称时进入交互选择；提供名称时精确匹配。模型发现失败时保留原缓存和真实健康状态。
 
+如果 Provider 本身不开放模型目录，`ai models [provider]` 会如实报告 `404`、`451` 等目录错误；这不代表已缓存模型不可用。请用 `ai check [provider]` 对缓存模型做最小真实验证。
+
 `ai check [provider]` 复用与 `ai status` 相同的真实验证规则，但只刷新并检查一个 Provider。省略名称时进入交互选择；提供名称时精确匹配，名称不存在会直接报错，不会退回检查其他 Provider。适合在 Provider 较多时降低等待时间和验证 Token 消耗。
 
-`ai status` 会先刷新模型列表，再为每个 Provider 分别选择最多一个 Claude 代表模型和一个 Codex 代表模型做真实调用验证。不存在对应模型族时不会发起该协议请求；每次验证使用最短输入、把输出限制为 1 token，并且不自动重试产生 Token 的请求，因此单个 Provider 每次最多验证两个代表模型。代表模型验证最多等待 30 秒：明确成功显示 `ready`，明确失败显示 `provider-error`；如果本地等待超时，上游仍可能已经处理成功，因此显示 `unknown` 并保留该 Provider 的运行候选资格。终端会分别显示模型发现状态、验证模型、耗时和具体原因。
+`ai status` 会先刷新模型列表，再为每个 Provider 分别选择最多一个 Claude 代表模型和一个 Codex 代表模型做真实调用验证。Codex 优先验证 Responses API，只有明确不支持时才回退 Chat Completions。对于已通过手工模型验证、但不开放 `GET /models` 的 Provider，会使用已验证缓存模型继续检查，不会因为目录返回 `451` 而误判不可用。不存在对应模型族时不会发起该协议请求；每次验证使用最短输入、把输出限制为 1 token，并且不自动重试产生 Token 的请求。代表模型验证最多等待 30 秒：明确成功显示 `ready`，明确失败显示 `provider-error`；如果本地等待超时，上游仍可能已经处理成功，因此显示 `unknown` 并保留该 Provider 的运行候选资格。
 
 ### 编辑与删除
 

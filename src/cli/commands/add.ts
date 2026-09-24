@@ -4,18 +4,38 @@ import { writeLog } from "../../core/logs/log-service.js";
 import { describeProviderRequestProfile } from "../../core/providers/provider-request-profile.js";
 import { promptSelect, promptText } from "../prompts/prompt.js";
 
-export async function runAddCommand(args: string[]): Promise<void> {
-  const [nameArg, baseUrlArg, apiKeyArg] = args;
-  const interactive = !nameArg || !baseUrlArg || !apiKeyArg;
-  const name = nameArg ?? await promptText("Provider name");
-  const baseUrl = baseUrlArg ?? await promptText("Base URL");
-  const apiKey = apiKeyArg ?? await promptText("API key");
+type AddCommandPrompts = {
+  text?: typeof promptText;
+  select?: typeof promptSelect;
+};
 
-  let provider = await addProvider({ name, baseUrl, apiKey });
-  if (interactive) {
+export async function runAddCommand(args: string[], prompts: AddCommandPrompts = {}): Promise<void> {
+  const askText = prompts.text ?? promptText;
+  const askSelect = prompts.select ?? promptSelect;
+  const [nameArg, baseUrlArg, apiKeyArg, modelArg] = args;
+  const interactive = !nameArg || !baseUrlArg || !apiKeyArg;
+  const name = nameArg ?? await askText("Provider name");
+  const baseUrl = baseUrlArg ?? await askText("Base URL");
+  const apiKey = apiKeyArg ?? await askText("API key");
+  let verifiedModel = modelArg?.trim() || "";
+
+  let provider;
+  try {
+    provider = await addProvider({ name, baseUrl, apiKey, model: verifiedModel || undefined });
+  } catch (error) {
+    const isProbeFailure = error instanceof Error
+      && error.message.startsWith("Provider configuration probe failed:");
+    if (!interactive || verifiedModel || !isProbeFailure) throw error;
+    console.log(error instanceof Error ? error.message : String(error));
+    console.log("Automatic model discovery failed. Enter a known model for direct verification.");
+    verifiedModel = await askText("Model name");
+    if (!verifiedModel) throw error;
+    provider = await addProvider({ name, baseUrl, apiKey, model: verifiedModel });
+  }
+  if (interactive && !verifiedModel) {
     const models = await getCachedModels(provider.name);
     if (models.length) {
-      const model = await promptSelect(
+      const model = await askSelect(
         "Select default model",
         models.map((item) => ({ label: item, value: item }))
       );
