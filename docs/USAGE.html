@@ -543,6 +543,12 @@ ai setup</pre>
                 <td>指定 provider 和模型启动工具。</td>
                 <td>provider 不可用时按 level 降级。</td>
               </tr>
+              <tr data-search="proxy network host port runtime claude codex">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai proxy</code><br /><code class="cmd">ai proxy 127.0.0.1 8081</code><br /><code class="cmd">ai proxy off</code></td>
+                <td>为 Runtime 自身及通过 <code>ai</code> 启动的 Claude Code / Codex 设置 HTTP(S) 代理。</td>
+                <td>自动补全协议；不修改原生 CLI 永久配置。</td>
+              </tr>
               <tr data-search="set codex chatgpt login oauth provider proxy config auth restart app">
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai set codex chatgpt</code><br /><code class="cmd">ai set codex provider 51talk-cq gpt-5.6-sol</code><br /><code class="cmd">ai set codex provider 51talk-cq</code><br /><code class="cmd">ai set codex provider</code><br /><code class="cmd">ai set codex proxy 127.0.0.1:7890</code></td>
@@ -649,6 +655,20 @@ ai use codex
 ai use claude 51talk
 ai use codex 51talk gpt-5.5</pre>
                 <p>不指定 provider 时使用 <code>level: 1</code>；不指定模型时使用 provider 默认 <code>model</code>。</p>
+              </div>
+              <div class="note">
+                <h3>Runtime 出站代理</h3>
+                <pre>ai proxy
+ai proxy 127.0.0.1 8081
+ai proxy 127.0.0.1:8081
+ai proxy http://127.0.0.1:8081
+ai proxy off</pre>
+                <ul>
+                  <li>交互模式分别询问主机/IP与端口；缺少协议时自动补为 <code>http://</code>。</li>
+                  <li>配置保存在 <code>~/.ai-gateway/runtime.json</code>，作用于 Runtime 网络请求及其启动的 Claude/Codex。</li>
+                  <li>本地回环地址自动加入 <code>NO_PROXY</code>，避免 execution-scoped Transport Proxy 发生代理回环。</li>
+                  <li>不会修改 <code>~/.claude</code> 或 <code>~/.codex</code>；直接运行原生命令不受影响。</li>
+                </ul>
               </div>
               <div class="note">
                 <h3>生成图片</h3>
@@ -788,7 +808,7 @@ ai telegram status --all</pre>
                   <li><code>/provider</code> 以按钮列出全部 AI Provider，可编辑名称、Base URL、API Key、默认模型、模式和优先级，二次确认后删除，或从列表底部添加。操作复用 <code>ai provider</code> 的核心 CRUD 和检查逻辑。</li>
                   <li>Provider API Key 在详情中只显示“已配置”，不会写入 Bot 应用日志；输入后 Bot 会尽力立即删除该 Telegram 消息。未完成表单在 Bot 重启后需要重新开始。</li>
                   <li>Telegram Codex 执行会自动走本地 OpenAI 兼容代理记录 provider usage；<code>/usage</code> 有 provider cost 时直接展示，否则按 <code>model-pricing.json</code> 估算。</li>
-                  <li>如果本机不能直连 <code>api.telegram.org</code>，设置 <code>proxyUrl</code> 或环境变量 <code>HTTPS_PROXY</code> / <code>ALL_PROXY</code>。交互式新增或编辑 Bot 时，<code>proxyUrl</code> 输入提示会展示完整 URL 示例；地址请包含协议，例如 <code>http://127.0.0.1:7890</code>。</li>
+                  <li>如果本机不能直连 <code>api.telegram.org</code>，设置 <code>proxyUrl</code> 或环境变量 <code>HTTPS_PROXY</code> / <code>ALL_PROXY</code>。交互式新增或编辑 Bot 时分别输入主机/IP与端口；例如输入 <code>127.0.0.1</code> 和 <code>8081</code> 会自动保存为 <code>http://127.0.0.1:8081</code>，旧的 <code>host:port</code> 与完整 URL 仍兼容。</li>
                 </ul>
               </div>
             </details>

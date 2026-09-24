@@ -20,6 +20,7 @@ import { runResolvedProviderCandidates } from "../dist/cli/commands/use.js";
 import { resolveImageCommandInput } from "../dist/cli/commands/image.js";
 import { getCliCommand, listInteractiveCliCommands, registerCliCommand } from "../dist/cli/registry.js";
 import { generateImage } from "../dist/core/images/image-generation-service.js";
+import { applyProxyToEnv, normalizeProxyUrl, splitProxyUrl } from "../dist/core/network/proxy.js";
 
 test("normalizes provider levels by priority", () => {
   const providers = normalizeProviders([
@@ -47,6 +48,24 @@ test("provider config validation rejects empty connection fields", () => {
     ]),
     /apiKey cannot be empty/
   );
+});
+
+test("normalizes split proxy input and protects local runtime traffic", () => {
+  assert.equal(normalizeProxyUrl("127.0.0.1", "8081"), "http://127.0.0.1:8081");
+  assert.equal(normalizeProxyUrl("127.0.0.1:", ":8081"), "http://127.0.0.1:8081");
+  assert.equal(normalizeProxyUrl("https://proxy.test:8443"), "https://proxy.test:8443");
+  assert.equal(normalizeProxyUrl("off"), null);
+  assert.deepEqual(splitProxyUrl("http://127.0.0.1:8081"), {
+    host: "http://127.0.0.1",
+    port: "8081"
+  });
+  assert.throws(() => normalizeProxyUrl("127.0.0.1", "70000"), /between 1 and 65535/);
+
+  const env = applyProxyToEnv({ NO_PROXY: "internal.test" }, "http://127.0.0.1:8081");
+  assert.equal(env.HTTPS_PROXY, "http://127.0.0.1:8081");
+  assert.equal(env.https_proxy, "http://127.0.0.1:8081");
+  assert.equal(env.NO_PROXY, "internal.test,127.0.0.1,localhost,::1");
+  assert.equal(env.no_proxy, env.NO_PROXY);
 });
 
 test("swaps provider levels", () => {
@@ -311,6 +330,39 @@ test("setup command initializes an empty runtime home non-interactively", async 
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, ".ai-cache.json"), "utf8")), { providers: {} });
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "usage.json"), "utf8")), { events: [] });
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "sessions.json"), "utf8")), { sessions: [] });
+  await fs.rm(tempDir, { recursive: true, force: true });
+});
+
+test("proxy command normalizes split input and redacts command logs", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-proxy-test-"));
+  const runtimeHome = path.join(tempDir, "runtime-home");
+  const host = "10.20.30.40";
+  const result = spawnSync(process.execPath, [
+    path.resolve("dist/cli/index.js"),
+    "proxy",
+    host,
+    "8081"
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, AI_GATEWAY_HOME: runtimeHome }
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    JSON.parse(await fs.readFile(path.join(runtimeHome, "runtime.json"), "utf8")).proxyUrl,
+    `http://${host}:8081`
+  );
+  const logs = await fs.readFile(path.join(runtimeHome, ".ai-gateway.log"), "utf8");
+  assert.equal(logs.includes(host), false);
+  assert.match(logs, /proxy-redacted/);
+
+  await fs.writeFile(path.join(runtimeHome, "runtime.json"), JSON.stringify({ proxyUrl: "not a valid proxy path/value" }));
+  const clearResult = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "proxy", "off"], {
+    encoding: "utf8",
+    env: { ...process.env, AI_GATEWAY_HOME: runtimeHome }
+  });
+  assert.equal(clearResult.status, 0, clearResult.stderr);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "runtime.json"), "utf8")), {});
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 

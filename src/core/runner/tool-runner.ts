@@ -3,7 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { saveLastSelection } from "../config/cache-store.js";
+import { loadRuntimeConfig } from "../config/runtime-config.js";
 import { writeLog } from "../logs/log-service.js";
+import { applyProxyToEnv } from "../network/proxy.js";
 import type { CliToolType, Provider } from "../types.js";
 import { isRecord } from "../utils/is-record.js";
 import { resolveToolCommand } from "./command-resolver.js";
@@ -38,7 +40,11 @@ export async function runTool(tool: CliToolType, provider: Provider, model: stri
   const setup = await (async () => {
     try {
       const routedProvider = { ...effectiveProvider, baseUrl: usageProxy.baseUrl };
-      const env = buildRunnerEnv(tool, routedProvider, model);
+      const runtimeConfig = await loadRuntimeConfig();
+      const env = applyProxyToEnv(
+        buildRunnerEnv(tool, routedProvider, model),
+        runtimeConfig.proxyUrl ?? null
+      );
       const claudeSettingsPath = engine.requiresSettingsFile
         ? writeTemporaryClaudeSettings(routedProvider, { permissionMode: launchPolicy.claudeSettingsPermissionMode })
         : null;

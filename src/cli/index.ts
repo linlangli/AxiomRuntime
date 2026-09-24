@@ -10,6 +10,7 @@ import { runListCommand } from "./commands/list.js";
 import { runLogCommand } from "./commands/log.js";
 import { runMemoryCommand } from "./commands/memory.js";
 import { runModelsCommand } from "./commands/models.js";
+import { runProxyCommand } from "./commands/proxy.js";
 import { runReportCommand } from "./commands/report.js";
 import { runLastCommand, runUseCommand } from "./commands/use.js";
 import { runSessionCommand } from "./commands/session.js";
@@ -22,11 +23,17 @@ import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
 import { getCliCommand, registerCliCommand } from "./registry.js";
 import { redactCodexProxyCommandArgs } from "./sanitize-args.js";
+import { loadRuntimeConfig } from "../core/config/runtime-config.js";
+import { configureGlobalProxy } from "../core/network/proxy.js";
 
 registerBuiltInCommands();
 
 async function main(): Promise<void> {
   const [, , command, ...args] = process.argv;
+  if (command !== "proxy") {
+    const runtimeConfig = await loadRuntimeConfig();
+    if (runtimeConfig.proxyUrl) configureGlobalProxy(runtimeConfig.proxyUrl);
+  }
   const registered = command === undefined ? undefined : getCliCommand(command);
   if (registered?.logUsage === false) {
     await registered.run(args);
@@ -64,6 +71,7 @@ async function main(): Promise<void> {
 }
 
 export function sanitizeArgs(command: string | undefined, args: string[]): string[] {
+  if (command === "proxy" && args.length) return ["[proxy-redacted]"];
   const redactedProxyArgs = redactCodexProxyCommandArgs(command, args);
   if (redactedProxyArgs) return redactedProxyArgs;
   if (command === "add" && args.length >= 3) {
@@ -103,7 +111,7 @@ function maskTelegramConfigSecretArgs(args: string[]): string[] {
     if (arg === "--all" || arg.startsWith("--bot=")) continue;
     if (state === "config" && arg === "config") { state = "set"; continue; }
     if (state === "set" && arg === "set") { state = "token"; continue; }
-    if (state === "token" && arg === "token") { state = "done"; continue; }
+    if (state === "token" && (arg === "token" || arg === "proxyUrl")) { state = "done"; continue; }
     if (state === "done") {
       masked[index] = maskSecretArg(arg);
       break;
@@ -139,7 +147,7 @@ function maskSecretArg(value: string): string {
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["setup", "use", "image", "set", "add", "memory", "telegram", "models", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["setup", "use", "image", "set", "proxy", "add", "memory", "telegram", "models", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -275,6 +283,11 @@ function registerBuiltInCommands(): void {
     name: "set",
     description: "set Codex provider or proxy",
     run: (args) => runSetCommand(args)
+  });
+  registerCliCommand({
+    name: "proxy",
+    description: "configure AI Runtime proxy",
+    run: (args) => runProxyCommand(args)
   });
   registerCliCommand({
     name: "last",

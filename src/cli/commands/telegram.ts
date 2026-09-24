@@ -33,6 +33,7 @@ import {
 import { ensureTelegramLogFile, readRecentTelegramLogLines } from "../../telegram/log.js";
 import { checkTelegramApi, getTelegramProxyUrl } from "../../telegram/network.js";
 import { promptConfirm, promptSelect, promptText } from "../prompts/prompt.js";
+import { promptProxyUrl } from "../prompts/proxy.js";
 
 type TelegramSubcommand = "start" | "stop" | "status" | "config" | "logs" | "doctor"
   | "add" | "edit" | "remove" | "delete" | "list";
@@ -42,8 +43,6 @@ export type TelegramTargetArgs = {
   botName?: string;
   all: boolean;
 };
-
-export const TELEGRAM_PROXY_URL_PROMPT = "Proxy URL (include protocol, e.g. http://127.0.0.1:7890)";
 
 export async function runTelegramCommand(args: string[]): Promise<void> {
   const target = parseTelegramTargetArgs(args);
@@ -227,11 +226,11 @@ async function addBot(nameArg?: string): Promise<void> {
   const token = await promptText("Telegram bot token");
   if (!token.trim()) throw new Error("Token is required.");
   const allowedUserIds = await promptText("Allowed user IDs (comma-separated, empty for allowAll)");
-  const proxyUrl = await promptText(`${TELEGRAM_PROXY_URL_PROMPT} (empty to skip)`, { defaultValue: "" });
+  const proxyUrl = await promptProxyUrl({ optional: true });
 
   const config: Partial<TelegramConfig> = {
     token: token.trim(),
-    ...(proxyUrl.trim() ? { proxyUrl: proxyUrl.trim() } : {})
+    ...(proxyUrl ? { proxyUrl } : {})
   };
   if (allowedUserIds.trim()) {
     config.allowedUserIds = allowedUserIds.split(/[,\s]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0);
@@ -512,10 +511,15 @@ async function editBotConfigInteractive(name: string): Promise<void> {
       config = await saveBotConfig(name, { ...config, defaultPermissionMode });
       continue;
     }
+    if (field === "proxyUrl") {
+      const proxyUrl = await promptProxyUrl({ currentUrl: config.proxyUrl, optional: true });
+      if (proxyUrl !== undefined) config = await saveBotConfig(name, { ...config, proxyUrl: proxyUrl ?? undefined });
+      continue;
+    }
     const current = String(config[field as keyof TelegramConfig] ?? "");
     const value = field === "token"
       ? await promptText("token (leave empty to keep current)") || current
-      : await promptText(field === "proxyUrl" ? TELEGRAM_PROXY_URL_PROMPT : field, { defaultValue: current });
+      : await promptText(field, { defaultValue: current });
     config = await setBotConfigValue(name, field, value);
   }
 }
@@ -557,10 +561,15 @@ async function editTelegramConfigInteractive(): Promise<void> {
       config = await saveTelegramConfig({ ...config, defaultPermissionMode });
       continue;
     }
+    if (field === "proxyUrl") {
+      const proxyUrl = await promptProxyUrl({ currentUrl: config.proxyUrl, optional: true });
+      if (proxyUrl !== undefined) config = await saveTelegramConfig({ ...config, proxyUrl: proxyUrl ?? undefined });
+      continue;
+    }
     const current = String(config[field as keyof TelegramConfig] ?? "");
     const value = field === "token"
       ? await promptText("token (leave empty to keep current)") || current
-      : await promptText(field === "proxyUrl" ? TELEGRAM_PROXY_URL_PROMPT : field, { defaultValue: current });
+      : await promptText(field, { defaultValue: current });
     config = await setTelegramConfigValue(field, value);
   }
 }

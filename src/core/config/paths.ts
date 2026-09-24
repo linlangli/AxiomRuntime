@@ -35,6 +35,10 @@ export function getIntegrationStatePath(): string {
   return path.join(getConfigRoot(), "integrations.json");
 }
 
+export function getRuntimeConfigPath(): string {
+  return path.join(getConfigRoot(), "runtime.json");
+}
+
 export function getReportsDir(): string {
   return path.join(getConfigRoot(), "reports");
 }

@@ -10,6 +10,9 @@ import { getProviderStatus, getProviderStatuses } from "../dist/core/status/stat
 import { runCheckCommand } from "../dist/cli/commands/check.js";
 import { runModelsCommand } from "../dist/cli/commands/models.js";
 import { runAddCommand } from "../dist/cli/commands/add.js";
+import { runProxyCommand } from "../dist/cli/commands/proxy.js";
+import { loadRuntimeConfig } from "../dist/core/config/runtime-config.js";
+import { configureGlobalProxy } from "../dist/core/network/proxy.js";
 import { getExecutionUserDoctorItem, runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveExactProviderForTool, resolveProviderForTool, resolveProviderCandidatesForTool } from "../dist/core/runner/fallback.js";
 import { checkAndRecordMemoryEmbeddingConfig } from "../dist/core/memory/embedding-check.js";
@@ -519,6 +522,26 @@ test("addProvider refuses failed probes without writing provider state", async (
     );
     assert.deepEqual(await readProviders(), []);
     assert.deepEqual((await readCache()).providers, {});
+  });
+});
+
+test("ai proxy persists a normalized Runtime proxy and supports clearing", async () => {
+  await withTempHome(async () => {
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    try {
+      await runProxyCommand(["127.0.0.1", "8081"]);
+      assert.equal((await loadRuntimeConfig()).proxyUrl, "http://127.0.0.1:8081");
+      assert.equal(output.some((line) => line.includes("AI Runtime proxy set")), true);
+
+      await runProxyCommand(["off"]);
+      assert.equal((await loadRuntimeConfig()).proxyUrl, undefined);
+      assert.equal(output.some((line) => line.includes("AI Runtime proxy cleared")), true);
+    } finally {
+      configureGlobalProxy(null);
+      console.log = originalLog;
+    }
   });
 });
 

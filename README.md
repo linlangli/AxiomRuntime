@@ -162,6 +162,17 @@ ai image <provider> <model> "数字插画"
 
 图片生成调用已配置 Provider 的 OpenAI-compatible `/v1/images/generations`。`b64_json` 会以 `0600` 权限保存到当前目录；远程 `https` 图片只输出 URL，不会自动下载不受信任的地址。图片请求最长等待 120 秒，失败后会尝试下一个兼容 Provider。
 
+### AI Runtime 代理
+
+```bash
+ai proxy                                      # 交互输入主机/IP与端口
+ai proxy 127.0.0.1 8081                       # 自动补为 http://127.0.0.1:8081
+ai proxy http://127.0.0.1:8081                # 也兼容完整 URL
+ai proxy off                                  # 清除
+```
+
+该代理保存在 `~/.ai-gateway/runtime.json`，用于 AxiomRuntime 自身请求，以及通过 `ai use` 启动的 Claude Code / Codex。它不会修改两个原生 CLI 的永久配置；本地 execution-scoped Transport Proxy 会自动加入 `NO_PROXY`，避免代理回环。
+
 ### Codex App 的持久配置
 
 如果需要让 Codex App 或直接执行的 `codex` 持续使用某个 Provider，显式运行：
@@ -196,7 +207,7 @@ ai telegram stop --bot ops
 ai telegram delete --bot ops
 ```
 
-Bot 中可使用 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/provider`、`/usage`、`/remember`、`/forget`、`/memories`、`/pin`、`/unpin`、`/terminal`、`/restart` 和 `/help`。如果本机无法直连 Telegram API，可设置：
+Bot 中可使用 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/provider`、`/usage`、`/remember`、`/forget`、`/memories`、`/pin`、`/unpin`、`/terminal`、`/restart` 和 `/help`。如果本机无法直连 Telegram API，可在新增或编辑 Bot 时按提示分别输入代理主机/IP与端口；也兼容直接设置完整地址：
 
 ```bash
 ai telegram config set proxyUrl http://127.0.0.1:7890 --bot ops
@@ -258,6 +269,7 @@ AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 
 ```text
 ~/.ai-gateway/providers.json       Provider 配置
+~/.ai-gateway/runtime.json         Runtime 代理等运行配置
 ~/.ai-gateway/.ai-cache.json       模型缓存、健康状态和上次选择
 ~/.ai-gateway/usage.json           用量账本
 ~/.ai-gateway/model-pricing.json   本地成本估算价格

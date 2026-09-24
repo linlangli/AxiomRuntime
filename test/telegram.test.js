@@ -6,9 +6,9 @@ import path from "node:path";
 import test from "node:test";
 import {
   parseTelegramTargetArgs,
-  runTelegramCommand,
-  TELEGRAM_PROXY_URL_PROMPT
+  runTelegramCommand
 } from "../dist/cli/commands/telegram.js";
+import { PROXY_HOST_PROMPT, PROXY_PORT_PROMPT, promptProxyUrl } from "../dist/cli/prompts/proxy.js";
 import {
   loadBotConfig,
   loadTelegramConfig,
@@ -83,9 +83,17 @@ import { parseModelPriceInput } from "../dist/telegram/handlers/usage.js";
 import { SessionManager } from "../dist/telegram/session/manager.js";
 import { SessionStore } from "../dist/telegram/session/store.js";
 
-test("telegram proxy prompt shows a complete URL example", () => {
-  assert.match(TELEGRAM_PROXY_URL_PROMPT, /include protocol/i);
-  assert.match(TELEGRAM_PROXY_URL_PROMPT, /http:\/\/127\.0\.0\.1:7890/);
+test("proxy prompt collects host and port separately", async () => {
+  const prompts = [];
+  const answers = ["127.0.0.1", "8081"];
+  const proxyUrl = await promptProxyUrl({
+    text: async (message) => {
+      prompts.push(message);
+      return answers.shift() ?? "";
+    }
+  });
+  assert.deepEqual(prompts, [PROXY_HOST_PROMPT, PROXY_PORT_PROMPT]);
+  assert.equal(proxyUrl, "http://127.0.0.1:8081");
 });
 
 test("normalizes telegram config and parses config values", async () => {
@@ -98,7 +106,7 @@ test("normalizes telegram config and parses config values", async () => {
       defaultPermissionMode: "full-auto",
       sessionTimeoutHours: "12",
       maxOutputLength: "3000",
-      proxyUrl: " http://127.0.0.1:7890 "
+      proxyUrl: " 127.0.0.1:7890 "
     });
 
     assert.equal(config.token, "123:abc");
@@ -110,6 +118,7 @@ test("normalizes telegram config and parses config values", async () => {
     assert.equal(config.maxOutputLength, 3000);
     assert.equal(config.proxyUrl, "http://127.0.0.1:7890");
     assert.deepEqual(parseTelegramConfigValue("allowedUserIds", "10, 11 12"), [10, 11, 12]);
+    assert.equal(parseTelegramConfigValue("proxyUrl", "127.0.0.1:8081"), "http://127.0.0.1:8081");
     assert.equal(normalizePermissionMode("auto-edit"), "acceptEdits");
     assert.equal(normalizeTelegramConfig({}).defaultPermissionMode, "bypassPermissions");
 
@@ -276,6 +285,19 @@ test("telegram CLI redacts a targeted bot token from command logs and output", a
     assert.equal(result.stdout.includes(token), false);
     assert.equal(result.stderr.includes(token), false);
     assert.equal((await loadBotConfig("ops")).token, token);
+
+    const proxyAddress = "10.20.30.40:8081";
+    const proxyResult = spawnSync(process.execPath, [
+      path.join(process.cwd(), "dist", "cli", "index.js"),
+      "telegram", "config", "set", "proxyUrl", proxyAddress, "--bot", "ops"
+    ], {
+      encoding: "utf8",
+      env: { ...process.env, AI_GATEWAY_HOME: tempDir }
+    });
+    assert.equal(proxyResult.status, 0, proxyResult.stderr);
+    const updatedLog = await fs.readFile(path.join(tempDir, ".ai-gateway.log"), "utf8");
+    assert.equal(updatedLog.includes(proxyAddress), false);
+    assert.equal((await loadBotConfig("ops")).proxyUrl, `http://${proxyAddress}`);
   });
 });
 
