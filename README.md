@@ -43,6 +43,7 @@ README 需要区分“已经能用”和“只是规划”。下面的状态以�
 ai provider add main https://api.example.com sk-xxx
 ai provider add backup https://backup.example.com sk-yyy
 ai provider list
+ai check main
 ai status
 ```
 
@@ -129,6 +130,7 @@ ai provider list                                   # 只读配置，不联网
 ai provider edit
 ai provider delete <name>
 
+ai check [provider]                               # 单独真实验证一个 Provider；省略名称时交互选择
 ai status                                          # 真实验证 Claude/Codex 可用性、刷新模型缓存和用量
 ai use claude [provider] [model]
 ai use codex [provider] [model]
@@ -136,7 +138,7 @@ ai last                                            # 沿用上次选择
 ai doctor                                          # 检查并安全修复内部状态
 ```
 
-`ai status` 会先执行不消耗 Token 的模型发现，再为每个 Provider 最多选择一个 Claude 和一个 Codex 代表模型做真实调用；请求使用最短输入、输出上限为 1 Token，且不会自动重试产生 Token 的请求。`ai doctor` 可以重建缺失或损坏的缓存、用量和会话文件，但 Provider 配置无效时只报告，不会覆盖凭证。
+`ai status` 会先执行不消耗 Token 的模型发现，再为每个 Provider 最多选择一个 Claude 和一个 Codex 代表模型做真实调用；请求使用最短输入、输出上限为 1 Token，且不会自动重试产生 Token 的请求。代表模型最多等待 30 秒；如果本地超时但上游可能已经完成，状态显示为 `unknown`，不会误判为 Provider 不可用。`ai doctor` 可以重建缺失或损坏的缓存、用量和会话文件，但 Provider 配置无效时只报告，不会覆盖凭证。
 
 ### 会话、日志、上下文与图片
 

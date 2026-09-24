@@ -12,16 +12,19 @@ export async function runStatusCommand(): Promise<void> {
     message: `Refreshed ${statuses.length} provider(s) for status.`,
     metadata: { providers: statuses.map((status) => ({ name: status.name, health: status.health, models: status.models.length })) }
   });
-  printStatusCards(statuses);
+  printProviderStatuses(statuses);
 }
 
-function printStatusCards(statuses: ProviderStatus[]): void {
+export function printProviderStatuses(
+  statuses: ProviderStatus[],
+  title = `AI Gateway Status (${statuses.length})`
+): void {
   if (!statuses.length) {
     console.log("No providers configured. Run `ai add` first.");
     return;
   }
 
-  console.log(`AI Gateway Status (${statuses.length})`);
+  console.log(title);
   console.log("=".repeat(72));
 
   statuses.forEach((status, index) => {
@@ -40,7 +43,7 @@ function printStatusCards(statuses: ProviderStatus[]): void {
     console.log(`  Usage    ${status.weeklyTokens} weekly token(s), ${status.usageShare}% share`);
     console.log(`  Checked  ${status.lastCheckedAt ?? "(never)"}`);
     if (status.lastError) {
-      console.log(`  Error    ${status.lastError}`);
+      console.log(`  Detail   ${status.lastError}`);
     }
 
     if (index < statuses.length - 1) {

@@ -200,7 +200,7 @@ function normalizeToolChecks(value: ProviderCache["toolChecks"]): ProviderCache[
     const check = value[tool];
     if (!check || typeof check !== "object") continue;
     result[tool] = {
-      status: check.status === "ok" || check.status === "error" || check.status === "not_applicable"
+      status: check.status === "ok" || check.status === "error" || check.status === "unknown" || check.status === "not_applicable"
         ? check.status
         : "error",
       model: normalizeNullableString(check.model),

@@ -449,7 +449,7 @@
         <a class="nav-link" href="#providers"><span>Provider</span><span class="nav-count">add / edit / delete</span></a>
         <a class="nav-link" href="#memory"><span>Memory</span><span class="nav-count">embedding</span></a>
         <a class="nav-link" href="#telegram"><span>Telegram</span><span class="nav-count">Bot</span></a>
-        <a class="nav-link" href="#status"><span>状态诊断</span><span class="nav-count">status / doctor</span></a>
+        <a class="nav-link" href="#status"><span>状态诊断</span><span class="nav-count">check / status / doctor</span></a>
         <a class="nav-link" href="#sessions"><span>会话报告</span><span class="nav-count">session / report</span></a>
         <a class="nav-link" href="#files"><span>配置文件</span><span class="nav-count">路径</span></a>
       </nav>
@@ -595,7 +595,13 @@ ai setup</pre>
                 <td><span class="group-label">诊断</span></td>
                 <td><code class="cmd">ai status</code></td>
                 <td>刷新模型，并为每个 provider 最多用一个 Claude 与一个 Codex 代表模型做 1-token 真实可用性验证。</td>
-                <td>只验证代表模型；产生 Token 的请求不自动重试。</td>
+                <td>只验证代表模型；产生 Token 的请求不自动重试，30 秒超时显示 unknown。</td>
+              </tr>
+              <tr data-search="check provider health single model token usage">
+                <td><span class="group-label">诊断</span></td>
+                <td><code class="cmd">ai check</code><br /><code class="cmd">ai check 51talk</code></td>
+                <td>交互选择或按名称只检查一个 provider，验证规则与 <code>ai status</code> 相同。</td>
+                <td>不会刷新其他 provider，适合减少等待时间和验证 Token。</td>
               </tr>
               <tr data-search="doctor deep local strict fix diagnose cli provider token">
                 <td><span class="group-label">诊断</span></td>
@@ -816,12 +822,14 @@ ai telegram status --all</pre>
             <div class="section-grid">
               <div class="note">
                 <h3>轻量检查</h3>
-                <pre>ai status
+                <pre>ai check
+ai check 51talk
+ai status
 ai provider list
 ai log
 ai log --print
 ai context</pre>
-                <p><code>status</code> 会刷新 provider 模型缓存，并从实际存在的 Claude/Codex 模型族中各选一个代表模型做真实调用验证；每次使用最短输入且输出上限为 1 token，不逐个验证全部模型，也不自动重试产生 Token 的请求。结果分别展示模型发现、Claude、Codex 的真实状态、验证模型和失败原因。验证返回的结构化 usage 会计入统一账本；周统计按 provider 精确名称聚合，同一 provider 的不同模型合并，事件仍保留 model 明细。</p>
+                <p><code>check</code> 复用与 <code>status</code> 相同的真实验证规则，但只刷新一个 provider；省略名称时交互选择，提供名称时精确匹配，不会检查其他 provider。<code>status</code> 会刷新全部 provider 模型缓存，并从实际存在的 Claude/Codex 模型族中各选一个代表模型做真实调用验证；每次使用最短输入且输出上限为 1 token，不逐个验证全部模型，也不自动重试产生 Token 的请求。代表模型最多等待 30 秒；本地超时时上游仍可能已经处理成功，因此显示 <code>unknown</code>，不会误判为 provider 不可用，并继续保留运行候选资格。结果分别展示模型发现、Claude、Codex 的状态、验证模型和具体原因。验证返回的结构化 usage 会计入统一账本；周统计按 provider 精确名称聚合，同一 provider 的不同模型合并，事件仍保留 model 明细。</p>
               </div>
               <div class="note">
                 <h3>诊断与自动修复</h3>

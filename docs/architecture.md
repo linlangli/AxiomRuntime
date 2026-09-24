@@ -214,7 +214,9 @@ flowchart LR
 
 成功结果写入可序列化的 `ProviderRequestProfile`，记录模型发现、OpenAI 和 Anthropic 各自采用的认证方式。API Key 始终单独保存，profile 只保存 header 策略枚举，禁止复制 secret。Transport Proxy、模型发现和模型探测共同消费该 profile；旧 Provider 缺少 profile 时使用向后兼容默认值。新增或修改 `baseUrl` / `apiKey` 时必须先完成探测，再分别以原子文件写入 Provider 与缓存；探测失败时原配置、模型缓存和集成 revision 均保持不变。
 
-`ai status` 的“可用”语义是实时协议验证，不是模型名称推断。每个 Provider 先执行零 Token 模型发现，再从每个实际存在的工具模型族中确定性选择一个代表模型；Claude 与 Codex 各最多选择一个模型做 1-token 调用，产生 Token 的请求不自动重试，并将 `toolChecks` 独立写入健康缓存。完整模型目录继续保留，不因只验证代表模型而被裁剪。某工具没有兼容模型时记为 `not_applicable`，真实调用失败只影响该工具状态；只有模型发现失败，或所有存在的工具协议都验证失败时，Provider 总体状态才是 `error`。
+`ai status` 的“可用”语义是实时协议验证，不是模型名称推断。每个 Provider 先执行零 Token 模型发现，再从每个实际存在的工具模型族中确定性选择一个代表模型；Claude 与 Codex 各最多选择一个模型做 1-token 调用，产生 Token 的请求不自动重试，并将 `toolChecks` 独立写入健康缓存。完整模型目录继续保留，不因只验证代表模型而被裁剪。某工具没有兼容模型时记为 `not_applicable`；收到明确失败响应才记为 `error`。代表模型调用最多等待 30 秒，超时属于不确定结果：工具和 Provider 记为 `unknown`，保留运行候选资格，因为上游可能已经完成请求但响应晚于本地中止。只有模型发现失败，或所有存在的工具协议都明确验证失败时，Provider 总体状态才是 `error`。
+
+`ai check [provider]` 是同一 core 状态能力的单 Provider 适配器：CLI 只负责显式名称解析或交互选择，`core/status` 负责精确查找并调用 `refreshProvider(..., { verifyRepresentativeModels: true })`。它不得退化为先刷新全部 Provider 再过滤结果，否则会引入不必要的等待和 Token 消耗。
 
 ### Telegram 执行流程
 

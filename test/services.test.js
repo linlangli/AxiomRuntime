@@ -6,7 +6,8 @@ import test from "node:test";
 import { addProvider, deleteProvider, updateProvider } from "../dist/core/providers/provider-service.js";
 import { readCache, recordProviderRuntimeFailure, upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
-import { getProviderStatuses } from "../dist/core/status/status-service.js";
+import { getProviderStatus, getProviderStatuses } from "../dist/core/status/status-service.js";
+import { runCheckCommand } from "../dist/cli/commands/check.js";
 import { getExecutionUserDoctorItem, runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveExactProviderForTool, resolveProviderForTool, resolveProviderCandidatesForTool } from "../dist/core/runner/fallback.js";
 import { checkAndRecordMemoryEmbeddingConfig } from "../dist/core/memory/embedding-check.js";
@@ -825,6 +826,78 @@ test("getProviderStatuses exposes model discovery failures without sending token
     assert.equal(status.codex.state, "provider-error");
     assert.match(status.codex.note, /401/);
     assert.equal(postCount, 0);
+  });
+});
+
+test("getProviderStatuses treats an aborted live probe as unknown and keeps it routable", async () => {
+  await withTempHome(async () => {
+    let postCount = 0;
+    mockFetch((url, init) => {
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "gpt-6-astra" }] });
+      }
+      if (init?.method === "POST") {
+        postCount += 1;
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+    await writeProviders([
+      { name: "vibe", baseUrl: "https://api.vibe.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-6-astra" }
+    ]);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+    const resolved = await resolveProviderForTool("codex");
+
+    assert.equal(status.health, "unknown");
+    assert.equal(status.codex.state, "unknown");
+    assert.match(status.codex.note, /timed out after 30000ms/);
+    assert.match(status.lastError, /upstream may still have completed/);
+    assert.equal(postCount, 1);
+    assert.equal(resolved.provider.name, "vibe");
+  });
+});
+
+test("ai check refreshes only the named or interactively selected provider", async () => {
+  await withTempHome(async () => {
+    const requests = [];
+    mockFetch((url, init) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET" });
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "gpt-5.5" }] });
+      }
+      return jsonResponse({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+    });
+    await writeProviders([
+      { name: "alpha", baseUrl: "https://alpha.test/v1", apiKey: "a", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "vibe", baseUrl: "https://vibe.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-5.5" }
+    ]);
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    try {
+      await runCheckCommand(["vibe"]);
+      assert.equal(requests.every((request) => request.url.startsWith("https://vibe.test/")), true);
+      assert.equal(output.some((line) => line.includes("AI Gateway Provider Check: vibe")), true);
+
+      requests.length = 0;
+      output.length = 0;
+      await runCheckCommand([], {
+        selectProvider: async (message, choices) => {
+          assert.equal(message, "Select provider to check");
+          assert.deepEqual(choices.map((choice) => choice.value), ["alpha", "vibe"]);
+          return "alpha";
+        }
+      });
+      assert.equal(requests.every((request) => request.url.startsWith("https://alpha.test/")), true);
+      assert.equal(output.some((line) => line.includes("AI Gateway Provider Check: alpha")), true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    await assert.rejects(getProviderStatus("missing", { refresh: true }), /Provider not found: missing/);
   });
 });
 

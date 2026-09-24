@@ -1,7 +1,7 @@
 import { readCache } from "../config/cache-store.js";
 import { readProviders } from "../config/providers-store.js";
 import { isModelCompatible, pickCompatibleModel } from "../models/model-filter.js";
-import { refreshAllProviders } from "../providers/provider-service.js";
+import { refreshAllProviders, refreshProvider } from "../providers/provider-service.js";
 import { getToolBaseUrl } from "../runner/tool-runner.js";
 import { getUsageShare, getWeeklyTokenMap } from "../usage/usage-service.js";
 import type { CliToolType, HealthStatus, Provider, ProviderStatus, ProviderToolCheck, ToolProviderStatus } from "../types.js";
@@ -11,7 +11,26 @@ export async function getProviderStatuses(options: { refresh?: boolean } = {}): 
     await refreshAllProviders({ verifyRepresentativeModels: true });
   }
 
-  const [providers, cache, weeklyTokens] = await Promise.all([readProviders(), readCache(), getWeeklyTokenMap()]);
+  return buildProviderStatuses(await readProviders());
+}
+
+export async function getProviderStatus(
+  providerName: string,
+  options: { refresh?: boolean } = {}
+): Promise<ProviderStatus> {
+  const providers = await readProviders();
+  const provider = providers.find((candidate) => candidate.name === providerName.trim());
+  if (!provider) {
+    throw new Error(`Provider not found: ${providerName}`);
+  }
+  if (options.refresh) {
+    await refreshProvider(provider, { verifyRepresentativeModels: true });
+  }
+  return (await buildProviderStatuses([provider]))[0]!;
+}
+
+async function buildProviderStatuses(providers: Provider[]): Promise<ProviderStatus[]> {
+  const [cache, weeklyTokens] = await Promise.all([readCache(), getWeeklyTokenMap()]);
   const allTokens = [...weeklyTokens.values()].reduce((sum, value) => sum + value, 0);
 
   return providers.map((provider) => {
@@ -88,6 +107,18 @@ function buildToolStatus(
       checkedAt: check?.checkedAt ?? null,
       attempts: check?.attempts ?? 0,
       durationMs: check?.durationMs ?? 0
+    };
+  }
+
+  if (check?.status === "unknown") {
+    return {
+      state: "unknown",
+      baseUrl,
+      model: check.model ?? model,
+      note: check.error ?? providerError ?? "live protocol check was inconclusive",
+      checkedAt: check.checkedAt,
+      attempts: check.attempts,
+      durationMs: check.durationMs
     };
   }
 

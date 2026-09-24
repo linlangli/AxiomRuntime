@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { runAddCommand } from "./commands/add.js";
+import { runCheckCommand } from "./commands/check.js";
 import { runContextCommand } from "./commands/context.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runProviderDeleteCommand, runProviderEditCommand } from "./commands/edit.js";
@@ -137,7 +138,7 @@ function maskSecretArg(value: string): string {
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["setup", "use", "image", "set", "add", "memory", "telegram", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["setup", "use", "image", "set", "add", "memory", "telegram", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -202,6 +203,11 @@ function registerBuiltInCommands(): void {
     name: "add",
     description: "provider add",
     run: (args) => runAddCommand(args)
+  });
+  registerCliCommand({
+    name: "check",
+    description: "check provider",
+    run: (args) => runCheckCommand(args)
   });
   registerCliCommand({
     name: "status",

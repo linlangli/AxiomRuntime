@@ -128,12 +128,16 @@ Runtime 会先尝试你输入的 Base URL，再按需增加或移除末尾 `/v1`
 
 ```bash
 ai provider list      # 只看配置，不联网
+ai check              # 交互选择并检查一个 Provider
+ai check 我的站       # 只检查指定 Provider
 ai status             # 联网刷新健康度 + 看用量
 ```
 
 `ai provider list` 以卡片形式展示，`level: 1` 会标注为默认服务商。API Key 显示为掩码（`sk-d****0000`）。
 
-`ai status` 会先刷新模型列表，再为每个 Provider 分别选择最多一个 Claude 代表模型和一个 Codex 代表模型做真实调用验证。不存在对应模型族时不会发起该协议请求；每次验证使用最短输入、把输出限制为 1 token，并且不自动重试产生 Token 的请求，因此单个 Provider 每次最多验证两个代表模型。终端会分别显示模型发现是否成功、Claude/Codex 是否真实可调用、验证模型和失败原因，不能再把“模型名称存在”误报为可用。
+`ai check [provider]` 复用与 `ai status` 相同的真实验证规则，但只刷新并检查一个 Provider。省略名称时进入交互选择；提供名称时精确匹配，名称不存在会直接报错，不会退回检查其他 Provider。适合在 Provider 较多时降低等待时间和验证 Token 消耗。
+
+`ai status` 会先刷新模型列表，再为每个 Provider 分别选择最多一个 Claude 代表模型和一个 Codex 代表模型做真实调用验证。不存在对应模型族时不会发起该协议请求；每次验证使用最短输入、把输出限制为 1 token，并且不自动重试产生 Token 的请求，因此单个 Provider 每次最多验证两个代表模型。代表模型验证最多等待 30 秒：明确成功显示 `ready`，明确失败显示 `provider-error`；如果本地等待超时，上游仍可能已经处理成功，因此显示 `unknown` 并保留该 Provider 的运行候选资格。终端会分别显示模型发现状态、验证模型、耗时和具体原因。
 
 ### 编辑与删除
 

@@ -10,7 +10,7 @@ import type {
 
 export type CallableModelCheck = {
   model: string;
-  status: "ok" | "error";
+  status: "ok" | "error" | "unknown";
   error: string | null;
   usage?: TokenUsage;
   attempts?: number;
@@ -20,6 +20,7 @@ export type CallableModelCheck = {
 
 export type CallableModelCheckOptions = {
   maxAttempts?: number;
+  timeoutMs?: number;
 };
 
 const RETRY_DELAYS_MS = [0, 200, 600];
@@ -339,7 +340,7 @@ async function checkChatCompletionsModel(
   let lastResult: CallableModelCheck | null = null;
   for (const url of buildChatCompletionsUrlCandidates(provider.baseUrl)) {
     const result = await postModelProbe(url, headers, payload, model, options);
-    if (result.status === "ok") return result;
+    if (result.status === "ok" || result.status === "unknown") return result;
     lastResult = result;
   }
   return lastResult ?? { model, status: "error", error: "No chat completions endpoint worked." };
@@ -402,7 +403,7 @@ async function checkOpenAiModel(provider: Provider, model: string): Promise<Call
     { model, input: ".", max_output_tokens: 1, stream: false },
     model
   );
-  if (responsesResult.status === "ok") return responsesResult;
+  if (responsesResult.status === "ok" || responsesResult.status === "unknown") return responsesResult;
   const chatResult = await checkChatCompletionsModel(provider, model);
   return chatResult.status === "ok"
     ? chatResult
@@ -427,11 +428,11 @@ async function postModelProbe(
       method: "POST",
       headers,
       body: JSON.stringify(payload)
-    }, options.maxAttempts);
+    }, options.maxAttempts, options.timeoutMs);
     if (result.error || !result.response) {
       return {
         model,
-        status: "error",
+        status: result.timedOut ? "unknown" : "error",
         error: result.error ?? "empty response",
         attempts: result.attempts,
         durationMs: result.durationMs,
@@ -614,6 +615,7 @@ type FetchTextResult = {
   response?: Response;
   text: string;
   error?: string;
+  timedOut?: boolean;
   attempts: number;
   durationMs: number;
   retryErrors: string[];
@@ -622,7 +624,8 @@ type FetchTextResult = {
 async function fetchTextWithRetry(
   url: string,
   init: RequestInit,
-  maxAttempts = RETRY_DELAYS_MS.length
+  maxAttempts = RETRY_DELAYS_MS.length,
+  timeoutMs = 12000
 ): Promise<FetchTextResult> {
   const startedAt = Date.now();
   const retryErrors: string[] = [];
@@ -635,7 +638,7 @@ async function fetchTextWithRetry(
 
     const attempt = index + 1;
     try {
-      const response = await fetchWithTimeout(url, init);
+      const response = await fetchWithTimeout(url, init, timeoutMs);
       const text = await response.text();
       if (!shouldRetryResponse(response) || attempt >= retryDelays.length) {
         return {
@@ -648,11 +651,15 @@ async function fetchTextWithRetry(
       }
       retryErrors.push(`attempt ${attempt}: ${response.status} ${response.statusText}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const timedOut = isAbortError(error);
+      const message = timedOut
+        ? `Request timed out after ${timeoutMs}ms; the upstream may still have completed it.`
+        : error instanceof Error ? error.message : String(error);
       if (attempt >= retryDelays.length) {
         return {
           text: "",
           error: message,
+          timedOut,
           attempts: attempt,
           durationMs: Date.now() - startedAt,
           retryErrors
@@ -673,6 +680,10 @@ async function fetchTextWithRetry(
 
 function shouldRetryResponse(response: Response): boolean {
   return RETRYABLE_STATUS_CODES.has(response.status);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "AbortError" || /operation was aborted/i.test(error.message));
 }
 
 function sleep(ms: number): Promise<void> {

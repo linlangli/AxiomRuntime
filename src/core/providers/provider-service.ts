@@ -16,6 +16,8 @@ export type AddProviderInput = {
   mode?: ProviderMode;
 };
 
+const STATUS_MODEL_PROBE_TIMEOUT_MS = 30_000;
+
 export async function listProviders(): Promise<Provider[]> {
   return readProviders();
 }
@@ -186,15 +188,23 @@ export async function refreshProvider(provider: Provider, options: RefreshProvid
   const models = callable.models;
   const representativeChecks = representative ? Object.values(representative.toolChecks) : [];
   const applicableChecks = representativeChecks.filter((check) => check?.status !== "not_applicable");
-  const representativeFailed = Boolean(representative && applicableChecks.length && !applicableChecks.some((check) => check?.status === "ok"));
-  const status = result.status === "ok" && ((options.verifyCallableModels && !models.length) || representativeFailed)
-    ? "error"
-    : result.status;
+  const representativePassed = applicableChecks.some((check) => check?.status === "ok");
+  const representativeFailed = Boolean(representative && applicableChecks.length && applicableChecks.every((check) => check?.status === "error"));
+  const representativeUnknown = Boolean(representative && applicableChecks.length && !representativePassed && !representativeFailed);
+  const status = result.status !== "ok"
+    ? result.status
+    : (options.verifyCallableModels && !models.length) || representativeFailed
+      ? "error"
+      : representativeUnknown
+        ? "unknown"
+        : "ok";
   const lastError = representativeFailed
     ? "No representative Claude or Codex model passed a real request."
-    : status === "error" && options.verifyCallableModels && !models.length
-    ? `No callable models found. ${result.error ?? ""}`.trim()
-    : result.error;
+    : representativeUnknown
+      ? "Representative model verification timed out; the upstream may still have completed the request."
+      : status === "error" && options.verifyCallableModels && !models.length
+        ? `No callable models found. ${result.error ?? ""}`.trim()
+        : result.error;
 
   const cache = await readCache();
   await upsertProviderCache(provider.name, buildProviderHealthCache(cache.providers[provider.name], {
@@ -254,7 +264,10 @@ async function verifyRepresentativeModels(
     model: selectRepresentativeModel(tool, provider.model, models)
   }));
   const selectedModels = representatives.flatMap(({ model }) => model ? [model] : []);
-  const results = await checkCallableModels(provider, selectedModels, { maxAttempts: 1 });
+  const results = await checkCallableModels(provider, selectedModels, {
+    maxAttempts: 1,
+    timeoutMs: STATUS_MODEL_PROBE_TIMEOUT_MS
+  });
   const resultByModel = new Map(results.map((result) => [result.model, result]));
   const toolChecks: Partial<Record<CliToolType, ProviderToolCheck>> = {};
 
@@ -359,7 +372,7 @@ async function recordModelProbeUsage(provider: Provider, model: string, usage: T
 
 async function recordSuccessfulProbeUsage(
   provider: Provider,
-  checks: Array<{ model: string; status: "ok" | "error"; usage?: TokenUsage }>
+  checks: Array<{ model: string; status: "ok" | "error" | "unknown"; usage?: TokenUsage }>
 ): Promise<void> {
   const recorded = new Set<string>();
   for (const check of checks) {

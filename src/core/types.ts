@@ -38,7 +38,7 @@ export type ProviderCache = {
 };
 
 export type ProviderToolCheck = {
-  status: "ok" | "error" | "not_applicable";
+  status: "ok" | "error" | "unknown" | "not_applicable";
   model: string | null;
   checkedAt: string;
   error: string | null;
@@ -125,7 +125,7 @@ export type ProviderStatus = Provider & {
 };
 
 export type ToolProviderStatus = {
-  state: "ready" | "no-model" | "provider-error" | "unverified";
+  state: "ready" | "no-model" | "provider-error" | "unknown" | "unverified";
   baseUrl: string;
   model: string | null;
   note: string;
