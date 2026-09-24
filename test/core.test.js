@@ -81,6 +81,20 @@ test("swaps provider levels", () => {
   assert.equal(swapped.find((provider) => provider.name === "c").level, 2);
 });
 
+test("level zero excludes providers and occupied add levels move to the tail", () => {
+  const providers = normalizeProviders([
+    { name: "expensive", baseUrl: "https://zero.test", apiKey: "z", mode: "auto", level: 0, model: "gpt-5" },
+    { name: "a", baseUrl: "https://a.test", apiKey: "a", mode: "auto", level: 1, model: "gpt-5" },
+    { name: "b", baseUrl: "https://b.test", apiKey: "b", mode: "auto", level: 2, model: "gpt-5" },
+    { name: "new", baseUrl: "https://new.test", apiKey: "n", mode: "auto", level: 3, model: "gpt-5" }
+  ]);
+
+  const swapped = swapProviderLevel(providers, "new", 2);
+  assert.equal(swapped.find((provider) => provider.name === "new").level, 2);
+  assert.equal(swapped.find((provider) => provider.name === "b").level, 3);
+  assert.equal(swapped.find((provider) => provider.name === "expensive").level, 0);
+});
+
 test("filters compatible models", () => {
   assert.equal(isModelCompatible("claude", "claude-opus-4-6"), true);
   assert.equal(isModelCompatible("codex", "gpt-5.5"), true);

@@ -14,12 +14,28 @@ export type AddProviderInput = {
   apiKey: string;
   model?: string;
   mode?: ProviderMode;
+  level?: number;
 };
 
 const STATUS_MODEL_PROBE_TIMEOUT_MS = 30_000;
 
 export async function listProviders(): Promise<Provider[]> {
   return readProviders();
+}
+
+export function getProviderPriorityOptions(
+  providers: Provider[],
+  providerName?: string
+): Array<{ level: number; occupiedBy: string | null }> {
+  const activeCount = providers.filter((provider) => provider.level > 0).length;
+  const selected = providerName ? providers.find((provider) => provider.name === providerName) : undefined;
+  const maxLevel = activeCount + (!selected || selected.level === 0 ? 1 : 0);
+  return Array.from({ length: maxLevel + 1 }, (_, level) => ({
+    level,
+    occupiedBy: level === 0
+      ? null
+      : providers.find((provider) => provider.level === level)?.name ?? null
+  }));
 }
 
 export async function discoverProviderModels(providerName: string): Promise<{
@@ -82,12 +98,18 @@ export async function addProvider(input: AddProviderInput): Promise<Provider> {
     throw new Error(`Provider already exists: ${input.name}`);
   }
 
+  const nextLevel = providers.filter((provider) => provider.level > 0).length + 1;
+  const requestedLevel = input.level ?? nextLevel;
+  if (!Number.isInteger(requestedLevel) || requestedLevel < 0 || requestedLevel > nextLevel) {
+    throw new Error(`Invalid level: ${requestedLevel}`);
+  }
+
   const draft: Provider = {
     name: input.name.trim(),
     baseUrl: input.baseUrl.trim().replace(/\/+$/, ""),
     apiKey: input.apiKey.trim(),
     mode: input.mode ?? "auto",
-    level: providers.length + 1,
+    level: requestedLevel,
     model: input.model?.trim() ?? ""
   };
 
@@ -104,7 +126,12 @@ export async function addProvider(input: AddProviderInput): Promise<Provider> {
     if (current.some((provider) => provider.name === draft.name)) {
       throw new Error(`Provider already exists: ${draft.name}`);
     }
-    return [...current, { ...configuredDraft, level: current.length + 1, model }];
+    const appendLevel = current.filter((provider) => provider.level > 0).length + 1;
+    const added = { ...configuredDraft, level: requestedLevel === 0 ? 0 : appendLevel, model };
+    const next = [...current, added];
+    return requestedLevel > 0 && requestedLevel !== appendLevel
+      ? swapProviderLevel(next, draft.name, requestedLevel)
+      : next;
   });
   const provider = normalizedProviders.find((item) => item.name === draft.name);
   if (!provider) {
@@ -176,7 +203,7 @@ export async function updateProvider(providerName: string, patch: Partial<Provid
         : provider
     );
 
-    if (patch.level) {
+    if (patch.level !== undefined) {
       nextProviders = swapProviderLevel(nextProviders, targetName, patch.level);
     }
 

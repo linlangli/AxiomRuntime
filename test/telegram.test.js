@@ -1451,6 +1451,8 @@ test("telegram provider flow adds, edits, and deletes through provider service",
   await handleProviderAdminInput(ctx, "https://new.example.com/v1", service);
   assert.equal(isProviderSecretInput(702), true);
   await handleProviderAdminInput(ctx, "new-secret-key", service);
+  const addLevelCallback = findInlineButton(events.at(-1).extra, "1（最低）").callback_data;
+  await handleProviderAdminCallback(ctx, addLevelCallback, service);
 
   assert.equal(state.deletedMessages, 1);
   assert.equal(isProviderSecretInput(702), false);
@@ -1504,6 +1506,8 @@ test("telegram provider errors redact the submitted API key", async () => {
   await handleProviderAdminInput(ctx, "failing-provider", service);
   await handleProviderAdminInput(ctx, "https://failure.example/v1", service);
   await handleProviderAdminInput(ctx, "must-not-leak", service);
+  const addLevelCallback = findInlineButton(events.at(-1).extra, "1（最低）").callback_data;
+  await handleProviderAdminCallback(ctx, addLevelCallback, service);
 
   assert.equal(JSON.stringify(events).includes("must-not-leak"), false);
   assert.match(events.at(-1).text, /\[REDACTED\]/);
@@ -2845,7 +2849,7 @@ function createFakeProviderAdminService(initialProviders) {
       const provider = {
         ...input,
         mode: input.mode ?? "auto",
-        level: state.providers.length + 1,
+        level: input.level ?? state.providers.length + 1,
         model: input.model ?? "detected-model"
       };
       state.providers.push(provider);

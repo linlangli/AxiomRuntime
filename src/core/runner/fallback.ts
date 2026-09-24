@@ -68,9 +68,13 @@ export async function resolveProviderCandidatesForTool(
   }
 
   const cache = await readCache();
-  const candidates = providerName
-    ? [...providers.filter((provider) => provider.name === providerName), ...providers.filter((provider) => provider.name !== providerName)]
-    : providers;
+  const selected = providerName ? providers.find((provider) => provider.name === providerName) : undefined;
+  const automaticProviders = providers.filter((provider) => provider.level > 0);
+  const candidates = selected
+    ? selected.level === 0
+      ? [selected]
+      : [selected, ...automaticProviders.filter((provider) => provider.name !== selected.name)]
+    : automaticProviders;
 
   if (providerName && candidates[0]?.name !== providerName) {
     throw new Error(`Provider not found: ${providerName}`);
@@ -128,6 +132,9 @@ export async function resolveProviderCandidatesForTool(
 
 function resolveModel(tool: CliToolType, defaultModel: string, cachedModels: string[], requestedModel?: string): string | null {
   if (requestedModel) {
+    if (!isModelCompatible(tool, requestedModel)) {
+      return null;
+    }
     // Only offer the requested model when the provider's known catalog serves
     // it; otherwise drop this provider from the rotation instead of guaranteeing
     // an upstream model_not_found. An unknown/never-probed catalog is allowed
@@ -143,5 +150,5 @@ function resolveModel(tool: CliToolType, defaultModel: string, cachedModels: str
   if (cachedModels.length) {
     return pickCompatibleModel(tool, "", cachedModels);
   }
-  return defaultModel || null;
+  return null;
 }

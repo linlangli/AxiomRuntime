@@ -1,6 +1,6 @@
 import { readCache } from "../../core/config/cache-store.js";
 import { writeLog } from "../../core/logs/log-service.js";
-import { deleteProvider, listProviders, updateProvider } from "../../core/providers/provider-service.js";
+import { deleteProvider, getProviderPriorityOptions, listProviders, updateProvider } from "../../core/providers/provider-service.js";
 import type { Provider, ProviderMode } from "../../core/types.js";
 import { promptConfirm, promptSelect, promptText } from "../prompts/prompt.js";
 
@@ -87,7 +87,7 @@ async function buildPatch(provider: Provider, providers: Provider[], field: Edit
   if (field === "level") {
     const level = await promptSelect<number>(
       "Select level",
-      providers.map((item) => ({ label: `${item.level}${item.name === provider.name ? " (current)" : ` (${item.name})`}`, value: item.level }))
+      buildProviderLevelChoices(providers, provider.name)
     );
     return { level };
   }
@@ -107,4 +107,20 @@ async function buildPatch(provider: Provider, providers: Provider[], field: Edit
 
   const value = await promptText(`New ${field}`, { defaultValue: provider[field] });
   return { [field]: value };
+}
+
+export function buildProviderLevelChoices(
+  providers: Provider[],
+  providerName: string
+): Array<{ label: string; value: number }> {
+  return getProviderPriorityOptions(providers, providerName).map(({ level, occupiedBy }) => ({
+    label: level === 0
+      ? "0 - excluded from automatic fallback"
+      : occupiedBy === providerName
+        ? `${level} - current: ${providerName}`
+        : occupiedBy
+          ? `${level} - swap with ${occupiedBy}`
+          : `${level} - lowest automatic priority`,
+    value: level
+  }));
 }

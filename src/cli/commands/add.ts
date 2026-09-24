@@ -1,5 +1,5 @@
 import { addProvider } from "../../core/providers/provider-service.js";
-import { getCachedModels, updateProvider } from "../../core/providers/provider-service.js";
+import { getCachedModels, getProviderPriorityOptions, listProviders, updateProvider } from "../../core/providers/provider-service.js";
 import { writeLog } from "../../core/logs/log-service.js";
 import { describeProviderRequestProfile } from "../../core/providers/provider-request-profile.js";
 import { promptSelect, promptText } from "../prompts/prompt.js";
@@ -18,10 +18,22 @@ export async function runAddCommand(args: string[], prompts: AddCommandPrompts =
   const baseUrl = baseUrlArg ?? await askText("Base URL");
   const apiKey = apiKeyArg ?? await askText("API key");
   let verifiedModel = modelArg?.trim() || "";
+  const existingProviders = interactive ? await listProviders() : [];
+  const level = interactive
+    ? await askSelect(
+        "Select priority (0 excludes automatic fallback)",
+        getProviderPriorityOptions(existingProviders).map(({ level: value, occupiedBy }) => ({
+          label: value === 0
+            ? "0 - excluded from automatic fallback"
+            : occupiedBy ? `${value} - replace ${occupiedBy}` : `${value} - lowest automatic priority`,
+          value
+        }))
+      )
+    : undefined;
 
   let provider;
   try {
-    provider = await addProvider({ name, baseUrl, apiKey, model: verifiedModel || undefined });
+    provider = await addProvider({ name, baseUrl, apiKey, model: verifiedModel || undefined, level });
   } catch (error) {
     const isProbeFailure = error instanceof Error
       && error.message.startsWith("Provider configuration probe failed:");
@@ -30,7 +42,7 @@ export async function runAddCommand(args: string[], prompts: AddCommandPrompts =
     console.log("Automatic model discovery failed. Enter a known model for direct verification.");
     verifiedModel = await askText("Model name");
     if (!verifiedModel) throw error;
-    provider = await addProvider({ name, baseUrl, apiKey, model: verifiedModel });
+    provider = await addProvider({ name, baseUrl, apiKey, model: verifiedModel, level });
   }
   if (interactive && !verifiedModel) {
     const models = await getCachedModels(provider.name);
