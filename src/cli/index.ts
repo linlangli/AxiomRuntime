@@ -9,6 +9,7 @@ import { runImageCommand } from "./commands/image.js";
 import { runListCommand } from "./commands/list.js";
 import { runLogCommand } from "./commands/log.js";
 import { runMemoryCommand } from "./commands/memory.js";
+import { runModelsCommand } from "./commands/models.js";
 import { runReportCommand } from "./commands/report.js";
 import { runLastCommand, runUseCommand } from "./commands/use.js";
 import { runSessionCommand } from "./commands/session.js";
@@ -138,7 +139,7 @@ function maskSecretArg(value: string): string {
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["setup", "use", "image", "set", "add", "memory", "telegram", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["setup", "use", "image", "set", "add", "memory", "telegram", "models", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -203,6 +204,11 @@ function registerBuiltInCommands(): void {
     name: "add",
     description: "provider add",
     run: (args) => runAddCommand(args)
+  });
+  registerCliCommand({
+    name: "models",
+    description: "list provider models",
+    run: (args) => runModelsCommand(args)
   });
   registerCliCommand({
     name: "check",

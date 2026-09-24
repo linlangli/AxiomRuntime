@@ -8,6 +8,7 @@ import { readCache, recordProviderRuntimeFailure, upsertProviderCache } from "..
 import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
 import { getProviderStatus, getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runCheckCommand } from "../dist/cli/commands/check.js";
+import { runModelsCommand } from "../dist/cli/commands/models.js";
 import { getExecutionUserDoctorItem, runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveExactProviderForTool, resolveProviderForTool, resolveProviderCandidatesForTool } from "../dist/core/runner/fallback.js";
 import { checkAndRecordMemoryEmbeddingConfig } from "../dist/core/memory/embedding-check.js";
@@ -898,6 +899,63 @@ test("ai check refreshes only the named or interactively selected provider", asy
     }
 
     await assert.rejects(getProviderStatus("missing", { refresh: true }), /Provider not found: missing/);
+  });
+});
+
+test("ai models lists one provider through GET models without changing live health", async () => {
+  await withTempHome(async () => {
+    const requests = [];
+    mockFetch((url, init) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET" });
+      return jsonResponse({ data: [{ id: "gpt-6-astra" }, { id: "gpt-5.5" }, { id: "image-v1" }] });
+    });
+    await writeProviders([
+      { name: "alpha", baseUrl: "https://alpha.test/v1", apiKey: "a", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "vibe", baseUrl: "https://vibe.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-6-astra" }
+    ]);
+    await upsertProviderCache("vibe", {
+      status: "unknown",
+      models: ["old-model"],
+      lastCheckedAt: "2026-01-01T00:00:00.000Z",
+      lastError: "live probe timed out",
+      toolChecks: {
+        codex: {
+          status: "unknown",
+          model: "gpt-6-astra",
+          checkedAt: "2026-01-01T00:00:00.000Z",
+          error: "live probe timed out",
+          attempts: 1,
+          durationMs: 30000
+        }
+      }
+    });
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    try {
+      await runModelsCommand(["vibe"]);
+      assert.equal(requests.every((request) => request.method === "GET"), true);
+      assert.equal(requests.every((request) => request.url.startsWith("https://vibe.test/")), true);
+      assert.equal(output.some((line) => line.includes("Models for vibe (3)")), true);
+      assert.equal(output.some((line) => line.includes("gpt-6-astra")), true);
+
+      requests.length = 0;
+      await runModelsCommand([], {
+        selectProvider: async (_message, choices) => {
+          assert.deepEqual(choices.map((choice) => choice.value), ["alpha", "vibe"]);
+          return "alpha";
+        }
+      });
+      assert.equal(requests.every((request) => request.url.startsWith("https://alpha.test/")), true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const cache = await readCache();
+    assert.equal(cache.providers.vibe.status, "unknown");
+    assert.equal(cache.providers.vibe.lastError, "live probe timed out");
+    assert.equal(cache.providers.vibe.toolChecks.codex.status, "unknown");
+    assert.deepEqual(cache.providers.vibe.models, ["gpt-5.5", "gpt-6-astra", "image-v1"]);
   });
 });
 

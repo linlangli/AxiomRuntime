@@ -43,6 +43,7 @@ README 需要区分“已经能用”和“只是规划”。下面的状态以�
 ai provider add main https://api.example.com sk-xxx
 ai provider add backup https://backup.example.com sk-yyy
 ai provider list
+ai models main
 ai check main
 ai status
 ```
@@ -130,6 +131,7 @@ ai provider list                                   # 只读配置，不联网
 ai provider edit
 ai provider delete <name>
 
+ai models [provider]                              # GET /models 后列出完整模型；省略名称时交互选择
 ai check [provider]                               # 单独真实验证一个 Provider；省略名称时交互选择
 ai status                                          # 真实验证 Claude/Codex 可用性、刷新模型缓存和用量
 ai use claude [provider] [model]

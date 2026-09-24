@@ -22,6 +22,60 @@ export async function listProviders(): Promise<Provider[]> {
   return readProviders();
 }
 
+export async function discoverProviderModels(providerName: string): Promise<{
+  provider: Provider;
+  models: string[];
+  checkedAt: string;
+}> {
+  const providers = await readProviders();
+  const provider = providers.find((candidate) => candidate.name === providerName.trim());
+  if (!provider) {
+    throw new Error(`Provider not found: ${providerName}`);
+  }
+
+  const result = await checkProvider(provider);
+  if (result.status !== "ok") {
+    await writeLog({
+      level: "error",
+      category: "provider",
+      action: "provider_model_discovery",
+      message: `${provider.name}: model discovery failed (${result.error ?? "unknown error"})`,
+      metadata: {
+        provider: provider.name,
+        status: result.status,
+        checkedAt: result.checkedAt,
+        attempts: result.attempts ?? null,
+        durationMs: result.durationMs ?? null
+      }
+    });
+    throw new Error(`Provider model discovery failed: ${result.error ?? "no models found"}`);
+  }
+
+  const cache = await readCache();
+  const previous = cache.providers[provider.name];
+  await upsertProviderCache(provider.name, previous
+    ? { ...previous, models: result.models }
+    : {
+        status: "unknown",
+        models: result.models,
+        lastCheckedAt: null,
+        lastError: null
+      });
+  await writeLog({
+    category: "provider",
+    action: "provider_model_discovery",
+    message: `${provider.name}: discovered ${result.models.length} model(s).`,
+    metadata: {
+      provider: provider.name,
+      models: result.models.length,
+      checkedAt: result.checkedAt,
+      attempts: result.attempts ?? null,
+      durationMs: result.durationMs ?? null
+    }
+  });
+  return { provider, models: result.models, checkedAt: result.checkedAt };
+}
+
 export async function addProvider(input: AddProviderInput): Promise<Provider> {
   const providers = await readProviders();
   if (providers.some((provider) => provider.name === input.name.trim())) {

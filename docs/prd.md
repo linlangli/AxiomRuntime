@@ -94,7 +94,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 |---|---|---|
 | 增删改查 | 🟢 | `ai provider add/list/edit/delete`，交互与一行式两种 |
 | 连通性检查 | 🟢 | 添加时自动测试；`ai check [provider]` 单独检查一个 Provider，`ai status` 检查全部 Provider；每个 Provider 最多验证一个 Claude 和一个 Codex 代表模型，以不自动重试的 1-token 调用展示协议可用性；30 秒超时记为 `unknown` 而非误报失败 |
-| 模型发现 | 🟢 | 自动探测并缓存可用模型 |
+| 模型发现 | 🟢 | 自动探测并缓存模型目录；`ai models [provider]` 只通过 `GET /models` 刷新并列出指定 Provider 的完整模型，不产生推理 Token |
 | 自适应连接配置 | 🟢 | 输入 Base URL 和 API Key 后，以零 Token 模型发现 + 每协议最多一次 1-token 成功验证，自动选择 `/v1` 与已知认证 header；全部失败则拒绝保存 |
 | 优先级 | 🟢 | `level` 字段；改 level 时占用则交换 |
 | 引擎兼容性过滤 | 🟢 | Codex 识别 `gpt`/`codex`/`grok`/`o`/`openai` 前缀 |

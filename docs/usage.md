@@ -128,12 +128,16 @@ Runtime 会先尝试你输入的 Base URL，再按需增加或移除末尾 `/v1`
 
 ```bash
 ai provider list      # 只看配置，不联网
+ai models             # 交互选择并刷新一个 Provider 的完整模型列表
+ai models 我的站      # 只通过 GET /models 查询指定 Provider
 ai check              # 交互选择并检查一个 Provider
 ai check 我的站       # 只检查指定 Provider
 ai status             # 联网刷新健康度 + 看用量
 ```
 
 `ai provider list` 以卡片形式展示，`level: 1` 会标注为默认服务商。API Key 显示为掩码（`sk-d****0000`）。
+
+`ai models [provider]` 只调用选中 Provider 的 `GET /models`，更新该 Provider 的完整模型缓存并逐行列出模型名，不会调用任何模型做推理，因此不产生推理 Token。省略名称时进入交互选择；提供名称时精确匹配。模型发现失败时保留原缓存和真实健康状态。
 
 `ai check [provider]` 复用与 `ai status` 相同的真实验证规则，但只刷新并检查一个 Provider。省略名称时进入交互选择；提供名称时精确匹配，名称不存在会直接报错，不会退回检查其他 Provider。适合在 Provider 较多时降低等待时间和验证 Token 消耗。
 
