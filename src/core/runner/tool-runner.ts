@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { saveLastSelection } from "../config/cache-store.js";
+import { recordProviderRuntimeFailure, recordProviderRuntimeSuccess, saveLastSelection } from "../config/cache-store.js";
 import { loadRuntimeConfig } from "../config/runtime-config.js";
 import { writeLog } from "../logs/log-service.js";
 import { applyProxyToEnv } from "../network/proxy.js";
@@ -11,6 +11,7 @@ import { isRecord } from "../utils/is-record.js";
 import { resolveToolCommand } from "./command-resolver.js";
 import { getRunnerEngine } from "./engine-registry.js";
 import { startOpenAiUsageProxy } from "./openai-usage-proxy.js";
+import type { OpenAiUsageProxyRoute } from "./openai-usage-types.js";
 import {
   CLAUDE_ROOT_PERMISSION_WARNING,
   resolveClaudePermissionMode,
@@ -18,7 +19,12 @@ import {
 } from "./claude-permission-policy.js";
 import { finishSession, startSession } from "../sessions/session-service.js";
 
-export async function runTool(tool: CliToolType, provider: Provider, model: string, options: { fallbackFrom?: string | null } = {}): Promise<number> {
+export async function runTool(
+  tool: CliToolType,
+  provider: Provider,
+  model: string,
+  options: { fallbackFrom?: string | null; fallbackRoutes?: OpenAiUsageProxyRoute[] } = {}
+): Promise<number> {
   await saveLastSelection(tool, provider.name, model);
   const command = resolveToolCommand(tool);
   if (!command) {
@@ -34,7 +40,23 @@ export async function runTool(tool: CliToolType, provider: Provider, model: stri
     provider: effectiveProvider,
     model,
     tool,
-    engine: tool
+    engine: tool,
+    fallbackRoutes: options.fallbackRoutes,
+    onRouteResult: async (route, success, reason) => {
+      if (success) await recordProviderRuntimeSuccess(route.provider.name);
+      else await recordProviderRuntimeFailure(route.provider.name, reason ?? "request_failed");
+    },
+    onFailover: (event) => {
+      const from = `${event.from.provider.name}/${event.from.model}`;
+      const to = `${event.to.provider.name}/${event.to.model}`;
+      if (event.type === "automatic") {
+        process.stderr.write(`\n[AxiomRuntime] ${from} 在产生有效输出前失败，已自动切换到 ${to}。\n`);
+      } else if (event.type === "confirmation_required") {
+        process.stderr.write(`\n[AxiomRuntime] ${from} 已产生部分输出，未自动重放。请在当前 CLI 中重新提交或重试，以确认切换到 ${to}。\n`);
+      } else {
+        process.stderr.write(`\n[AxiomRuntime] 已确认切换到 ${to}，本次请求保留当前 CLI 会话上下文。\n`);
+      }
+    }
   });
   const temporaryFiles: string[] = [];
   const setup = await (async () => {

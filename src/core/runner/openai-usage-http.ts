@@ -125,6 +125,88 @@ export async function streamResponse(
   ]);
 }
 
+export type GatedStreamResult = {
+  captured: Buffer;
+  outputStarted: boolean;
+  error: unknown | null;
+};
+
+export async function streamResponseWithGate(
+  response: Response,
+  res: http.ServerResponse,
+  isEffectiveOutput: (buffer: Buffer) => boolean,
+  options: { maxCaptureBytes?: number; maxPreludeBytes?: number } = {}
+): Promise<GatedStreamResult> {
+  const maxCaptureBytes = normalizeCaptureLimit(options.maxCaptureBytes);
+  const maxPreludeBytes = options.maxPreludeBytes ?? 256 * 1024;
+  const capturedChunks: Buffer[] = [];
+  const tailChunks: Buffer[] = [];
+  const preludeChunks: Buffer[] = [];
+  let capturedBytes = 0;
+  let tailBytes = 0;
+  let responseBytes = 0;
+  let preludeBytes = 0;
+  let outputStarted = false;
+  const tailLimit = Math.floor(maxCaptureBytes / 2);
+  if (!response.body) {
+    writeResponseHead(res, response);
+    return { captured: Buffer.alloc(0), outputStarted: false, error: null };
+  }
+
+  try {
+    for await (const chunk of response.body) {
+      const buffer = Buffer.from(chunk);
+      responseBytes += buffer.length;
+      if (capturedBytes < maxCaptureBytes) {
+        const remaining = maxCaptureBytes - capturedBytes;
+        capturedChunks.push(buffer.length > remaining ? buffer.subarray(0, remaining) : buffer);
+        capturedBytes += Math.min(buffer.length, remaining);
+      }
+      tailBytes = appendTailChunk(tailChunks, buffer, tailLimit, tailBytes);
+
+      if (!outputStarted) {
+        preludeChunks.push(buffer);
+        preludeBytes += buffer.length;
+        const prelude = Buffer.concat(preludeChunks, preludeBytes);
+        if (preludeBytes >= maxPreludeBytes || isEffectiveOutput(prelude)) {
+          writeResponseHead(res, response);
+          for (const pending of preludeChunks) res.write(pending);
+          preludeChunks.length = 0;
+          outputStarted = true;
+        }
+      } else {
+        res.write(buffer);
+      }
+    }
+  } catch (error) {
+    return { captured: buildCapturedResponse(capturedChunks, capturedBytes, tailChunks, tailBytes, responseBytes, maxCaptureBytes), outputStarted, error };
+  }
+
+  if (!outputStarted) {
+    writeResponseHead(res, response);
+    for (const pending of preludeChunks) res.write(pending);
+  }
+  return {
+    captured: buildCapturedResponse(capturedChunks, capturedBytes, tailChunks, tailBytes, responseBytes, maxCaptureBytes),
+    outputStarted,
+    error: null
+  };
+}
+
+function buildCapturedResponse(
+  chunks: Buffer[],
+  capturedBytes: number,
+  tailChunks: Buffer[],
+  tailBytes: number,
+  responseBytes: number,
+  limit: number
+): Buffer {
+  const captured = Buffer.concat(chunks, capturedBytes);
+  if (responseBytes <= limit) return captured;
+  const half = Math.floor(limit / 2);
+  return Buffer.concat([captured.subarray(0, half), Buffer.from("\n"), Buffer.concat(tailChunks, tailBytes)]);
+}
+
 function normalizeCaptureLimit(value: number | undefined): number {
   if (!Number.isFinite(value) || value === undefined || value <= 0) return MAX_USAGE_CAPTURE_BYTES;
   return Math.max(1024, Math.floor(value));

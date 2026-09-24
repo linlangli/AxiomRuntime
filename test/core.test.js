@@ -728,6 +728,107 @@ test("OpenAI usage proxy forwards JSON response and records priced usage", async
   });
 });
 
+test("usage proxy switches providers before effective output and rewrites the model", async () => {
+  await withTempHome(async () => {
+    const failovers = [];
+    const primary = await startTestServer(async (req, res) => {
+      await readRequestBody(req);
+      res.statusCode = 502;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: { message: "upstream unavailable" } }));
+    });
+    const backup = await startTestServer(async (req, res) => {
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      assert.equal(body.model, "gpt-backup");
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ model: body.model, usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 } }));
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "primary", baseUrl: primary.url, apiKey: "a", mode: "auto", level: 1, model: "gpt-primary" },
+      model: "gpt-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "gpt-backup" },
+        model: "gpt-backup"
+      }],
+      tool: "codex",
+      engine: "codex",
+      onFailover: (event) => failovers.push(event)
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-primary", input: "hello" })
+      });
+      assert.equal(response.status, 200);
+      assert.equal(JSON.parse(await response.text()).model, "gpt-backup");
+      assert.deepEqual(failovers.map((event) => event.type), ["automatic"]);
+      assert.equal(proxy.getRecords()[0].provider, "backup");
+    } finally {
+      await proxy.close();
+      await primary.close();
+      await backup.close();
+    }
+  });
+});
+
+test("usage proxy requires a new request before switching after partial output", async () => {
+  await withTempHome(async () => {
+    const failovers = [];
+    let primaryRequests = 0;
+    let backupRequests = 0;
+    const primary = await startTestServer(async (req, res) => {
+      primaryRequests += 1;
+      await readRequestBody(req);
+      res.setHeader("content-type", "text/event-stream");
+      res.write('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}\n\n');
+      setImmediate(() => res.destroy(new Error("stream interrupted")));
+    });
+    const backup = await startTestServer(async (req, res) => {
+      backupRequests += 1;
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      assert.equal(body.model, "claude-backup");
+      res.setHeader("content-type", "text/event-stream");
+      res.end('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"recovered"}}\n\n');
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "primary", baseUrl: primary.url, apiKey: "a", mode: "auto", level: 1, model: "claude-primary" },
+      model: "claude-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "claude-backup" },
+        model: "claude-backup"
+      }],
+      tool: "claude",
+      engine: "claude",
+      onFailover: (event) => failovers.push(event)
+    });
+
+    try {
+      const request = () => fetch(`${proxy.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-primary", messages: [], stream: true })
+      });
+      const first = await request();
+      assert.match(await first.text(), /partial/);
+      assert.equal(primaryRequests, 1);
+      assert.equal(backupRequests, 0);
+      assert.deepEqual(failovers.map((event) => event.type), ["confirmation_required"]);
+
+      const second = await request();
+      assert.match(await second.text(), /recovered/);
+      assert.equal(primaryRequests, 1);
+      assert.equal(backupRequests, 1);
+      assert.deepEqual(failovers.map((event) => event.type), ["confirmation_required", "confirmed"]);
+    } finally {
+      await proxy.close();
+      await primary.close();
+      await backup.close();
+    }
+  });
+});
+
 test("OpenAI usage proxy isolates upstream connections across caller retries", async () => {
   await withTempHome(async () => {
     const upstreamConnections = [];

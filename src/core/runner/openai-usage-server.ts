@@ -2,23 +2,29 @@ import http from "node:http";
 import { Agent, fetch, type Response } from "undici";
 import { writeLog } from "../logs/log-service.js";
 import { getProviderAuthScheme } from "../providers/provider-request-profile.js";
-import type { RunToolType } from "../types.js";
 import {
   buildUpstreamHeaders,
   buildUpstreamUrl,
   methodMayHaveBody,
   readRequestBody,
-  streamResponse,
+  streamResponseWithGate,
   writeResponseHead
 } from "./openai-usage-http.js";
 import {
   buildChatCompletionsResponsesSse,
   isResponsesStreamRequest,
   shouldFallbackResponsesToChat,
-  type ResponsesChatFallbackInput
+  type ResponsesChatFallbackResult
 } from "./openai-usage-responses.js";
 import { extractRequestModel, recordUsageFromResponse } from "./openai-usage-recording.js";
-import type { OpenAiUsageProxy, OpenAiUsageProxyMetrics, OpenAiUsageProxyRecord, StartOpenAiUsageProxyInput } from "./openai-usage-types.js";
+import type {
+  OpenAiUsageProxy,
+  OpenAiUsageProxyFailoverEvent,
+  OpenAiUsageProxyMetrics,
+  OpenAiUsageProxyRecord,
+  OpenAiUsageProxyRoute,
+  StartOpenAiUsageProxyInput
+} from "./openai-usage-types.js";
 import { getToolBaseUrl } from "./tool-runner.js";
 
 const DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS = 45_000;
@@ -26,204 +32,232 @@ const MAX_CONSECUTIVE_HEADERS_TIMEOUTS = 2;
 
 export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): Promise<OpenAiUsageProxy> {
   const engine = input.engine ?? (input.tool === "claude" ? "claude" : "codex");
-  const upstreamBaseUrl = getToolBaseUrl(engine, input.provider);
-  const upstreamHeadersTimeoutMs = normalizePositiveTimeout(
-    input.upstreamHeadersTimeoutMs,
-    DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS
-  );
-  // Codex already retries failed Responses requests. Give those retries fresh
-  // upstream connections so a stale gateway keep-alive socket cannot poison an
-  // entire turn with immediate fetch failures.
-  const upstreamDispatcher = new Agent({
-    connections: 4,
-    pipelining: 0,
-    headersTimeout: upstreamHeadersTimeoutMs,
-    bodyTimeout: 0
-  });
+  const routes = dedupeRoutes([{ provider: input.provider, model: input.model }, ...(input.fallbackRoutes ?? [])]);
+  const upstreamHeadersTimeoutMs = normalizePositiveTimeout(input.upstreamHeadersTimeoutMs, DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS);
+  const upstreamDispatcher = new Agent({ connections: 4, pipelining: 0, headersTimeout: upstreamHeadersTimeoutMs, bodyTimeout: 0 });
   const records: OpenAiUsageProxyRecord[] = [];
   const metrics = createEmptyMetrics();
-  let consecutiveHeadersTimeouts = 0;
+  const consecutiveHeadersTimeouts = new Map<string, number>();
+  let activeRouteIndex = 0;
+  let pendingRouteIndex: number | null = null;
 
   const server = http.createServer(async (req, res) => {
     const startedAt = Date.now();
-    let requestModel = input.model;
     let requestBytes = 0;
     let requestShape: Record<string, unknown> = {};
-    let upstreamPath = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
     metrics.requestCount += 1;
     let finalized = false;
     const finalizeMetrics = (success: boolean, upstreamStatus?: number | string): void => {
       if (finalized) return;
       finalized = true;
-      if (success) {
-        metrics.successCount += 1;
-      } else {
-        metrics.failureCount += 1;
-      }
+      if (success) metrics.successCount += 1;
+      else metrics.failureCount += 1;
       metrics.totalDurationMs += Date.now() - startedAt;
-      if (upstreamStatus !== undefined) {
-        incrementStatusCount(metrics, upstreamStatus);
-      }
+      if (upstreamStatus !== undefined) incrementStatusCount(metrics, upstreamStatus);
     };
+
     try {
-      const requestBody = await readRequestBody(req);
-      requestModel = extractRequestModel(requestBody) ?? input.model;
-      requestBytes = requestBody.length;
-      requestShape = summarizeRequestShape(requestBody);
-      const responsesStream = engine === "codex" && isResponsesStreamRequest(req.url ?? "/", requestBody);
-      void writeLog({
-        category: "usage",
-        action: "openai_usage_proxy_request",
-        message: `Proxying ${input.tool} request for ${input.provider.name} / ${requestModel}`,
-        metadata: {
-          tool: input.tool,
-          provider: input.provider.name,
-          model: requestModel,
-          path: new URL(req.url ?? "/", "http://127.0.0.1").pathname
-        }
-      });
-
-      const upstreamUrl = buildUpstreamUrl(upstreamBaseUrl, req.url ?? "/", {
-        stripV1Prefix: engine === "codex"
-      });
-      upstreamPath = new URL(upstreamUrl).pathname;
-      if (consecutiveHeadersTimeouts >= MAX_CONSECUTIVE_HEADERS_TIMEOUTS) {
-        await writeLog({
-          level: "warn",
-          category: "usage",
-          action: "openai_usage_proxy_timeout_short_circuit",
-          message: `Skipping another stalled upstream attempt for ${input.provider.name} / ${requestModel}.`,
-          metadata: {
-            tool: input.tool,
-            provider: input.provider.name,
-            model: requestModel,
-            upstreamPath,
-            requestBytes,
-            ...requestShape,
-            timeoutMs: upstreamHeadersTimeoutMs,
-            consecutiveTimeouts: consecutiveHeadersTimeouts
-          }
-        });
-        sendProxyError(res, 504, "AI Gateway timed out waiting for provider response headers.");
-        finalizeMetrics(false, "headers_timeout_short_circuit");
-        return;
+      if (pendingRouteIndex !== null) {
+        const from = routes[activeRouteIndex]!;
+        const to = routes[pendingRouteIndex]!;
+        activeRouteIndex = pendingRouteIndex;
+        pendingRouteIndex = null;
+        await emitFailover(input, { type: "confirmed", from, to, reason: "user_retried_after_partial_output" });
       }
-      const upstreamResponse = await fetch(upstreamUrl, {
-        method: req.method,
-        headers: buildUpstreamHeaders(req.headers, input.provider.apiKey, {
-          authScheme: getProviderAuthScheme(input.provider, engine === "claude" ? "anthropic" : "openai"),
-          includeAnthropicVersion: engine === "claude"
-        }),
-        body: requestBody.length && methodMayHaveBody(req.method) ? requestBody : undefined,
-        dispatcher: upstreamDispatcher
-      });
-      consecutiveHeadersTimeouts = 0;
 
-      // Native Responses is attempted first. Only when the upstream cannot speak
-      // the Responses protocol do we translate the request through chat
-      // completions; transient/no-channel errors are passed through untouched so
-      // provider rotation can react to them.
-      if (responsesStream && !isUsableEventStream(upstreamResponse)) {
-        const nativeBody = await upstreamResponse.text().catch(() => "");
-        const outcome = {
-          status: upstreamResponse.status,
-          contentType: upstreamResponse.headers.get("content-type") ?? "",
-          bodyText: nativeBody
-        };
-        if (shouldFallbackResponsesToChat(outcome)) {
-          void writeLog({
-            category: "usage",
-            action: "openai_usage_proxy_responses_chat_fallback",
-            message: `Responses protocol is unsupported for ${input.provider.name} / ${requestModel}; falling back to chat completions.`,
-            metadata: {
-              tool: input.tool,
-              provider: input.provider.name,
-              model: requestModel,
-              status: outcome.status
-            }
-          });
-          await sendChatCompletionsResponsesSse({
-            upstreamBaseUrl,
-            requestBody,
-            apiKey: input.provider.apiKey,
-            authScheme: getProviderAuthScheme(input.provider, "openai"),
-            dispatcher: upstreamDispatcher,
-            requestModel,
-            provider: input.provider.name,
-            tool: input.tool,
-            records,
-            onUsage: input.onUsage,
-            metrics,
-            res
-          }).then((result) => finalizeMetrics(result.status >= 200 && result.status < 400, result.status));
+      const originalRequestBody = await readRequestBody(req);
+      requestBytes = originalRequestBody.length;
+      requestShape = summarizeRequestShape(originalRequestBody);
+
+      for (let routeIndex = activeRouteIndex; routeIndex < routes.length; routeIndex += 1) {
+        const route = routes[routeIndex]!;
+        const nextRoute = routes[routeIndex + 1];
+        const requestBody = rewriteRequestModel(originalRequestBody, route.model);
+        const requestModel = extractRequestModel(requestBody) ?? route.model;
+        const responsesStream = engine === "codex" && isResponsesStreamRequest(req.url ?? "/", requestBody);
+        const upstreamBaseUrl = getToolBaseUrl(engine, route.provider);
+        const upstreamUrl = buildUpstreamUrl(upstreamBaseUrl, req.url ?? "/", { stripV1Prefix: engine === "codex" });
+        const upstreamPath = new URL(upstreamUrl).pathname;
+        const timeoutCount = consecutiveHeadersTimeouts.get(route.provider.name) ?? 0;
+
+        await writeLog({
+          category: "usage",
+          action: "openai_usage_proxy_request",
+          message: `Proxying ${input.tool} request for ${route.provider.name} / ${requestModel}`,
+          metadata: { tool: input.tool, provider: route.provider.name, model: requestModel, path: upstreamPath, attempt: routeIndex - activeRouteIndex + 1 }
+        });
+
+        if (timeoutCount >= MAX_CONSECUTIVE_HEADERS_TIMEOUTS) {
+          const reason = "headers_timeout_short_circuit";
+          await input.onRouteResult?.(route, false, reason);
+          if (nextRoute) {
+            await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
+            continue;
+          }
+          sendProxyError(res, 504, "AxiomRuntime timed out waiting for provider response headers.");
+          finalizeMetrics(false, reason);
           return;
         }
-        // Not a protocol problem (e.g. 503 no-channel): pass the native error
-        // through so the caller and provider rotation see the real cause.
-        res.statusCode = outcome.status;
-        res.statusMessage = upstreamResponse.statusText;
-        res.setHeader("content-type", outcome.contentType || "application/json; charset=utf-8");
+
+        let upstreamResponse: Response;
+        try {
+          upstreamResponse = await fetch(upstreamUrl, {
+            method: req.method,
+            headers: buildUpstreamHeaders(req.headers, route.provider.apiKey, {
+              authScheme: getProviderAuthScheme(route.provider, engine === "claude" ? "anthropic" : "openai"),
+              includeAnthropicVersion: engine === "claude"
+            }),
+            body: requestBody.length && methodMayHaveBody(req.method) ? requestBody : undefined,
+            dispatcher: upstreamDispatcher
+          });
+          consecutiveHeadersTimeouts.set(route.provider.name, 0);
+        } catch (error) {
+          const diagnostic = summarizeUpstreamError(error);
+          const headersTimedOut = diagnostic.code === "UND_ERR_HEADERS_TIMEOUT";
+          consecutiveHeadersTimeouts.set(route.provider.name, headersTimedOut ? timeoutCount + 1 : 0);
+          const reason = headersTimedOut ? "headers_timeout" : diagnostic.code ?? "proxy_error";
+          await logUpstreamError(input, route, requestModel, upstreamPath, requestBytes, requestShape, diagnostic, upstreamHeadersTimeoutMs);
+          await input.onRouteResult?.(route, false, reason);
+          if (nextRoute) {
+            await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
+            continue;
+          }
+          const code = diagnostic.code ? ` (${diagnostic.code})` : "";
+          sendProxyError(res, headersTimedOut ? 504 : 502, `AxiomRuntime proxy failed: ${diagnostic.message}${code}`);
+          finalizeMetrics(false, reason);
+          return;
+        }
+
+        if (responsesStream && !isUsableEventStream(upstreamResponse)) {
+          const nativeBody = await upstreamResponse.text().catch(() => "");
+          const contentType = upstreamResponse.headers.get("content-type") ?? "";
+          const outcome = { status: upstreamResponse.status, contentType, bodyText: nativeBody };
+          if (shouldFallbackResponsesToChat(outcome)) {
+            await writeLog({
+              category: "usage",
+              action: "openai_usage_proxy_responses_chat_fallback",
+              message: `Responses protocol is unsupported for ${route.provider.name} / ${requestModel}; falling back to chat completions.`,
+              metadata: { tool: input.tool, provider: route.provider.name, model: requestModel, status: outcome.status }
+            });
+            const chatResponse = await buildChatCompletionsResponsesSse({
+              upstreamBaseUrl,
+              requestBody,
+              apiKey: route.provider.apiKey,
+              authScheme: getProviderAuthScheme(route.provider, "openai"),
+              dispatcher: upstreamDispatcher
+            });
+            const chatText = chatResponse.body.toString("utf8");
+            if (shouldFailoverResponse(chatResponse.status, chatText) && nextRoute) {
+              const reason = `http_${effectiveResponseStatus(chatResponse.status, chatText)}`;
+              await input.onRouteResult?.(route, false, reason);
+              await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
+              continue;
+            }
+            await sendBufferedUsageResponse(res, chatResponse, chatText, route, requestModel, input, records, metrics);
+            activeRouteIndex = routeIndex;
+            const success = chatResponse.status >= 200 && chatResponse.status < 400;
+            await input.onRouteResult?.(route, success, `http_${chatResponse.status}`);
+            finalizeMetrics(success, chatResponse.status);
+            return;
+          }
+
+          if (shouldFailoverResponse(outcome.status, nativeBody) && nextRoute) {
+            const reason = `http_${effectiveResponseStatus(outcome.status, nativeBody)}`;
+            await input.onRouteResult?.(route, false, reason);
+            await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
+            continue;
+          }
+          await sendBufferedUsageResponse(res, {
+            status: outcome.status,
+            statusText: upstreamResponse.statusText,
+            contentType: outcome.contentType || "application/json; charset=utf-8",
+            body: Buffer.from(nativeBody)
+          }, nativeBody, route, requestModel, input, records, metrics);
+          activeRouteIndex = routeIndex;
+          const success = outcome.status >= 200 && outcome.status < 400;
+          await input.onRouteResult?.(route, success, `http_${outcome.status}`);
+          finalizeMetrics(success, outcome.status);
+          return;
+        }
+
+        const contentType = upstreamResponse.headers.get("content-type") ?? "";
+        if (isEventStreamContentType(contentType) && upstreamResponse.ok) {
+          const streamed = await streamResponseWithGate(
+            upstreamResponse,
+            res,
+            (buffer) => hasEffectiveStreamOutput(buffer, engine),
+            { maxCaptureBytes: input.tool === "image" ? 32 * 1024 * 1024 : undefined }
+          );
+          if (streamed.error) {
+            const diagnostic = summarizeUpstreamError(streamed.error);
+            const reason = diagnostic.code ?? "stream_error";
+            await input.onRouteResult?.(route, false, reason);
+            if (!streamed.outputStarted && nextRoute) {
+              await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
+              continue;
+            }
+            if (streamed.outputStarted && nextRoute) {
+              pendingRouteIndex = routeIndex + 1;
+              await emitFailover(input, { type: "confirmation_required", from: route, to: nextRoute, reason });
+            }
+            res.end();
+            finalizeMetrics(false, reason);
+            return;
+          }
+          const recordedUsage = await recordUsageFromResponse({
+            text: streamed.captured.toString("utf8"),
+            contentType,
+            fallbackModel: requestModel,
+            provider: route.provider.name,
+            tool: input.tool,
+            records,
+            onUsage: input.onUsage
+          });
+          recordUsageMetric(metrics, recordedUsage);
+          activeRouteIndex = routeIndex;
+          await input.onRouteResult?.(route, true);
+          res.end();
+          finalizeMetrics(true, upstreamResponse.status);
+          return;
+        }
+
+        const responseBody = Buffer.from(await upstreamResponse.arrayBuffer());
+        const responseText = responseBody.toString("utf8");
+        if (shouldFailoverResponse(upstreamResponse.status, responseText) && nextRoute) {
+          const reason = `http_${effectiveResponseStatus(upstreamResponse.status, responseText)}`;
+          await input.onRouteResult?.(route, false, reason);
+          await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
+          continue;
+        }
+        writeResponseHead(res, upstreamResponse);
         const recordedUsage = await recordUsageFromResponse({
-          text: nativeBody,
-          contentType: outcome.contentType,
+          text: responseText,
+          contentType,
           fallbackModel: requestModel,
-          provider: input.provider.name,
+          provider: route.provider.name,
           tool: input.tool,
           records,
           onUsage: input.onUsage
         });
         recordUsageMetric(metrics, recordedUsage);
-        res.end(nativeBody);
-        finalizeMetrics(outcome.status >= 200 && outcome.status < 400, outcome.status);
+        res.end(responseBody);
+        activeRouteIndex = routeIndex;
+        await input.onRouteResult?.(route, upstreamResponse.ok, `http_${upstreamResponse.status}`);
+        finalizeMetrics(upstreamResponse.ok, upstreamResponse.status);
         return;
       }
-
-      writeResponseHead(res, upstreamResponse);
-      const captured = await streamResponse(upstreamResponse, res, {
-        maxCaptureBytes: input.tool === "image" ? 32 * 1024 * 1024 : undefined
-      });
-      const recordedUsage = await recordUsageFromResponse({
-        text: captured.toString("utf8"),
-        contentType: upstreamResponse.headers.get("content-type") ?? "",
-        fallbackModel: requestModel,
-        provider: input.provider.name,
-        tool: input.tool,
-        records,
-        onUsage: input.onUsage
-      });
-      recordUsageMetric(metrics, recordedUsage);
-      res.end();
-      finalizeMetrics(upstreamResponse.status >= 200 && upstreamResponse.status < 400, upstreamResponse.status);
     } catch (error) {
       const diagnostic = summarizeUpstreamError(error);
-      const headersTimedOut = diagnostic.code === "UND_ERR_HEADERS_TIMEOUT";
-      consecutiveHeadersTimeouts = headersTimedOut ? consecutiveHeadersTimeouts + 1 : 0;
       await writeLog({
         level: "error",
         category: "usage",
-        action: "openai_usage_proxy_upstream_error",
-        message: `OpenAI upstream request failed for ${input.provider.name} / ${requestModel}: ${diagnostic.message}`,
-        metadata: {
-          tool: input.tool,
-          provider: input.provider.name,
-          model: requestModel,
-          upstreamPath,
-          requestBytes,
-          ...requestShape,
-          errorName: diagnostic.name,
-          errorCode: diagnostic.code,
-          errorSyscall: diagnostic.syscall,
-          timeoutMs: headersTimedOut ? upstreamHeadersTimeoutMs : null,
-          consecutiveTimeouts: headersTimedOut ? consecutiveHeadersTimeouts : 0
-        }
+        action: "openai_usage_proxy_error",
+        message: `AxiomRuntime proxy failed before completing the request: ${diagnostic.message}`,
+        metadata: { tool: input.tool, requestBytes, ...requestShape, errorName: diagnostic.name, errorCode: diagnostic.code }
       });
-      const code = diagnostic.code ? ` (${diagnostic.code})` : "";
-      sendProxyError(
-        res,
-        headersTimedOut ? 504 : 502,
-        `AI Gateway proxy failed: ${diagnostic.message}${code}`
-      );
-      finalizeMetrics(false, headersTimedOut ? "headers_timeout" : "proxy_error");
+      if (!res.headersSent) sendProxyError(res, 502, `AxiomRuntime proxy failed: ${diagnostic.message}`);
+      else res.end();
+      finalizeMetrics(false, diagnostic.code ?? "proxy_error");
     }
   });
 
@@ -240,33 +274,141 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
   });
 
   const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Failed to start AI Gateway OpenAI proxy.");
-  }
-
+  if (!address || typeof address === "string") throw new Error("Failed to start AxiomRuntime proxy.");
   return {
     baseUrl: `http://127.0.0.1:${address.port}${engine === "codex" ? "/v1" : ""}`,
     async close() {
       const closeServer = server.listening
-        ? new Promise<void>((resolve, reject) => {
-            server.close((error) => error ? reject(error) : resolve());
-          })
+        ? new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
         : Promise.resolve();
       await Promise.all([closeServer, upstreamDispatcher.close()]);
     },
-    getRecords() {
-      return [...records];
-    },
-    getMetrics() {
-      return snapshotMetrics(metrics);
-    }
+    getRecords: () => [...records],
+    getMetrics: () => snapshotMetrics(metrics)
   };
 }
 
+function dedupeRoutes(routes: OpenAiUsageProxyRoute[]): OpenAiUsageProxyRoute[] {
+  const seen = new Set<string>();
+  return routes.filter((route) => {
+    const key = `${route.provider.name}\0${route.model}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function emitFailover(input: StartOpenAiUsageProxyInput, event: OpenAiUsageProxyFailoverEvent): Promise<void> {
+  await writeLog({
+    level: "warn",
+    category: "strategy",
+    action: `provider_failover_${event.type}`,
+    message: `Provider ${event.from.provider.name} -> ${event.to.provider.name}: ${event.reason}`,
+    metadata: { type: event.type, from: event.from.provider.name, fromModel: event.from.model, to: event.to.provider.name, toModel: event.to.model, reason: event.reason }
+  });
+  await input.onFailover?.(event);
+}
+
+async function logUpstreamError(
+  input: StartOpenAiUsageProxyInput,
+  route: OpenAiUsageProxyRoute,
+  model: string,
+  upstreamPath: string,
+  requestBytes: number,
+  requestShape: Record<string, unknown>,
+  diagnostic: ReturnType<typeof summarizeUpstreamError>,
+  timeoutMs: number
+): Promise<void> {
+  await writeLog({
+    level: "error",
+    category: "usage",
+    action: "openai_usage_proxy_upstream_error",
+    message: `Upstream request failed for ${route.provider.name} / ${model}: ${diagnostic.message}`,
+    metadata: {
+      tool: input.tool,
+      provider: route.provider.name,
+      model,
+      upstreamPath,
+      requestBytes,
+      ...requestShape,
+      errorName: diagnostic.name,
+      errorCode: diagnostic.code,
+      errorSyscall: diagnostic.syscall,
+      timeoutMs: diagnostic.code === "UND_ERR_HEADERS_TIMEOUT" ? timeoutMs : null
+    }
+  });
+}
+
+async function sendBufferedUsageResponse(
+  res: http.ServerResponse,
+  response: ResponsesChatFallbackResult,
+  text: string,
+  route: OpenAiUsageProxyRoute,
+  requestModel: string,
+  input: StartOpenAiUsageProxyInput,
+  records: OpenAiUsageProxyRecord[],
+  metrics: OpenAiUsageProxyMetrics
+): Promise<void> {
+  res.statusCode = response.status;
+  res.statusMessage = response.statusText;
+  res.setHeader("content-type", response.contentType);
+  const recordedUsage = await recordUsageFromResponse({
+    text,
+    contentType: response.contentType,
+    fallbackModel: requestModel,
+    provider: route.provider.name,
+    tool: input.tool,
+    records,
+    onUsage: input.onUsage
+  });
+  recordUsageMetric(metrics, recordedUsage);
+  res.end(response.body);
+}
+
+function rewriteRequestModel(requestBody: Buffer, model: string): Buffer {
+  if (!requestBody.length) return requestBody;
+  try {
+    const body = JSON.parse(requestBody.toString("utf8")) as Record<string, unknown>;
+    if (typeof body.model !== "string") return requestBody;
+    body.model = model;
+    return Buffer.from(JSON.stringify(body));
+  } catch {
+    return requestBody;
+  }
+}
+
+function shouldFailoverResponse(status: number, bodyText: string): boolean {
+  const effective = effectiveResponseStatus(status, bodyText);
+  return effective === 401 || effective === 403 || effective === 404
+    || effective === 408 || effective === 409 || effective === 425 || effective === 429
+    || effective >= 500;
+}
+
+function effectiveResponseStatus(status: number, bodyText: string): number {
+  if (status < 200 || status >= 300) return status;
+  const match = bodyText.replace(/\s+/g, " ").match(/status[_-]?code["']?\s*[:=]\s*["']?(\d{3})/i);
+  return match ? Number(match[1]) : status;
+}
+
+function hasEffectiveStreamOutput(buffer: Buffer, engine: "claude" | "codex"): boolean {
+  const text = buffer.toString("utf8");
+  if (engine === "claude") {
+    return /"type"\s*:\s*"(?:text_delta|thinking_delta|input_json_delta)"/.test(text);
+  }
+  return /"type"\s*:\s*"response\.(?:output_text|reasoning_text|function_call_arguments)\.delta"/.test(text)
+    || /"(?:content|tool_calls)"\s*:\s*(?!null|""|\[\])/.test(text);
+}
+
+function isEventStreamContentType(contentType: string): boolean {
+  return contentType.toLowerCase().includes("text/event-stream");
+}
+
+function isUsableEventStream(response: Response): boolean {
+  return response.ok && isEventStreamContentType(response.headers.get("content-type") ?? "");
+}
+
 function normalizePositiveTimeout(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : fallback;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
 function sendProxyError(res: http.ServerResponse, status: number, message: string): void {
@@ -299,67 +441,13 @@ function summarizeUpstreamError(error: unknown): { name: string; message: string
   };
 }
 
-type SendChatCompletionsResponsesSseInput = ResponsesChatFallbackInput & {
-  requestModel: string;
-  provider: string;
-  tool: RunToolType;
-  records: OpenAiUsageProxyRecord[];
-  onUsage?: (record: OpenAiUsageProxyRecord) => void | Promise<void>;
-  metrics: OpenAiUsageProxyMetrics;
-  res: http.ServerResponse;
-};
-
-async function sendChatCompletionsResponsesSse(
-  input: SendChatCompletionsResponsesSseInput
-): Promise<{ status: number }> {
-  const response = await buildChatCompletionsResponsesSse({
-    upstreamBaseUrl: input.upstreamBaseUrl,
-    requestBody: input.requestBody,
-    apiKey: input.apiKey,
-    authScheme: input.authScheme,
-    dispatcher: input.dispatcher
-  });
-  input.res.statusCode = response.status;
-  input.res.statusMessage = response.statusText;
-  input.res.setHeader("content-type", response.contentType);
-  const recordedUsage = await recordUsageFromResponse({
-    text: response.body.toString("utf8"),
-    contentType: response.contentType,
-    fallbackModel: input.requestModel,
-    provider: input.provider,
-    tool: input.tool,
-    records: input.records,
-    onUsage: input.onUsage
-  });
-  recordUsageMetric(input.metrics, recordedUsage);
-  input.res.end(response.body);
-  return { status: response.status };
-}
-
-function isUsableEventStream(response: Response): boolean {
-  if (!response.ok) return false;
-  return (response.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream");
-}
-
 function createEmptyMetrics(): OpenAiUsageProxyMetrics {
-  return {
-    requestCount: 0,
-    successCount: 0,
-    failureCount: 0,
-    noUsageCount: 0,
-    usageRecordCount: 0,
-    totalDurationMs: 0,
-    averageDurationMs: 0,
-    upstreamStatusCounts: {}
-  };
+  return { requestCount: 0, successCount: 0, failureCount: 0, noUsageCount: 0, usageRecordCount: 0, totalDurationMs: 0, averageDurationMs: 0, upstreamStatusCounts: {} };
 }
 
 function recordUsageMetric(metrics: OpenAiUsageProxyMetrics, recordedUsage: boolean): void {
-  if (recordedUsage) {
-    metrics.usageRecordCount += 1;
-  } else {
-    metrics.noUsageCount += 1;
-  }
+  if (recordedUsage) metrics.usageRecordCount += 1;
+  else metrics.noUsageCount += 1;
 }
 
 function incrementStatusCount(metrics: OpenAiUsageProxyMetrics, status: number | string): void {

@@ -16,9 +16,13 @@ export async function runUseCommand(args: string[]): Promise<void> {
   if (!candidates.length) {
     throw new Error("No usable provider/model found. Run `ai status` or `ai doctor`.");
   }
-  const code = await runResolvedProviderCandidates(tool, candidates, {
+  const [initial, ...fallbacks] = candidates;
+  const code = await runResolvedProviderCandidates(tool, [initial!], {
     confirm: promptConfirm,
-    runner: (candidate, fallbackFrom) => runTool(tool, candidate.provider, candidate.model, { fallbackFrom })
+    runner: (candidate, fallbackFrom) => runTool(tool, candidate.provider, candidate.model, {
+      fallbackFrom,
+      fallbackRoutes: fallbacks.map(({ provider, model }) => ({ provider, model }))
+    })
   });
   process.exitCode = code;
 }
