@@ -129,14 +129,14 @@ ai provider list                                   # 只读配置，不联网
 ai provider edit
 ai provider delete <name>
 
-ai status                                          # 刷新健康度、模型缓存和用量
+ai status                                          # 真实验证 Claude/Codex 可用性、刷新模型缓存和用量
 ai use claude [provider] [model]
 ai use codex [provider] [model]
 ai last                                            # 沿用上次选择
 ai doctor                                          # 检查并安全修复内部状态
 ```
 
-`ai status` 默认只做连通性和模型检查，不发真实对话请求。`ai doctor` 可以重建缺失或损坏的缓存、用量和会话文件，但 Provider 配置无效时只报告，不会覆盖凭证。
+`ai status` 会先执行不消耗 Token 的模型发现，再为每个 Provider 最多选择一个 Claude 和一个 Codex 代表模型做真实调用；请求使用最短输入、输出上限为 1 Token，且不会自动重试产生 Token 的请求。`ai doctor` 可以重建缺失或损坏的缓存、用量和会话文件，但 Provider 配置无效时只报告，不会覆盖凭证。
 
 ### 会话、日志、上下文与图片
 

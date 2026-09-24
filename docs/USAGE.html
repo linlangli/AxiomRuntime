@@ -558,7 +558,7 @@ ai setup</pre>
               <tr data-search="provider add create import key">
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider add</code><br /><code class="cmd">ai provider add 51talk https://example.com sk-xxx</code></td>
-                <td>添加 provider，探测连通性和模型。</td>
+                <td>添加 provider，自动探测 Base URL、认证方式和模型，并在成功后写入配置。</td>
                 <td>也可用旧入口 <code>ai add</code>。</td>
               </tr>
               <tr data-search="provider list">
@@ -570,7 +570,7 @@ ai setup</pre>
               <tr data-search="provider edit rename baseUrl apiKey level model mode">
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider edit</code><br /><code class="cmd">ai provider edit 51talk</code></td>
-                <td>修改 name、baseUrl、凭证、mode、level、model。</td>
+                <td>修改 name、baseUrl、凭证、mode、level、model；修改连接信息时先探测，失败保留原配置。</td>
                 <td>当前 apiKey 以明文保存在 providers.json，编辑时会回显当前值。SecretStore + apiKeyRef 是目标态，尚未实现。</td>
               </tr>
               <tr data-search="provider delete remove fallback">
@@ -594,8 +594,8 @@ ai setup</pre>
               <tr data-search="status health provider model token usage">
                 <td><span class="group-label">诊断</span></td>
                 <td><code class="cmd">ai status</code></td>
-                <td>轻量刷新 provider 健康度和模型缓存。</td>
-                <td>默认不发送真实对话请求。</td>
+                <td>刷新模型，并为每个 provider 最多用一个 Claude 与一个 Codex 代表模型做 1-token 真实可用性验证。</td>
+                <td>只验证代表模型；产生 Token 的请求不自动重试。</td>
               </tr>
               <tr data-search="doctor deep local strict fix diagnose cli provider token">
                 <td><span class="group-label">诊断</span></td>
@@ -821,7 +821,7 @@ ai provider list
 ai log
 ai log --print
 ai context</pre>
-                <p><code>status</code> 会刷新 provider 健康度和模型缓存，展示 Claude/Codex 各自实际 baseUrl、兼容模型、token 使用量和使用占比。CLI 与 Telegram 的 Claude/Codex 新请求只要 provider 返回结构化 usage 都会计入；周统计按 provider 精确名称聚合，同一 provider 的不同模型合并，事件仍保留 model 明细。升级前未经过代理的旧历史不会估算补录。</p>
+                <p><code>status</code> 会刷新 provider 模型缓存，并从实际存在的 Claude/Codex 模型族中各选一个代表模型做真实调用验证；每次使用最短输入且输出上限为 1 token，不逐个验证全部模型，也不自动重试产生 Token 的请求。结果分别展示模型发现、Claude、Codex 的真实状态、验证模型和失败原因。验证返回的结构化 usage 会计入统一账本；周统计按 provider 精确名称聚合，同一 provider 的不同模型合并，事件仍保留 model 明细。</p>
               </div>
               <div class="note">
                 <h3>诊断与自动修复</h3>
