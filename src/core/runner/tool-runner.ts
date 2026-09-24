@@ -215,9 +215,11 @@ export function writeTemporaryClaudeSettings(
   const userSettingsPath = path.join(os.homedir(), ".claude", "settings.json");
   const settings = readClaudeSettings(userSettingsPath);
   const settingsEnv = isRecord(settings.env) ? settings.env : {};
+  const { ANTHROPIC_AUTH_TOKEN: _inheritedAuthToken, ...sanitizedSettingsEnv } = settingsEnv;
   const baseUrl = getToolBaseUrl("claude", provider);
   settings.env = {
-    ...settingsEnv,
+    ...sanitizedSettingsEnv,
+    ANTHROPIC_AUTH_TOKEN: "",
     ANTHROPIC_API_KEY: provider.apiKey,
     ANTHROPIC_BASE_URL: baseUrl
   };

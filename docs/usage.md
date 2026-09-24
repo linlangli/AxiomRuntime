@@ -192,7 +192,7 @@ ai last                                # 沿用上次的工具、服务商和模
 
 这部分值得了解，因为涉及到会不会污染你现有的配置：
 
-**Claude Code**：生成一个临时 `--settings` 文件，把 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 写进去再启动。**不碰 `~/.claude/settings.json`。**
+**Claude Code**：生成一个临时 `--settings` 文件，把 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 写进去再启动。为避免 Claude 同时看到两套认证，本次子进程会移除继承的 `ANTHROPIC_AUTH_TOKEN`，临时 settings 还会用空值遮蔽用户 settings 里的同名变量；**不碰 `~/.claude/settings.json`，也不修改当前 shell。**
 
 **Codex**：通过本次子进程的 `-c model_provider=...` 参数固定服务商，用 `env_key = "OPENAI_API_KEY"` 读注入的 Key。**不碰全局 `auth.json` 和 `config.toml`**，直接执行 `codex` 的行为不受影响。
 

@@ -93,10 +93,18 @@ test("runner engine registry exposes built-in engines", () => {
   assert.deepEqual(listRunnerEngines().map((engine) => engine.name).sort(), ["claude", "codex"]);
   const claude = getRunnerEngine("claude");
   const codex = getRunnerEngine("codex");
+  const claudeProvider = { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" };
   assert.equal(claude.normalizeBaseUrl("https://api.test/v1"), "https://api.test");
+  const claudeEnv = claude.buildEnv(claudeProvider, "claude-opus-4-6", {
+    ANTHROPIC_AUTH_TOKEN: "inherited-oauth-token",
+    KEEP_ME: "yes"
+  });
+  assert.equal(claudeEnv.ANTHROPIC_AUTH_TOKEN, undefined);
+  assert.equal(claudeEnv.ANTHROPIC_API_KEY, "key");
+  assert.equal(claudeEnv.KEEP_ME, "yes");
   assert.equal(codex.normalizeBaseUrl("https://api.test"), "https://api.test/v1");
   assert.equal(claude.buildArgs({
-    provider: { name: "api", baseUrl: "https://api.test", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" },
+    provider: claudeProvider,
     model: "claude-opus-4-6",
     uid: 0
   }).includes("--dangerously-skip-permissions"), false);
@@ -1508,7 +1516,7 @@ test("writeTemporaryClaudeSettings injects bypass permissions in auto mode", asy
     await fs.mkdir(path.join(tempHome, ".claude"), { recursive: true });
     await fs.writeFile(
       path.join(tempHome, ".claude", "settings.json"),
-      `${JSON.stringify({ env: { SOME_VAR: "keep-me" } }, null, 2)}\n`,
+      `${JSON.stringify({ env: { SOME_VAR: "keep-me", ANTHROPIC_AUTH_TOKEN: "inherited-oauth-token" } }, null, 2)}\n`,
       { mode: 0o600 }
     );
 
@@ -1526,6 +1534,7 @@ test("writeTemporaryClaudeSettings injects bypass permissions in auto mode", asy
 
     assert.equal(written.env.ANTHROPIC_API_KEY, "sk-test");
     assert.equal(written.env.ANTHROPIC_BASE_URL, "https://api.kunkunout.cn");
+    assert.equal(written.env.ANTHROPIC_AUTH_TOKEN, "");
     assert.equal(written.env.SOME_VAR, "keep-me");
     assert.equal(written.permissions.defaultMode, "bypassPermissions");
     assert.ok(written.permissions.allow.includes("Bash"));

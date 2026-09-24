@@ -71,7 +71,7 @@ ai use codex fenno gpt-5.5
 
 `ai use` 是临时注入，不是全局切换：
 
-- **Claude Code**：生成临时 `--settings` 文件，注入 `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY` 和模型，进程结束后清理；不修改 `~/.claude/settings.json`。
+- **Claude Code**：生成临时 `--settings` 文件，注入 `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY` 和模型，进程结束后清理；本次进程会移除继承的 `ANTHROPIC_AUTH_TOKEN`，并在附加 settings 中显式遮蔽用户 settings 里的同名变量，避免双认证警告，但不修改 `~/.claude/settings.json` 或当前 shell。
 - **Codex CLI**：通过本次进程的 `-c model_provider=...`、Provider 的 `base_url` 和 `env_key`，配合进程级 `OPENAI_API_KEY` 环境变量完成路由；不修改全局 `auth.json` 或 `config.toml`。Codex 本身也支持环境变量，AxiomRuntime 只是把它们限制在当前进程内。
 - **直接运行原生命令**：你仍然可以直接执行 `claude` 或 `codex`，它们继续使用自己的原生配置，不受 `ai use` 影响。
 

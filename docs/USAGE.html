@@ -690,7 +690,7 @@ ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
                 <h3>运行规则</h3>
                 <ul>
                   <li>provider 不可用时按 <code>level</code> 自动降级。</li>
-                  <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings。</li>
+                  <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings；本次子进程会移除继承的 <code>ANTHROPIC_AUTH_TOKEN</code>，临时 settings 还会用空值遮蔽用户 settings 里的同名变量，避免与所选 Provider 的 <code>ANTHROPIC_API_KEY</code> 形成双认证。</li>
                   <li><code>ai use codex</code> 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
                   <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，非 root 执行 Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。root 下请求 <code>auto</code> 会被安全约束为默认权限，临时 settings 中继承的 bypass 配置也会被清除。</li>
                   <li>OpenAI 兼容地址用于 Codex 时会使用 <code>/v1</code>，用于 Claude 时会去掉 <code>/v1</code>。</li>

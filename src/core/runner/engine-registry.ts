@@ -42,8 +42,9 @@ registerRunnerEngine({
   normalizeBaseUrl: (baseUrl) => baseUrl.replace(/\/+$/, "").replace(/\/v1$/i, ""),
   buildEnv: (provider, model, baseEnv) => {
     const baseUrl = getRunnerEngine("claude").normalizeBaseUrl(provider.baseUrl);
+    const { ANTHROPIC_AUTH_TOKEN: _inheritedAuthToken, ...sanitizedEnv } = baseEnv;
     return {
-      ...baseEnv,
+      ...sanitizedEnv,
       AI_GATEWAY_PROVIDER: provider.name,
       AI_GATEWAY_MODEL: model,
       AI_GATEWAY_MODE: provider.mode,
