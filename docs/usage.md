@@ -210,7 +210,7 @@ ai review reset                  # 清除审阅配置
 每轮流程：
 
 1. 首审模型只读检查目标 commit，输出带严重级别、文件、行号、证据和修复建议的问题。
-2. Runtime 将首审模型的完整结构化报告（总结 + findings）交给第二个模型；第二个模型可用只读方式检查仓库，逐条验证，可以同意、反对、不确定或补充遗漏。两个模型的总结、问题标题、证据、修复建议和裁决理由均要求使用简体中文；文件路径、代码符号、Provider/模型名和状态码保留原样。
+2. Runtime 将首审输出解析为有界的 `ReviewHandoff`，只保留简短总结以及每个问题的编号、严重度、标题、文件、行号和结论；第二个模型不会收到完整 commit diff、首审原始响应或完整修复建议。它使用只读仓库工具按问题位置独立核验，并逐条返回同意、反对或不确定，默认不补充新问题。两个模型的总结、问题标题、证据、修复建议和裁决理由均要求使用简体中文；文件路径、代码符号、Provider/模型名和状态码保留原样。
 3. Runtime 为问题分配 `R1-001` 形式的稳定编号，并显示具体 Provider/模型来源；双方同意的条目标记为 `CONSENSUS`。
 4. 你可以选择只修复双方共识、修复全部、按编号多选，或放弃并立即结束。
 5. 首审模型只修改所选问题。Runtime 检查改动后创建本地 commit，然后交换两个模型的角色，让另一个模型审阅新 commit。
@@ -220,10 +220,12 @@ ai review reset                  # 清除审阅配置
 
 - 开始审阅以及每次修复前都要求 Git 工作区干净，防止自动提交混入原有改动。
 - 审阅阶段是只读；修复阶段只给受限工作区写权限，并为每个选中的 finding 单独启动修复会话。Claude Code 不获得 Bash，并使用 `--bare`、`--no-session-persistence` 和 `--disable-slash-commands` 跳过用户 Hook、插件、技能和会话持久化；修复时只允许 `Read`、`Edit`、`Write` 访问当前问题对应的文件，根目录 `AGENTS.md`/`CLAUDE.md` 仅可只读，按行号读取有限上下文，不扫描整个仓库；Codex 使用 `workspace-write` sandbox 和 `approval=never`。
+- `ReviewHandoff` 最多携带 12 个问题，并限制总结、标题、路径和单条结论长度；第二模型只核验这些问题，避免重复注入完整 diff 和长篇首审报告。若首审返回更多问题，Runtime 会显式截断交接范围，完整首审结果仍保留在本轮本地数据中供展示。
 - 如果修复模型仍提示上下文连续压缩失败，Runtime 会保留工作区改动并停止流程；请检查当前 diff 后拆分问题重新运行，不会自动 reset 或丢弃文件。
 - 模型不得自行 commit、amend、reset、stash 或 push；Runtime 会检测意外的 HEAD 变化并停止。
 - 自动提交只发生在本地，提交信息会记录轮次、问题 ID 和两个模型；**永不自动 push**。
 - Git diff 超过约 1.5 MB 会拒绝自动审阅。中断或失败后不会丢弃已有修改，也不会自动重置，请先人工检查再继续。
+- 当前尚无跨进程 checkpoint；本次低 Token 交接不会伪装成可恢复 workflow。后续接入 `WorkflowCheckpointBackend` 后，第二模型或修复阶段失败才可从当前阶段恢复而不重复首审。
 - 每次模型调用默认最多等待 20 分钟，可用 `AI_GATEWAY_REVIEW_TIMEOUT_MS` 调整。
 - 审阅要求会在 command usage log 中脱敏；模型请求仍经过 execution-scoped Transport Proxy，真实 token 进入同一份用量账本。
 

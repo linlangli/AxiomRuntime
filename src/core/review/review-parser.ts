@@ -1,6 +1,7 @@
 import type {
   ReviewAgentResult,
   ReviewFinding,
+  ReviewHandoff,
   ReviewSeverity,
   ReviewSource,
   ReviewVerdict
@@ -21,14 +22,21 @@ export type ParsedInitialReview = {
 };
 
 export type ParsedAssessment = {
-  index: number;
+  id: string;
   verdict: Exclude<ReviewVerdict, "unverified">;
   reason: string;
 };
 
-export type ParsedJudgeReview = ParsedInitialReview & {
+export type ParsedJudgeReview = {
+  summary: string;
   assessments: ParsedAssessment[];
 };
+
+const MAX_HANDOFF_FINDINGS = 12;
+const MAX_HANDOFF_SUMMARY_CHARS = 600;
+const MAX_HANDOFF_TITLE_CHARS = 120;
+const MAX_HANDOFF_FILE_CHARS = 300;
+const MAX_HANDOFF_CLAIM_CHARS = 500;
 
 export function parseInitialReview(response: string): ParsedInitialReview {
   const payload = readJsonObject(response);
@@ -45,8 +53,32 @@ export function parseJudgeReview(response: string): ParsedJudgeReview {
     : [];
   return {
     summary: readText(payload.summary, "模型未提供裁决总结。"),
-    findings: readFindings(payload.findings),
     assessments
+  };
+}
+
+export function createReviewHandoff(input: {
+  round: number;
+  targetCommit: string;
+  reviewer: ReviewSource;
+  initial: ParsedInitialReview;
+}): ReviewHandoff {
+  const findings = input.initial.findings.slice(0, MAX_HANDOFF_FINDINGS).map((finding, index) => ({
+    id: findingId(input.round, index + 1),
+    severity: finding.severity,
+    title: truncate(finding.title, MAX_HANDOFF_TITLE_CHARS),
+    file: finding.file ? truncate(finding.file, MAX_HANDOFF_FILE_CHARS) : null,
+    line: finding.line,
+    claim: truncate(finding.evidence, MAX_HANDOFF_CLAIM_CHARS)
+  }));
+  return {
+    version: 1,
+    round: input.round,
+    targetCommit: input.targetCommit,
+    reviewer: input.reviewer,
+    summary: truncate(input.initial.summary, MAX_HANDOFF_SUMMARY_CHARS),
+    findings,
+    omittedFindingCount: Math.max(0, input.initial.findings.length - findings.length)
   };
 }
 
@@ -62,7 +94,9 @@ export function mergeReviewFindings(input: {
   const merged: ReviewFinding[] = [];
 
   input.initial.findings.forEach((finding, index) => {
-    const assessment = input.adjudication.assessments.find((candidate) => candidate.index === index + 1);
+    const assessment = index < MAX_HANDOFF_FINDINGS
+      ? input.adjudication.assessments.find((candidate) => candidate.id === findingId(input.round, index + 1))
+      : undefined;
     const verdict = assessment?.verdict ?? "unverified";
     merged.push({
       id: findingId(input.round, merged.length + 1),
@@ -74,16 +108,6 @@ export function mergeReviewFindings(input: {
     });
   });
 
-  for (const finding of input.adjudication.findings) {
-    merged.push({
-      id: findingId(input.round, merged.length + 1),
-      ...finding,
-      sources: [judgeSource],
-      verdict: "unverified",
-      verdictReason: "该问题由第二模型新增，尚未完成交叉验证。",
-      consensus: false
-    });
-  }
   return merged;
 }
 
@@ -111,12 +135,16 @@ function normalizeFinding(value: unknown): ParsedReviewFinding[] {
 
 function normalizeAssessment(value: unknown): ParsedAssessment[] {
   if (!isRecord(value)) return [];
-  const index = Number(value.index);
-  if (!Number.isInteger(index) || index < 1) return [];
+  const id = readText(value.id, "").toUpperCase();
+  if (!/^R\d+-\d{3}$/.test(id)) return [];
   const verdict = value.verdict === "agree" || value.verdict === "disagree" || value.verdict === "uncertain"
     ? value.verdict
     : "uncertain";
-  return [{ index, verdict, reason: readText(value.reason, "模型未提供验证依据。").slice(0, 2000) }];
+  return [{ id, verdict, reason: readText(value.reason, "模型未提供验证依据。").slice(0, 600) }];
+}
+
+function truncate(value: string, maxChars: number): string {
+  return value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
 function normalizeSeverity(value: unknown): ReviewSeverity {

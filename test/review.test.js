@@ -9,7 +9,7 @@ import { writeProviders } from "../dist/core/config/providers-store.js";
 import { buildReviewAgentArgs, formatReviewAgentFailure, parseReviewAgentResponse } from "../dist/core/review/review-agent.js";
 import { clearReviewConfig, normalizeReviewConfig, readReviewConfig, writeReviewConfig } from "../dist/core/review/review-config.js";
 import { LocalReviewGit } from "../dist/core/review/review-git.js";
-import { mergeReviewFindings, parseInitialReview, parseJudgeReview } from "../dist/core/review/review-parser.js";
+import { createReviewHandoff, mergeReviewFindings, parseInitialReview, parseJudgeReview } from "../dist/core/review/review-parser.js";
 import { buildFixPrompt, buildInitialReviewPrompt, buildJudgePrompt } from "../dist/core/review/review-prompts.js";
 import { inferReviewTarget, ReviewService } from "../dist/core/review/review-service.js";
 import { configureReviewModels, getReviewModelOptions, parseReviewCommandArgs } from "../dist/cli/commands/review.js";
@@ -141,6 +141,18 @@ test("review agent builds sandboxed arguments and extracts responses", () => {
   assert.ok(codexArgs.includes("never"));
   assert.ok(!codexArgs.includes("--dangerously-bypass-approvals-and-sandbox"));
 
+  const scopedReadOnlyClaudeArgs = buildReviewAgentArgs({
+    ...base,
+    engine: "claude",
+    model: "claude-opus-4-6",
+    settingsPath: "/tmp/settings.json",
+    scopeFiles: ["src/a.ts"]
+  });
+  assert.ok(scopedReadOnlyClaudeArgs.includes("Read(./AGENTS.md),Read(./CLAUDE.md),Read(./src/a.ts)"));
+  assert.ok(scopedReadOnlyClaudeArgs.includes("Read"));
+  assert.ok(!scopedReadOnlyClaudeArgs.includes("Read,Grep,Glob"));
+  assert.ok(!scopedReadOnlyClaudeArgs.includes("Edit(./src/a.ts)"));
+
   const claudeArgs = buildReviewAgentArgs({
     ...base,
     engine: "claude",
@@ -208,8 +220,7 @@ test("review parser preserves model provenance and consensus", () => {
 \`\`\``);
   const adjudication = parseJudgeReview(JSON.stringify({
     summary: "confirmed",
-    assessments: [{ index: 1, verdict: "agree", reason: "the call accepts null" }],
-    findings: []
+    assessments: [{ id: "R1-001", verdict: "agree", reason: "the call accepts null" }]
   }));
   const findings = mergeReviewFindings({
     round: 1,
@@ -223,7 +234,27 @@ test("review parser preserves model provenance and consensus", () => {
   assert.deepEqual(findings[0].sources.map((source) => source.engine), ["codex", "claude"]);
 });
 
-test("judge prompt hands the complete first review report to the second model", () => {
+test("judge parser ignores findings added outside the handoff", () => {
+  const adjudication = parseJudgeReview(JSON.stringify({
+    summary: "验证完成",
+    assessments: [{ id: "R1-001", verdict: "agree", reason: "结论成立" }],
+    findings: [{
+      severity: "high",
+      title: "第二模型新增问题",
+      file: "src/extra.ts",
+      line: 1,
+      evidence: "不应进入结果",
+      recommendation: "不应进入结果"
+    }]
+  }));
+
+  assert.deepEqual(adjudication, {
+    summary: "验证完成",
+    assessments: [{ id: "R1-001", verdict: "agree", reason: "结论成立" }]
+  });
+});
+
+test("judge prompt receives only a bounded first-review handoff", () => {
   const initialPrompt = buildInitialReviewPrompt({
     request: "review concurrency",
     commit: "a".repeat(40),
@@ -233,10 +264,9 @@ test("judge prompt hands the complete first review report to the second model", 
   assert.match(initialPrompt, /所有自然语言内容必须使用简体中文/);
   assert.match(initialPrompt, /用简体中文写简短的总体结论/);
 
-  const prompt = buildJudgePrompt({
-    request: "review concurrency",
-    commit: "a".repeat(40),
-    commitText: "diff --git a/src/a.ts b/src/a.ts",
+  const handoff = createReviewHandoff({
+    round: 1,
+    targetCommit: "a".repeat(40),
     reviewer: { engine: "claude", provider: "primary", model: "claude-opus-4-6" },
     initial: {
       summary: "Claude found one concurrency risk.",
@@ -250,14 +280,108 @@ test("judge prompt hands the complete first review report to the second model", 
       }]
     }
   });
-  assert.match(prompt, /required handoff/);
-  assert.match(prompt, /First reviewer report handed off for adjudication/);
+  const prompt = buildJudgePrompt({ handoff });
+  assert.match(prompt, /Bounded ReviewHandoff/);
   assert.match(prompt, /Claude found one concurrency risk/);
   assert.match(prompt, /Race in stop/);
-  assert.match(prompt, /exactly one .* assessment for every numbered first-review finding/);
+  assert.match(prompt, /stop can overlap start/);
+  assert.doesNotMatch(prompt, /serialize lifecycle operations/);
+  assert.doesNotMatch(prompt, /diff --git/);
+  assert.doesNotMatch(prompt, /User request/);
+  assert.match(prompt, /exactly one .* assessment for every handed-off finding id/);
+  assert.match(prompt, /do not add new findings/);
   assert.match(prompt, /human-readable value in Simplified Chinese/);
   assert.match(prompt, /所有自然语言内容必须使用简体中文/);
   assert.match(prompt, /用简体中文写验证依据/);
+});
+
+test("review handoff bounds finding count and text lengths", () => {
+  const handoff = createReviewHandoff({
+    round: 2,
+    targetCommit: "b".repeat(40),
+    reviewer: { engine: "codex", provider: "primary", model: "gpt-5.6-sol" },
+    initial: {
+      summary: "总".repeat(1000),
+      findings: Array.from({ length: 15 }, (_, index) => ({
+        severity: "medium",
+        title: `问题${index}-${"题".repeat(200)}`,
+        file: `src/${"long/".repeat(100)}file-${index}.ts`,
+        line: index + 1,
+        evidence: "证据".repeat(500),
+        recommendation: "建议".repeat(500)
+      }))
+    }
+  });
+
+  assert.equal(handoff.findings.length, 12);
+  assert.equal(handoff.omittedFindingCount, 3);
+  assert.ok(handoff.summary.length <= 600);
+  assert.ok(handoff.findings.every((finding) => finding.title.length <= 120));
+  assert.ok(handoff.findings.every((finding) => (finding.file?.length ?? 0) <= 300));
+  assert.ok(handoff.findings.every((finding) => finding.claim.length <= 500));
+  assert.equal(handoff.findings[0].id, "R2-001");
+  assert.equal(handoff.findings[11].id, "R2-012");
+});
+
+test("findings beyond the handoff limit remain unverified", () => {
+  const initial = {
+    summary: "发现十三个问题",
+    findings: Array.from({ length: 13 }, (_, index) => ({
+      severity: "medium",
+      title: `问题 ${index + 1}`,
+      file: `src/file-${index + 1}.ts`,
+      line: index + 1,
+      evidence: `证据 ${index + 1}`,
+      recommendation: `建议 ${index + 1}`
+    }))
+  };
+  const findings = mergeReviewFindings({
+    round: 1,
+    reviewer: { engine: "claude", provider: "primary", model: "claude-opus-4-6", response: "" },
+    judge: { engine: "codex", provider: "primary", model: "gpt-5.6-sol", response: "" },
+    initial,
+    adjudication: {
+      summary: "已验证交接范围",
+      assessments: Array.from({ length: 12 }, (_, index) => ({
+        id: `R1-${String(index + 1).padStart(3, "0")}`,
+        verdict: "agree",
+        reason: "结论成立"
+      }))
+    }
+  });
+
+  assert.equal(findings.length, 13);
+  assert.ok(findings.slice(0, 12).every((finding) => finding.verdict === "agree"));
+  assert.equal(findings[12].id, "R1-013");
+  assert.equal(findings[12].verdict, "unverified");
+  assert.equal(findings[12].consensus, false);
+});
+
+test("judge assessments cannot verify findings outside the handoff limit", () => {
+  const initial = {
+    summary: "发现十三个问题",
+    findings: Array.from({ length: 13 }, (_, index) => ({
+      severity: "medium",
+      title: `问题 ${index + 1}`,
+      file: `src/file-${index + 1}.ts`,
+      line: index + 1,
+      evidence: `证据 ${index + 1}`,
+      recommendation: `建议 ${index + 1}`
+    }))
+  };
+  const findings = mergeReviewFindings({
+    round: 1,
+    reviewer: { engine: "claude", provider: "primary", model: "claude-opus-4-6", response: "" },
+    judge: { engine: "codex", provider: "primary", model: "gpt-5.6-sol", response: "" },
+    initial,
+    adjudication: {
+      summary: "越权裁决",
+      assessments: [{ id: "R1-013", verdict: "agree", reason: "不应接受" }]
+    }
+  });
+
+  assert.equal(findings[12].verdict, "unverified");
+  assert.equal(findings[12].verdictReason, "第二模型未返回该问题的裁决。");
 });
 
 test("fix prompt constrains the fixing agent to selected files and local context", () => {
@@ -288,7 +412,7 @@ test("fix prompt constrains the fixing agent to selected files and local context
 test("review parser uses Chinese fallback text", () => {
   assert.equal(parseInitialReview(JSON.stringify({ findings: [] })).summary, "模型未提供总结。");
   assert.equal(
-    parseJudgeReview(JSON.stringify({ assessments: [{ index: 1 }], findings: [] })).assessments[0].reason,
+    parseJudgeReview(JSON.stringify({ assessments: [{ id: "R1-001" }] })).assessments[0].reason,
     "模型未提供验证依据。"
   );
 });
@@ -339,12 +463,10 @@ test("review service fixes selected consensus findings, commits, and swaps revie
       }),
       JSON.stringify({
         summary: "confirmed",
-        assessments: [{ index: 1, verdict: "agree", reason: "confirmed by type flow" }],
-        findings: []
+        assessments: [{ id: "R1-001", verdict: "agree", reason: "confirmed by type flow" }]
       }),
       "fixed",
-      JSON.stringify({ summary: "clean", findings: [] }),
-      JSON.stringify({ summary: "clean", assessments: [], findings: [] })
+      JSON.stringify({ summary: "clean", findings: [] })
     ];
     const agent = {
       async execute(request) {
@@ -373,14 +495,16 @@ test("review service fixes selected consensus findings, commits, and swaps revie
       "codex:readOnly",
       "claude:readOnly",
       "codex:workspaceWrite",
-      "claude:readOnly",
-      "codex:readOnly"
+      "claude:readOnly"
     ]);
+    assert.deepEqual(calls[1].scopeFiles, ["src/a.ts"]);
     assert.deepEqual(calls[2].scopeFiles, ["src/a.ts"]);
     assert.equal(rounds.length, 2);
-    assert.match(calls[1].prompt, /First reviewer report handed off for adjudication/);
+    assert.match(calls[1].prompt, /Bounded ReviewHandoff/);
     assert.match(calls[1].prompt, /found one/);
     assert.match(calls[1].prompt, /Null crash/);
+    assert.doesNotMatch(calls[1].prompt, /diff --git/);
+    assert.equal(rounds[1].judgeExecuted, false);
     assert.match(git.commitBody, /Review-Findings: R1-001/);
     assert.match(git.commitBody, /Review-Fixer: codex/);
   });

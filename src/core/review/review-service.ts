@@ -1,7 +1,7 @@
 import { writeLog } from "../logs/log-service.js";
 import path from "node:path";
 import { buildFixPrompt, buildInitialReviewPrompt, buildJudgePrompt } from "./review-prompts.js";
-import { mergeReviewFindings, parseInitialReview, parseJudgeReview } from "./review-parser.js";
+import { createReviewHandoff, mergeReviewFindings, parseInitialReview, parseJudgeReview } from "./review-parser.js";
 import type {
   ReviewAgentPort,
   ReviewConfig,
@@ -42,12 +42,34 @@ export class ReviewService {
       });
       const initial = parseInitialReview(initialResult.response);
 
-      await callbacks.onStage?.(`第 ${roundNumber} 轮：${formatDisplaySource(judge)} 正在裁决 ${formatDisplaySource(reviewer)} 的首审报告。`);
+      if (!initial.findings.length) {
+        const cleanRound: ReviewRound = {
+          round: roundNumber,
+          targetCommit,
+          reviewer,
+          judge,
+          reviewerSummary: initial.summary,
+          judgeSummary: "首审未发现问题，未调用第二模型。",
+          judgeExecuted: false,
+          findings: [],
+          omittedFindingCount: 0
+        };
+        rounds.push(cleanRound);
+        await callbacks.onRound?.(cleanRound);
+        await writeReviewRoundLog(cleanRound);
+        await callbacks.onStage?.("首审未发现需要处理的问题，已跳过第二模型调用。");
+        return { status: "clean", rounds, commits };
+      }
+
+      const handoff = createReviewHandoff({ round: roundNumber, targetCommit, reviewer, initial });
+
+      await callbacks.onStage?.(`第 ${roundNumber} 轮：${formatDisplaySource(judge)} 正在验证 ${formatDisplaySource(reviewer)} 的 ${handoff.findings.length} 条首审结论。`);
       const judgeResult = await this.agent.execute({
         ...judge,
         cwd: root,
         mode: "readOnly",
-        prompt: buildJudgePrompt({ request: input.request, commit: targetCommit, commitText, reviewer, initial })
+        scopeFiles: collectHandoffScopeFiles(root, handoff.findings),
+        prompt: buildJudgePrompt({ handoff })
       });
       const adjudication = parseJudgeReview(judgeResult.response);
       const reviewRound: ReviewRound = {
@@ -57,6 +79,8 @@ export class ReviewService {
         judge,
         reviewerSummary: initial.summary,
         judgeSummary: adjudication.summary,
+        judgeExecuted: true,
+        omittedFindingCount: handoff.omittedFindingCount,
         findings: mergeReviewFindings({
           round: roundNumber,
           reviewer: initialResult,
@@ -68,11 +92,6 @@ export class ReviewService {
       rounds.push(reviewRound);
       await callbacks.onRound?.(reviewRound);
       await writeReviewRoundLog(reviewRound);
-
-      if (!reviewRound.findings.length) {
-        await callbacks.onStage?.("两轮审阅均未发现需要处理的问题。");
-        return { status: "clean", rounds, commits };
-      }
 
       const selection = await callbacks.selectFindings(reviewRound);
       if (selection.action === "abandon") {
@@ -120,6 +139,14 @@ export class ReviewService {
 }
 
 function collectFixScopeFiles(root: string, findings: ReviewRound["findings"]): string[] {
+  return collectScopeFiles(root, findings);
+}
+
+function collectHandoffScopeFiles(root: string, findings: Array<{ file: string | null }>): string[] {
+  return collectScopeFiles(root, findings);
+}
+
+function collectScopeFiles(root: string, findings: Array<{ file: string | null }>): string[] {
   const files = new Set<string>();
   for (const finding of findings) {
     if (!finding.file) continue;
@@ -183,7 +210,9 @@ async function writeReviewRoundLog(round: ReviewRound): Promise<void> {
       reviewer: round.reviewer,
       judge: round.judge,
       findingCount: round.findings.length,
-      consensusCount: round.findings.filter((finding) => finding.consensus).length
+      consensusCount: round.findings.filter((finding) => finding.consensus).length,
+      judgeExecuted: round.judgeExecuted,
+      omittedFindingCount: round.omittedFindingCount
     }
   });
 }

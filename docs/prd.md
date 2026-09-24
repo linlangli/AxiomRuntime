@@ -113,7 +113,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | root 权限约束 | 🟢 | UID 0 下 `bypassPermissions` 强制降级为 `default` |
 | 会话记录 | 🟢 | 工具、服务商、模型、路径、起止、退出状态 |
 | 会话续用 | 🟡 | **复用启动参数**，不恢复 Claude/Codex 原生聊天上下文 |
-| 对抗式代码审阅 | 🟢 | Review 专用双模型配置；首审、裁决、来源标记和共识筛选；模型自然语言结果与终端交互使用简体中文，状态码和代码标识符保留原样；Claude 审阅隔离用户 Hook、插件和会话持久化，每个选中 finding 独立修复并按文件白名单和有限行窗口执行 |
+| 对抗式代码审阅 | 🟢 | Review 专用双模型配置；Runtime 将首审结果收敛为最多 12 条、有字段长度上限的 `ReviewHandoff`，第二模型只接收这些结论并逐条验证，不接收完整 diff、首审原始响应或完整修复建议，也不默认新增问题；来源标记、共识筛选和简体中文输出保持不变 |
 | 人工控制修复闭环 | 🟢 | 用户选择问题后才写工作区；本地自动提交、交换模型复审，不自动 push |
 | Review 崩溃恢复 | 🔴 | 当前只在单次 CLI 进程内循环；失败后保留工作区供人工检查 |
 | 统一 Agent 契约 | 🔴 | Telegram `Engine` 仍是本地兼容 facade，直接 spawn CLI |
@@ -489,7 +489,7 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 | **编辑时 apiKey 预填当前值** | 同上 | 同上 |
 | **Telegram Engine 是本地 facade** | 与 CLI 执行路径未完全统一 | R0.1 |
 | **无版本化 migrations** | 记忆表直建 | Phase 0 |
-| **Review 无持久 checkpoint** | CLI 中断后不能自动恢复到原轮次；已有修改保持原样 | 后续接入 `WorkflowCheckpointBackend` |
+| **Review 无持久 checkpoint** | CLI 中断后不能自动恢复到原轮次；`ReviewHandoff` 可序列化但当前未持久化，已有修改保持原样 | 后续接入 `WorkflowExecutorPort` + `WorkflowCheckpointBackend`，失败只重试当前阶段 |
 | **Node.js ≥ 22.19.0 硬要求** | Node 20 不可用 | 不变 |
 
 ---

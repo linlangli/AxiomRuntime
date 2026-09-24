@@ -23,6 +23,25 @@ export type ReviewSource = {
   model: string;
 };
 
+export type ReviewHandoffFinding = {
+  id: string;
+  severity: ReviewSeverity;
+  title: string;
+  file: string | null;
+  line: number | null;
+  claim: string;
+};
+
+export type ReviewHandoff = {
+  version: 1;
+  round: number;
+  targetCommit: string;
+  reviewer: ReviewSource;
+  summary: string;
+  findings: ReviewHandoffFinding[];
+  omittedFindingCount: number;
+};
+
 export type ReviewFinding = {
   id: string;
   severity: ReviewSeverity;
@@ -44,7 +63,9 @@ export type ReviewRound = {
   judge: ReviewSource;
   reviewerSummary: string;
   judgeSummary: string;
+  judgeExecuted: boolean;
   findings: ReviewFinding[];
+  omittedFindingCount: number;
 };
 
 export type ReviewSelection =

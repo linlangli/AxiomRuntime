@@ -172,22 +172,20 @@ async function selectFindings(round: ReviewRound): Promise<ReviewSelection> {
 function printReviewRound(round: ReviewRound): void {
   console.log(`\n第 ${round.round} 轮审阅 — 提交 ${round.targetCommit.slice(0, 12)}`);
   console.log(`首审模型：${formatSource(round.reviewer)}`);
-  console.log(`第二模型裁决：${formatSource(round.judge)}（已收到首审完整报告）`);
+  console.log(round.judgeExecuted
+    ? `第二模型验证：${formatSource(round.judge)}（只收到有界首审结论）`
+    : "第二模型验证：未调用（首审没有问题）");
   console.log(`首审总结：${round.reviewerSummary}`);
   console.log(`裁决总结：${round.judgeSummary}`);
   if (!round.findings.length) {
     console.log("没有需要处理的问题。");
     return;
   }
-  const firstReviewFindings = round.findings.filter((finding) => finding.sources.some((source) => sameSource(source, round.reviewer)));
-  const judgeAddedFindings = round.findings.filter((finding) => !finding.sources.some((source) => sameSource(source, round.reviewer)));
-  if (firstReviewFindings.length) {
-    console.log(`\n首审问题（${firstReviewFindings.length} 个），已由 ${formatSource(round.judge)} 裁决：`);
-    for (const finding of firstReviewFindings) printFinding(finding);
-  }
-  if (judgeAddedFindings.length) {
-    console.log(`\n${formatSource(round.judge)} 新增的问题（尚未交叉验证）：`);
-    for (const finding of judgeAddedFindings) printFinding(finding);
+  const verifiedCount = round.findings.length - round.omittedFindingCount;
+  console.log(`\n首审问题（${round.findings.length} 个；${verifiedCount} 个已交给 ${formatSource(round.judge)} 验证）：`);
+  for (const finding of round.findings) printFinding(finding);
+  if (round.omittedFindingCount > 0) {
+    console.log(`\n另有 ${round.omittedFindingCount} 个首审问题超出本轮交接上限，未交给第二模型验证。`);
   }
 }
 
@@ -234,11 +232,4 @@ function formatVerdict(finding: ReviewFinding): string {
 function formatReviewStatus(status: "clean" | "abandoned" | "no_changes"): string {
   const labels = { clean: "通过", abandoned: "已放弃", no_changes: "未产生修改" } as const;
   return labels[status];
-}
-
-function sameSource(
-  left: { engine: ReviewEngineName; provider: string; model: string },
-  right: { engine: ReviewEngineName; provider: string; model: string }
-): boolean {
-  return left.engine === right.engine && left.provider === right.provider && left.model === right.model;
 }

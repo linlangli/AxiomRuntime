@@ -271,7 +271,8 @@ flowchart LR
   CLI["CLI Surface"] --> RS["ReviewService"]
   RS --> GIT["ReviewGitPort<br/>commit snapshot / clean guard / local commit"]
   RS --> A["ReviewAgentPort<br/>first reviewer"]
-  A --> B["ReviewAgentPort<br/>second-opinion judge"]
+  A --> H["bounded ReviewHandoff<br/>summary + numbered claims"]
+  H --> B["ReviewAgentPort<br/>claim verifier"]
   B --> MERGE["deterministic merge<br/>finding id / source / verdict"]
   MERGE --> HUMAN["human selection"]
   HUMAN -->|"abandon"| STOP["stop"]
@@ -283,15 +284,16 @@ flowchart LR
 
 - `ReviewService` 只依赖 `ReviewAgentPort` 与 `ReviewGitPort`，CLI 只渲染进度和收集用户选择
 - Review 配置先询问 `firstEngine`，再按首审引擎、另一个引擎的顺序选择缓存中的兼容 Provider/模型；图片生成模型不参与 Codex 候选
-- 第二模型收到首模型的完整结构化报告，逐条返回 `agree` / `disagree` / `uncertain`；双方模型的自然语言字段要求使用简体中文，文件路径、代码符号、Provider/模型名和状态码保留原样；第二模型新增的问题单独标记为尚未交叉验证
+- `ReviewHandoff` 是 Runtime 拥有、provider-agnostic、可序列化的模型间边界。Runtime 从首审结果确定性生成它，只保留有界总结以及最多 12 个问题的编号、严重度、标题、文件、行号和结论；首审原始响应、完整 commit diff、长证据和完整修复建议不得进入第二模型 prompt
+- 第二模型是 claim verifier，只对 `ReviewHandoff` 中每个编号逐条返回 `agree` / `disagree` / `uncertain`，默认不能新增问题；它通过只读仓库能力按问题位置核验目标 commit，而不是再次接收或重复审阅完整 diff。双方模型的自然语言字段要求使用简体中文，文件路径、代码符号、Provider/模型名和状态码保留原样
 - `CliReviewAgent` 通过 Claude/Codex headless JSON stream 与同一个 execution-scoped Transport Proxy 执行；Claude 使用 `--bare`、`--no-session-persistence` 和 `--disable-slash-commands` 跳过用户 Hook、插件、技能与会话写入，避免外部项目上下文污染；没有第二份 usage ledger
 - 首审与裁决使用只读权限；只有用户选择具体 finding 后才调用 `workspaceWrite`
 - 每个选中的 finding 都在独立修复会话中处理；Claude 修复适配器只开放 `Read`、`Edit`、`Write`，并把根目录 `AGENTS.md`、`CLAUDE.md`（仅只读）及该 finding 的文件作为 `Read(path)` / `Edit(path)` / `Write(path)` 白名单；提示要求按行号读取有限窗口，禁止全仓扫描和测试构建，避免修复会话触发上下文压缩循环；Codex 修复适配器固定 `workspace-write + approval=never`
 - Git adapter 在开始和每次修复前要求 clean worktree；模型不得拥有提交步骤，Runtime 检查 `HEAD` 未变化后才精确执行本地 commit
 - commit 带 `Review-Round`、`Review-Findings`、`Review-Fixer`、`Review-Judge` trailer，不执行 push
-- finding 合并是确定性的：第二模型 `agree` 才标为 `consensus`；`disagree`、`uncertain` 与第二模型新增问题仍显示来源，由用户决定
+- finding 合并是确定性的：第二模型 `agree` 才标为 `consensus`；`disagree`、`uncertain` 或缺失裁决仍显示首审来源，由用户决定。默认流程不存在第二模型新增 finding
 
-🟡 限制：循环当前由单个 CLI 进程持有，没有 durable checkpoint；执行中断后保留已有文件状态且 fail-closed，不自动 reset 或继续提交。它是 `WorkflowExecutorPort` 落地前的 core-local service，不代表目标 Workflow 契约已经完成。
+🟡 限制：当前只完成 core-local `ReviewHandoff` 和有界模型调用，循环仍由单个 CLI 进程持有，没有 durable checkpoint；执行中断后保留已有文件状态且 fail-closed，不自动 reset 或继续提交。后续由 `WorkflowExecutorPort` + `WorkflowCheckpointBackend` 持久化首审、裁决、人工选择、修复和提交阶段，使失败只重试当前阶段；在该能力落地前不得宣称支持 `status` / `resume` / `cancel`。
 
 ---
 

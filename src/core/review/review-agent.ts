@@ -99,7 +99,7 @@ export function buildReviewAgentArgs(input: ReviewAgentRequest & {
   if (input.engine === "claude") {
     const allowedTools = buildClaudeAllowedTools(input);
     const availableTools = input.mode === "readOnly"
-      ? "Read,Grep,Glob"
+      ? input.scopeFiles?.length ? "Read" : "Read,Grep,Glob"
       : input.scopeFiles?.length
         ? "Read,Edit,Write"
         : "Read";
@@ -233,6 +233,11 @@ function normalizeFailureMessage(message: string): string {
 
 function buildClaudeAllowedTools(input: ReviewAgentRequest): string {
   if (input.mode === "readOnly") {
+    if (input.scopeFiles?.length) {
+      return ["AGENTS.md", "CLAUDE.md", ...input.scopeFiles]
+        .map((file) => `Read(./${file.replace(/^\.\//, "")})`)
+        .join(",");
+    }
     return "Read,Grep,Glob";
   }
   if (!input.scopeFiles?.length) {
