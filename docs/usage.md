@@ -121,7 +121,7 @@ ai provider add 我的站 https://example.com sk-xxx   # 一行搞定
 ai provider add 我的站 https://example.com sk-xxx gpt-5.5  # 显式模型回退
 ```
 
-添加时自动完成：探测 Base URL 与认证方式 → 获取模型列表 → 用每种实际存在的文本协议各一个代表模型做最多 1 token 的可用性验证 → 设 `mode: auto` → 分配下一个优先级 → 写入配置和模型缓存 → 选择默认模型。全部候选均失败时不会写入 Provider。
+添加时自动完成：选择 `0..N` 优先级 → 探测 Base URL 与认证方式 → 获取模型列表 → 用每种实际存在的文本协议各一个代表模型做最多 1 token 的可用性验证 → 设 `mode: auto` → 写入配置和模型缓存 → 选择默认模型。已有 5 个自动 Provider 时会提供 `0, 1, 2, 3, 4, 5, 6`；选择已占用等级时，新 Provider 占据该等级，原 Provider 移到队尾。`level: 0` 表示只允许显式选择，不参与自动切换。全部候选均失败时不会写入 Provider。
 
 Runtime 会先尝试你输入的 Base URL，再按需增加或移除末尾 `/v1`；认证只在 `Bearer`、`x-api-key`、`api-key` 等可由当前 API Key 安全派生的已知方式中选择，不会暴力猜测任意私有 header。探测成功后终端会列出最终 URL、认证方式和模型。只有超时、`429`、`5xx` 会短暂重试，确定性的认证或路径错误不会重复请求。
 
@@ -162,7 +162,7 @@ ai provider delete 我的站
 - `mode` 只能选 `ask` 或 `auto`
 - `model` 从已探测到的模型里选，不用手输
 - 修改 `baseUrl` 或 `apiKey` 时先验证新配置；失败会保留原 Provider 和模型缓存
-- 改 `level` 时如果目标等级被占用，两个 Provider 会**交换**等级
+- 改 `level` 时，当前项会显示为 `current: Provider名称`；如果目标等级被占用，两个 Provider 会**交换**等级；改为 `0` 后退出自动候选链
 - 删除会同时清理配置和模型缓存
 
 > **安全提示：`apiKey` 目前以明文保存在 `providers.json`。** 请确认该文件权限受限，且绝不提交到仓库。加密存储是规划中的能力，见第 11 节。
@@ -186,7 +186,15 @@ ai last                                # 沿用上次的工具、服务商和模
 - 不指定服务商 → 用 `level: 1` 那个
 - 不指定模型 → 用该服务商的默认 `model`
 - 当前服务商不可用 → 按 `level` 顺序自动降级
+- `level: 0` → 不参与自动降级；显式指定该 Provider 时只使用它
+- Claude Code 只会选择提供 Claude 模型的 Provider；Codex 只会选择提供 Codex/OpenAI 兼容模型的 Provider，不会跨模型族切换
 - Codex 认 `gpt`、`codex`、`grok`、`o` 系列和 `openai` 开头的模型名
+
+### 请求级自动切换
+
+`ai use` 只启动一个 Claude Code 或 Codex 进程，候选 Provider 由同一个 execution-scoped Transport Proxy 管理。连接失败、认证失败、`404`、`408`、`409`、`425`、`429`、`5xx`，或流式响应在有效内容出现前中断时，Runtime 会丢弃失败尝试，按 `level` 切到下一个 Provider，将请求中的 `model` 改为该 Provider 的候选模型，并在终端显示切换提示。原生 CLI 进程没有重启，因此它发送的完整会话上下文仍在同一请求中。
+
+一旦已经向 Claude Code/Codex 返回文字、推理增量或工具参数，Runtime 不会自动重放，避免重复输出或重复工具调用。终端会提示候选 Provider；用户在当前 CLI 中重新提交或使用原生重试动作，即表示确认切换，下一次请求才使用候选 Provider。`400`、`413`、`422` 等通常由请求本身导致的错误不会跨 Provider 重试。当前确认方式依赖“重新提交/重试”动作，不会抢占原生 TUI 弹出额外的 `y/n` 输入框。
 
 ### 它对你的环境做了什么
 

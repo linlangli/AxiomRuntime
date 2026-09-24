@@ -541,7 +541,7 @@ ai setup</pre>
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai use claude 51talk claude-opus-4-6</code><br /><code class="cmd">ai use codex 51talk gpt-5.5</code></td>
                 <td>指定 provider 和模型启动工具。</td>
-                <td>provider 不可用时按 level 降级。</td>
+                <td>有效输出前失败时在同一 CLI 会话内按 level 切换。</td>
               </tr>
               <tr data-search="proxy network host port runtime claude codex">
                 <td><span class="group-label">使用</span></td>
@@ -564,8 +564,8 @@ ai setup</pre>
               <tr data-search="provider add create import key">
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider add</code><br /><code class="cmd">ai provider add 51talk https://example.com sk-xxx</code><br /><code class="cmd">ai provider add 51talk https://example.com sk-xxx gpt-5.5</code></td>
-                <td>添加 provider，自动探测 Base URL、认证方式和模型，并在成功后写入配置；模型目录不可用时可显式提供模型。</td>
-                <td>也可用旧入口 <code>ai add</code>；不会自动猜测模型名。</td>
+                <td>添加 provider，先选择 <code>0..N</code> 优先级，再自动探测 Base URL、认证方式和模型，并在成功后写入配置；模型目录不可用时可显式提供模型。</td>
+                <td><code>level: 0</code> 不参与自动切换；也可用旧入口 <code>ai add</code>。</td>
               </tr>
               <tr data-search="provider list">
                 <td><span class="group-label">Provider</span></td>
@@ -576,7 +576,7 @@ ai setup</pre>
               <tr data-search="provider edit rename baseUrl apiKey level model mode">
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider edit</code><br /><code class="cmd">ai provider edit 51talk</code></td>
-                <td>修改 name、baseUrl、凭证、mode、level、model；修改连接信息时先探测，失败保留原配置。</td>
+                <td>修改 name、baseUrl、凭证、mode、level、model；level 当前项会显示 Provider 名称；修改连接信息时先探测，失败保留原配置。</td>
                 <td>当前 apiKey 以明文保存在 providers.json，编辑时会回显当前值。SecretStore + apiKeyRef 是目标态，尚未实现。</td>
               </tr>
               <tr data-search="provider delete remove fallback">
@@ -689,7 +689,10 @@ ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
               <div class="note">
                 <h3>运行规则</h3>
                 <ul>
-                  <li>provider 不可用时按 <code>level</code> 自动降级。</li>
+                  <li>正整数 <code>level</code> 组成自动切换链；<code>level: 0</code> 只允许显式使用，不进入自动候选。</li>
+                  <li>Claude Code 只在提供 Claude 模型的 Provider 间切换；Codex 只在提供 Codex/OpenAI 兼容模型的 Provider 间切换，不跨模型族。</li>
+                  <li>请求在产生有效输出前遇到连接错误、认证错误、限流或上游故障时，会在同一 Claude Code/Codex 会话内切换 Provider、改写备用模型并显示提示。</li>
+                  <li>已经产生文字、推理或工具参数后不会静默重放；用户在当前 CLI 中重新提交或使用原生重试动作即确认切换，下一次请求使用备用 Provider。</li>
                   <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings；本次子进程会移除继承的 <code>ANTHROPIC_AUTH_TOKEN</code>，临时 settings 还会用空值遮蔽用户 settings 里的同名变量，避免与所选 Provider 的 <code>ANTHROPIC_API_KEY</code> 形成双认证。</li>
                   <li><code>ai use codex</code> 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
                   <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，非 root 执行 Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。root 下请求 <code>auto</code> 会被安全约束为默认权限，临时 settings 中继承的 bypass 配置也会被清除。</li>
@@ -760,7 +763,7 @@ ai provider delete 51talk
 ai provider list</pre>
                 <ul>
                   <li><code>mode</code> 可选 <code>ask</code> 或 <code>auto</code>。</li>
-                  <li><code>level</code> 是优先级；如果目标等级已占用，会和对应 provider 交换。</li>
+                  <li>交互添加会列出 <code>0..N</code>；编辑优先级时当前项会显示 Provider 名称；<code>level: 0</code> 不参与自动切换，正整数目标已占用时原 provider 会移到队尾。</li>
                   <li>默认从模型目录选择 <code>model</code>；若 <code>GET /models</code> 不可用，交互流程会要求输入官网明确提供的模型名，也可作为第四个参数传入。Runtime 会通过 Responses/Messages 做一次最小真实验证，成功后才保存。</li>
                   <li>删除 provider 会清理模型缓存；后续执行会按 <code>level</code> 从剩余 provider 中重新选择。</li>
                 </ul>

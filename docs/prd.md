@@ -96,8 +96,8 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 连通性检查 | 🟢 | 添加时自动测试；`ai check [provider]` 单独检查一个 Provider，`ai status` 检查全部 Provider；每个 Provider 最多验证一个 Claude 和一个 Codex 代表模型，以不自动重试的 1-token 调用展示协议可用性；30 秒超时记为 `unknown` 而非误报失败 |
 | 模型发现 | 🟢 | 自动探测并缓存模型目录；`ai models [provider]` 只通过 `GET /models` 刷新并列出指定 Provider 的完整模型，不产生推理 Token |
 | 自适应连接配置 | 🟢 | 输入 Base URL 和 API Key 后，以零 Token 模型发现 + 每协议最多一次 1-token 成功验证，自动选择 `/v1` 与已知认证 header；目录不可用时可显式提供模型并直接验证 Responses/Messages，禁止猜测模型；全部失败则拒绝保存 |
-| 优先级 | 🟢 | `level` 字段；改 level 时占用则交换 |
-| 引擎兼容性过滤 | 🟢 | Codex 识别 `gpt`/`codex`/`grok`/`o`/`openai` 前缀 |
+| 优先级 | 🟢 | 添加时选择 `0..N`；正整数按顺序自动切换，占用则交换到队尾；`level: 0` 只允许显式使用 |
+| 引擎兼容性过滤 | 🟢 | Claude Code 只选择 Claude 模型；Codex 只选择 `gpt`/`codex`/`grok`/`o`/`openai` 兼容模型；自动切换不跨模型族 |
 | Base URL 自适配 | 🟢 | Claude 去 `/v1`，Codex 保留 |
 | 健康状态缓存 | 🟢 | 写入 `.ai-cache.json` |
 | API Key 加密 | 🔴 | **明文存 `providers.json`** |
@@ -109,7 +109,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 |---|---|---|
 | 启动 Claude Code | 🟢 | 临时 `--settings`，不碰 `~/.claude/settings.json`；execution scope 删除进程继承的 `ANTHROPIC_AUTH_TOKEN`，并以空值遮蔽用户 settings 中的同名变量，避免与 Provider API Key 冲突 |
 | 启动 Codex | 🟢 | `-c model_provider=` + `env_key`，不碰全局 `auth.json`/`config.toml` |
-| 运行时降级 | 🟢 | 子进程非 0 退出后自动试下一候选 |
+| 运行时降级 | 🟢 | `ai use` 在同一原生 CLI 会话内请求级切换；有效输出前失败自动重试并提示，已有输出则等待用户重新提交/重试确认，避免重复工具副作用 |
 | Runtime 出站代理 | 🟢 | `ai proxy` 显示当前状态并提供编辑/关闭选项；分离输入 host/port、自动补协议，零 Token 连通检查成功后才保存并作用于 Runtime 请求及其启动的 Claude/Codex；不修改原生配置 |
 | root 权限约束 | 🟢 | UID 0 下 `bypassPermissions` 强制降级为 `default` |
 | 会话记录 | 🟢 | 工具、服务商、模型、路径、起止、退出状态 |

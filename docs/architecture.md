@@ -198,14 +198,20 @@ flowchart TB
 flowchart LR
   Select["用户选择<br/>ai use claude 站点 模型"] --> Resolve["resolveProviderForTool()<br/>fallback.ts"]
   Resolve --> Candidates["resolveProviderCandidatesForTool()<br/>候选 provider 列表"]
-  Candidates --> Run["runResolvedProviderCandidates()<br/>逐个尝试"]
+  Candidates --> Run["runTool()<br/>一次启动"]
   Run --> Spawn["child_process.spawn<br/>claude / codex"]
-  Run -.->|"子进程非 0 退出"| Candidates
   Spawn --> Proxy["execution-scoped<br/>本地用量代理"]
-  Proxy --> Upstream["Provider 上游"]
+  Proxy --> Primary["首选 Provider"]
+  Primary -.->|"有效输出前失败"| Backup["下一 level Provider"]
+  Primary -.->|"已有有效输出"| Confirm["提示重新提交/重试确认"]
+  Confirm --> Backup
 ```
 
-候选排序规则在 `src/core/runner/fallback.ts`：**健康状态 → 引擎兼容性 → level 优先级 + 显式覆盖**。
+候选排序规则在 `src/core/runner/fallback.ts`：**健康状态 → 引擎兼容性 → level 优先级 + 显式覆盖**。正整数 `level` 组成自动候选链；`level: 0` 可重复存在，只在显式指定时返回，而且不追加其他候选。新增 Provider 的正整数等级范围为 `1..activeCount+1`；占用已有等级时，新 Provider 与队尾位置交换，原 Provider 移到队尾。
+
+CLI `ai use` 的 fallback 由唯一 Transport Proxy 在请求级完成，不重启原生 CLI。每个候选携带自己的 `Provider`、`model`、认证 profile 和规范化 Base URL；切换时必须改写 JSON 请求中的 `model`，用实际候选凭证构造上游 header，并把 usage 归属到实际成功的 Provider。连接错误以及 `401`、`403`、`404`、`408`、`409`、`425`、`429`、`5xx` 可在尚未产生有效输出时安全重试；`400`、`413`、`422` 不跨 Provider 重试。
+
+Streaming 响应在首个文字、推理或工具参数增量前由代理暂存协议前导事件；此前中断可丢弃并无感切换。首个有效增量写给客户端后即越过不可自动重放边界：中断时只记录待切换候选并显示提示，不重放请求；当前 CLI 发起下一次请求视为用户通过“重新提交/重试”确认，随后激活候选 Provider。父进程禁止与原生 TUI 争抢 stdin 弹出并行 `y/n` 提示。
 
 ### Provider 配置探测 🟢
 
@@ -248,11 +254,13 @@ flowchart TD
 | `engine-registry.ts` | Claude/Codex 策略注册 | ③ Capabilities |
 | `claude-permission-policy.ts` | UID 0 下约束 `bypassPermissions` 为 `default` | ⑨ Security |
 | `tool-runner.ts` | 运行环境 + 密钥注入 + 临时文件 | ④ Kernel |
-| `fallback.ts` | 候选排序与逐个执行 | ③ + ④ |
+| `fallback.ts` | 候选排序、`level: 0` 排除、显式覆盖与 Claude/Codex 模型族隔离 | ③ + ④ |
 | `openai-usage-*.ts`（7 个） | 本地 HTTP 代理、协议翻译、用量记录 | ⑤ Transport |
 | `images/image-generation-service.ts` | 图片模型解析、请求、响应校验和安全落盘 | ③ Capability + ⑤ Transport |
 
-`openai-usage-*` 这一组是当前的用量代理实现，**目标态按职责剥离到 ⑤ Transport Proxy**，拆成 `transport-core` / `TransformCoordinator` / `UsageObserver` / `MemoryExtension` + 兼容 facade。`startOpenAiUsageProxy()` 作为兼容 facade 保留，行为由 parity 测试锁定。
+`openai-usage-*` 这一组是当前的请求级路由与用量代理实现，**目标态按职责剥离到 ⑤ Transport Proxy**，拆成 `transport-core` / `TransformCoordinator` / `UsageObserver` / `MemoryExtension` + 兼容 facade。`startOpenAiUsageProxy()` 作为兼容 facade 保留，行为由 parity 测试锁定。
+
+`resolveProviderCandidatesForTool()` 必须先按当前 CLI 的模型族过滤候选：Claude Code 只能得到 Claude 模型，Codex 只能得到 Codex/OpenAI 兼容模型。Provider 默认模型不兼容时，可从已发现目录选择同族模型；目录为空且默认模型不兼容时不得乐观加入候选链。请求级自动切换只在过滤后的候选链内发生。
 
 Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`engine-registry` 构造子进程环境时必须移除继承的 `ANTHROPIC_AUTH_TOKEN`；由于 Claude 的 `--settings` 是附加配置，`tool-runner` 还必须在临时 settings 中用空值显式遮蔽用户 settings 里的同名变量，避免 OAuth token 与 Provider key 同时存在。该隔离仅限 execution scope，不得修改用户 shell 或 `~/.claude/settings.json`。
 

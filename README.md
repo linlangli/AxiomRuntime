@@ -48,7 +48,7 @@ ai check main
 ai status
 ```
 
-添加时会测试连通性、探测模型并建立缓存。`ai use` 会根据 Provider 健康状态、当前 CLI 可兼容的模型和 `level` 顺序选择候选；实际子进程非零退出时，还会继续尝试下一个 Provider。
+添加时会测试连通性、探测模型并建立缓存，同时让你选择 `0..N` 优先级；选择已占用等级时，原 Provider 会移到队尾，`level: 0` 只允许显式使用，不进入自动切换。`ai use` 会根据健康状态、CLI 模型兼容性和 `level` 建立候选链：Claude Code 只在 Claude 模型 Provider 间切换，Codex 只在 Codex/OpenAI 兼容模型 Provider 间切换。请求在产生有效输出前失败时，会在同一个 Claude Code/Codex 会话中切换 Provider、改写为备用模型并提示用户；已经产生文字、推理或工具参数后不会静默重放，用户在当前 CLI 中重新提交或重试即确认切换。
 
 ### 2. 多开窗口，每个窗口使用不同 Provider
 
