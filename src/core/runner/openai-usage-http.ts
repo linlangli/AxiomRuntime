@@ -1,4 +1,6 @@
 import http, { type IncomingHttpHeaders } from "node:http";
+import { buildProviderAuthHeaders } from "../providers/provider-request-profile.js";
+import type { ProviderAuthScheme } from "../types.js";
 
 const MAX_USAGE_CAPTURE_BYTES = 8 * 1024 * 1024;
 
@@ -41,23 +43,38 @@ export function buildUpstreamUrl(
 export function buildUpstreamHeaders(
   headers: IncomingHttpHeaders,
   apiKey: string,
-  options: { includeAnthropicApiKey?: boolean; includeAuthorization?: boolean } = {}
+  options: {
+    includeAnthropicApiKey?: boolean;
+    includeAuthorization?: boolean;
+    authScheme?: ProviderAuthScheme;
+    includeAnthropicVersion?: boolean;
+  } = {}
 ): Record<string, string> {
   const next: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     const normalized = key.toLowerCase();
     if (HOP_BY_HOP_HEADERS.has(normalized) || normalized === "host" || normalized === "content-length") continue;
     if (Array.isArray(value)) {
-      next[key] = value.join(", ");
+      next[normalized] = value.join(", ");
     } else if (typeof value === "string") {
-      next[key] = value;
+      next[normalized] = value;
     }
   }
-  if (options.includeAuthorization !== false) {
-    next.authorization = `Bearer ${apiKey}`;
+  delete next.authorization;
+  delete next["x-api-key"];
+  delete next["api-key"];
+  if (options.authScheme) {
+    Object.assign(next, buildProviderAuthHeaders(apiKey, options.authScheme));
+  } else {
+    if (options.includeAuthorization !== false) {
+      next.authorization = `Bearer ${apiKey}`;
+    }
+    if (options.includeAnthropicApiKey) {
+      next["x-api-key"] = apiKey;
+    }
   }
-  if (options.includeAnthropicApiKey) {
-    next["x-api-key"] = apiKey;
+  if (options.includeAnthropicVersion) {
+    next["anthropic-version"] = "2023-06-01";
   }
   next["accept-encoding"] = "identity";
   return next;

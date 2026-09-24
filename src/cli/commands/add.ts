@@ -1,6 +1,7 @@
 import { addProvider } from "../../core/providers/provider-service.js";
 import { getCachedModels, updateProvider } from "../../core/providers/provider-service.js";
 import { writeLog } from "../../core/logs/log-service.js";
+import { describeProviderRequestProfile } from "../../core/providers/provider-request-profile.js";
 import { promptSelect, promptText } from "../prompts/prompt.js";
 
 export async function runAddCommand(args: string[]): Promise<void> {
@@ -26,6 +27,8 @@ export async function runAddCommand(args: string[]): Promise<void> {
   console.log(`Level: ${provider.level}`);
   console.log(`Mode: ${provider.mode}`);
   console.log(`Default model: ${provider.model || "(not detected)"}`);
+  console.log(`Detected request profile: ${describeProviderRequestProfile(provider)}`);
+  console.log(`Models: ${(await getCachedModels(provider.name)).join(", ")}`);
   await writeLog({
     category: "provider",
     action: "provider_add",

@@ -8,7 +8,7 @@ import test from "node:test";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
 import { normalizeProviders, swapProviderLevel, writeProviders } from "../dist/core/config/providers-store.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
-import { checkProvider, extractTokenUsage } from "../dist/core/models/model-discovery.js";
+import { checkProvider, extractTokenUsage, probeProviderConfiguration } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
 import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
 import { isPrivilegedProcess, resolveClaudePermissionMode } from "../dist/core/runner/claude-permission-policy.js";
@@ -438,6 +438,82 @@ test("checkProvider retries transient model discovery failures", async () => {
     assert.equal(requests, 2);
     assert.match(result.retryErrors?.[0] ?? "", /503/);
     assert.ok((result.durationMs ?? 0) >= 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test("provider probe selects /v1 and bearer authentication with one model check", async () => {
+  const requests = [];
+  const server = await startTestServer((req, res) => {
+    requests.push({ url: req.url, authorization: req.headers.authorization });
+    if (req.url === "/v1/models" && req.headers.authorization === "Bearer key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "gpt-5.5" }] }));
+      return;
+    }
+    if (req.url === "/v1/responses" && req.headers.authorization === "Bearer key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+      return;
+    }
+    if (req.url === "/v1/chat/completions" && req.headers.authorization === "Bearer key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+
+  try {
+    const result = await probeProviderConfiguration({
+      name: "probe",
+      baseUrl: server.url,
+      apiKey: "key",
+      mode: "auto",
+      level: 1,
+      model: ""
+    });
+    assert.equal(result.status, "ok");
+    assert.equal(result.provider.baseUrl, `${server.url}/v1`);
+    assert.equal(result.provider.requestProfile?.discoveryAuth, "bearer");
+    assert.equal(result.provider.requestProfile?.openaiAuth, "bearer");
+    assert.deepEqual(result.models, ["gpt-5.5"]);
+    assert.ok(requests.some((request) => request.url === "/v1/models"));
+  } finally {
+    await server.close();
+  }
+});
+
+test("provider probe can select x-api-key without trying arbitrary headers", async () => {
+  const server = await startTestServer((req, res) => {
+    if (req.url === "/models" && req.headers["x-api-key"] === "key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "claude-opus-4-6" }] }));
+      return;
+    }
+    if (req.url === "/v1/messages" && req.headers["x-api-key"] === "key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+      return;
+    }
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "authentication required" }));
+  });
+
+  try {
+    const result = await probeProviderConfiguration({
+      name: "anthropic",
+      baseUrl: server.url,
+      apiKey: "key",
+      mode: "auto",
+      level: 1,
+      model: ""
+    });
+    assert.equal(result.status, "ok");
+    assert.equal(result.provider.requestProfile?.discoveryAuth, "x-api-key");
+    assert.equal(result.provider.requestProfile?.anthropicAuth, "x-api-key");
   } finally {
     await server.close();
   }

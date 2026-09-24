@@ -1,4 +1,12 @@
-import type { ConnectivityResult, Provider, TokenUsage } from "../types.js";
+import { isModelCompatible } from "./model-filter.js";
+import { buildProviderAuthHeaders, getProviderAuthScheme } from "../providers/provider-request-profile.js";
+import type {
+  ConnectivityResult,
+  Provider,
+  ProviderAuthScheme,
+  ProviderRequestProfile,
+  TokenUsage
+} from "../types.js";
 
 export type CallableModelCheck = {
   model: string;
@@ -10,8 +18,128 @@ export type CallableModelCheck = {
   retryErrors?: string[];
 };
 
+export type CallableModelCheckOptions = {
+  maxAttempts?: number;
+};
+
 const RETRY_DELAYS_MS = [0, 200, 600];
 const RETRYABLE_STATUS_CODES = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+const AUTH_SCHEMES: ProviderAuthScheme[] = ["bearer", "x-api-key", "api-key"];
+
+export type ProviderProbeResult = ConnectivityResult & {
+  provider: Provider;
+  modelChecks: CallableModelCheck[];
+};
+
+export async function probeProviderConfiguration(provider: Provider): Promise<ProviderProbeResult> {
+  const checkedAt = new Date().toISOString();
+  const startedAt = Date.now();
+  const errors: string[] = [];
+  const retryErrors: string[] = [];
+  let attempts = 0;
+
+  for (const baseUrl of buildBaseUrlCandidates(provider.baseUrl)) {
+    for (const discoveryAuth of AUTH_SCHEMES) {
+      const url = `${baseUrl}/models`;
+      const result = await fetchTextWithRetry(url, {
+        method: "GET",
+        headers: {
+          ...buildProviderAuthHeaders(provider.apiKey, discoveryAuth),
+          Accept: "application/json"
+        }
+      });
+      attempts += result.attempts;
+      retryErrors.push(...result.retryErrors);
+      if (result.error || !result.response) {
+        errors.push(`${describeProbe(baseUrl, discoveryAuth)}: ${result.error ?? "empty response"}`);
+        break;
+      }
+      const { response, text } = result;
+      if (!response.ok) {
+        errors.push(`${describeProbe(baseUrl, discoveryAuth)}: HTTP ${response.status}`);
+        if (response.status === 401 || response.status === 403) continue;
+        break;
+      }
+      if (!looksLikeJson(response.headers.get("content-type") ?? "", text)) {
+        errors.push(`${describeProbe(baseUrl, discoveryAuth)}: non-JSON response`);
+        break;
+      }
+      const discoveredModels = extractModels(JSON.parse(text));
+      if (!discoveredModels.length) {
+        errors.push(`${describeProbe(baseUrl, discoveryAuth)}: no models`);
+        break;
+      }
+
+      const profile: ProviderRequestProfile = {
+        discoveryAuth,
+        openaiAuth: discoveryAuth,
+        anthropicAuth: discoveryAuth,
+        verifiedProtocols: []
+      };
+      let configuredProvider: Provider = { ...provider, baseUrl, requestProfile: profile };
+      const modelChecks: CallableModelCheck[] = [];
+
+      const openaiModel = discoveredModels.find((model) => isModelCompatible("codex", model));
+      if (openaiModel) {
+        const verified = await probeModelAuth(configuredProvider, openaiModel, "openai");
+        attempts += verified.attempts;
+        retryErrors.push(...verified.retryErrors);
+        modelChecks.push(...verified.checks);
+        if (verified.authScheme) {
+          profile.openaiAuth = verified.authScheme;
+          profile.verifiedProtocols.push("openai");
+        }
+      }
+
+      const anthropicModel = discoveredModels.find((model) => isModelCompatible("claude", model));
+      if (anthropicModel) {
+        const verified = await probeModelAuth(configuredProvider, anthropicModel, "anthropic");
+        attempts += verified.attempts;
+        retryErrors.push(...verified.retryErrors);
+        modelChecks.push(...verified.checks);
+        if (verified.authScheme) {
+          profile.anthropicAuth = verified.authScheme;
+          profile.verifiedProtocols.push("anthropic");
+        }
+      }
+
+      configuredProvider = { ...configuredProvider, requestProfile: profile };
+      const models = discoveredModels.filter((model) => {
+        if (isModelCompatible("claude", model)) return profile.verifiedProtocols.includes("anthropic");
+        if (isModelCompatible("codex", model)) return profile.verifiedProtocols.includes("openai");
+        return true;
+      });
+      if (!models.length) {
+        errors.push(`${describeProbe(baseUrl, discoveryAuth)}: no callable models`);
+        continue;
+      }
+
+      return {
+        status: "ok",
+        models,
+        checkedAt,
+        error: null,
+        attempts,
+        durationMs: Date.now() - startedAt,
+        retryErrors,
+        provider: configuredProvider,
+        modelChecks
+      };
+    }
+  }
+
+  return {
+    status: "error",
+    models: [],
+    checkedAt,
+    error: summarizeProbeErrors(errors),
+    attempts,
+    durationMs: Date.now() - startedAt,
+    retryErrors,
+    provider,
+    modelChecks: []
+  };
+}
 
 export async function checkProvider(provider: Provider): Promise<ConnectivityResult> {
   const checkedAt = new Date().toISOString();
@@ -24,7 +152,7 @@ export async function checkProvider(provider: Provider): Promise<ConnectivityRes
       const result = await fetchTextWithRetry(url, {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${provider.apiKey}`,
+          ...buildProviderAuthHeaders(provider.apiKey, getProviderAuthScheme(provider, "discovery")),
           Accept: "application/json"
         }
       });
@@ -50,7 +178,7 @@ export async function checkProvider(provider: Provider): Promise<ConnectivityRes
 
       const models = extractModels(JSON.parse(text));
       return {
-        status: "ok",
+        status: models.length ? "ok" : "error",
         models,
         checkedAt,
         error: models.length ? null : "Provider responded but no models were found.",
@@ -90,7 +218,7 @@ export async function runDeepCheck(provider: Provider, model: string): Promise<C
     const result = await fetchTextWithRetry(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${provider.apiKey}`,
+        ...buildProviderAuthHeaders(provider.apiKey, getProviderAuthScheme(provider, "openai")),
         "Content-Type": "application/json",
         Accept: "application/json"
       },
@@ -150,19 +278,31 @@ export async function runDeepCheck(provider: Provider, model: string): Promise<C
   }
 }
 
-export async function checkCallableModels(provider: Provider, models: string[]): Promise<CallableModelCheck[]> {
+export async function checkCallableModels(
+  provider: Provider,
+  models: string[],
+  options: CallableModelCheckOptions = {}
+): Promise<CallableModelCheck[]> {
   const uniqueModels = [...new Set(models.filter(Boolean))];
-  return mapWithConcurrency(uniqueModels, 3, (model) => checkCallableModel(provider, model));
+  return mapWithConcurrency(uniqueModels, 3, (model) => checkCallableModel(provider, model, options));
 }
 
-async function checkCallableModel(provider: Provider, model: string): Promise<CallableModelCheck> {
+async function checkCallableModel(
+  provider: Provider,
+  model: string,
+  options: CallableModelCheckOptions
+): Promise<CallableModelCheck> {
   const lower = model.toLowerCase();
   return lower.includes("claude")
-    ? checkAnthropicMessagesModel(provider, model)
-    : checkChatCompletionsModel(provider, model);
+    ? checkAnthropicMessagesModel(provider, model, options)
+    : checkChatCompletionsModel(provider, model, options);
 }
 
-async function checkAnthropicMessagesModel(provider: Provider, model: string): Promise<CallableModelCheck> {
+async function checkAnthropicMessagesModel(
+  provider: Provider,
+  model: string,
+  options: CallableModelCheckOptions = {}
+): Promise<CallableModelCheck> {
   const baseUrl = provider.baseUrl.replace(/\/+$/, "").replace(/\/v1$/i, "");
   const url = `${baseUrl}/v1/messages`;
   const payload = {
@@ -171,15 +311,19 @@ async function checkAnthropicMessagesModel(provider: Provider, model: string): P
     messages: [{ role: "user", content: "." }]
   };
   const headers = {
-    "x-api-key": provider.apiKey,
+    ...buildProviderAuthHeaders(provider.apiKey, getProviderAuthScheme(provider, "anthropic")),
     "anthropic-version": "2023-06-01",
     "Content-Type": "application/json",
     Accept: "application/json"
   };
-  return postModelProbe(url, headers, payload, model);
+  return postModelProbe(url, headers, payload, model, options);
 }
 
-async function checkChatCompletionsModel(provider: Provider, model: string): Promise<CallableModelCheck> {
+async function checkChatCompletionsModel(
+  provider: Provider,
+  model: string,
+  options: CallableModelCheckOptions = {}
+): Promise<CallableModelCheck> {
   const payload = {
     model,
     messages: [{ role: "user", content: "." }],
@@ -187,32 +331,103 @@ async function checkChatCompletionsModel(provider: Provider, model: string): Pro
     temperature: 0
   };
   const headers = {
-    Authorization: `Bearer ${provider.apiKey}`,
+    ...buildProviderAuthHeaders(provider.apiKey, getProviderAuthScheme(provider, "openai")),
     "Content-Type": "application/json",
     Accept: "application/json"
   };
 
   let lastResult: CallableModelCheck | null = null;
   for (const url of buildChatCompletionsUrlCandidates(provider.baseUrl)) {
-    const result = await postModelProbe(url, headers, payload, model);
+    const result = await postModelProbe(url, headers, payload, model, options);
     if (result.status === "ok") return result;
     lastResult = result;
   }
   return lastResult ?? { model, status: "error", error: "No chat completions endpoint worked." };
 }
 
+async function probeModelAuth(
+  provider: Provider,
+  model: string,
+  protocol: "openai" | "anthropic"
+): Promise<{
+  authScheme: ProviderAuthScheme | null;
+  checks: CallableModelCheck[];
+  attempts: number;
+  retryErrors: string[];
+}> {
+  const preferred = getProviderAuthScheme(provider, "discovery");
+  const schemes = [preferred, ...AUTH_SCHEMES.filter((scheme) => scheme !== preferred)];
+  const checks: CallableModelCheck[] = [];
+  for (const authScheme of schemes) {
+    const requestProfile = {
+      ...provider.requestProfile!,
+      ...(protocol === "openai" ? { openaiAuth: authScheme } : { anthropicAuth: authScheme })
+    };
+    const candidate = { ...provider, requestProfile };
+    const check = protocol === "openai"
+      ? await checkOpenAiModel(candidate, model)
+      : await checkAnthropicMessagesModel(candidate, model);
+    checks.push(check);
+    if (check.status === "ok") {
+      return {
+        authScheme,
+        checks,
+        attempts: checks.reduce((sum, item) => sum + (item.attempts ?? 0), 0),
+        retryErrors: checks.flatMap((item) => item.retryErrors ?? [])
+      };
+    }
+    if (!isAuthenticationFailure(check.error)) break;
+  }
+  return {
+    authScheme: null,
+    checks,
+    attempts: checks.reduce((sum, item) => sum + (item.attempts ?? 0), 0),
+    retryErrors: checks.flatMap((item) => item.retryErrors ?? [])
+  };
+}
+
+function isAuthenticationFailure(error: string | null): boolean {
+  return Boolean(error && /(?:\b401\b|\b403\b|unauthori[sz]ed|forbidden|authentication|invalid api key)/i.test(error));
+}
+
+async function checkOpenAiModel(provider: Provider, model: string): Promise<CallableModelCheck> {
+  const headers = {
+    ...buildProviderAuthHeaders(provider.apiKey, getProviderAuthScheme(provider, "openai")),
+    "Content-Type": "application/json",
+    Accept: "application/json"
+  };
+  const responsesResult = await postModelProbe(
+    `${provider.baseUrl.replace(/\/+$/, "")}/responses`,
+    headers,
+    { model, input: ".", max_output_tokens: 1, stream: false },
+    model
+  );
+  if (responsesResult.status === "ok") return responsesResult;
+  const chatResult = await checkChatCompletionsModel(provider, model);
+  return chatResult.status === "ok"
+    ? chatResult
+    : {
+        ...chatResult,
+        error: `${responsesResult.error ?? "Responses probe failed."}; ${chatResult.error ?? "Chat probe failed."}`,
+        attempts: (responsesResult.attempts ?? 0) + (chatResult.attempts ?? 0),
+        durationMs: (responsesResult.durationMs ?? 0) + (chatResult.durationMs ?? 0),
+        retryErrors: [...(responsesResult.retryErrors ?? []), ...(chatResult.retryErrors ?? [])]
+      };
+}
+
 async function postModelProbe(
   url: string,
   headers: Record<string, string>,
   payload: Record<string, unknown>,
-  model: string
+  model: string,
+  options: CallableModelCheckOptions = {}
 ): Promise<CallableModelCheck> {
   try {
     const result = await fetchTextWithRetry(url, {
       method: "POST",
       headers,
       body: JSON.stringify(payload)
-    });
+    }, options.maxAttempts);
     if (result.error || !result.response) {
       return {
         model,
@@ -230,6 +445,16 @@ async function postModelProbe(
         model,
         status: "error",
         error: `POST ${url} failed with ${response.status} ${response.statusText}${extractErrorMessage(json)}`,
+        attempts: result.attempts,
+        durationMs: result.durationMs,
+        retryErrors: result.retryErrors
+      };
+    }
+    if (extractErrorMessage(json)) {
+      return {
+        model,
+        status: "error",
+        error: `POST ${url} returned an error${extractErrorMessage(json)}`,
         attempts: result.attempts,
         durationMs: result.durationMs,
         retryErrors: result.retryErrors
@@ -346,6 +571,32 @@ function buildModelUrlCandidates(baseUrl: string): string[] {
   return candidates;
 }
 
+function buildBaseUrlCandidates(baseUrl: string): string[] {
+  const normalized = baseUrl.trim().replace(/\/+$/, "");
+  const toggled = normalized.endsWith("/v1")
+    ? normalized.slice(0, -3).replace(/\/+$/, "")
+    : `${normalized}/v1`;
+  return [...new Set([normalized, toggled].filter(Boolean))];
+}
+
+function describeProbe(baseUrl: string, authScheme: ProviderAuthScheme): string {
+  try {
+    const safeUrl = new URL(`${baseUrl}/models`);
+    safeUrl.search = "";
+    safeUrl.hash = "";
+    return `${safeUrl.toString()} (${authScheme})`;
+  } catch {
+    return `<invalid-url> (${authScheme})`;
+  }
+}
+
+function summarizeProbeErrors(errors: string[]): string {
+  if (!errors.length) return "No provider configuration candidate worked.";
+  const visible = errors.slice(-6);
+  const omitted = errors.length - visible.length;
+  return `${omitted > 0 ? `${omitted} earlier attempt(s) omitted; ` : ""}${visible.join("; ")}`;
+}
+
 function buildChatCompletionsUrl(baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
 }
@@ -368,11 +619,16 @@ type FetchTextResult = {
   retryErrors: string[];
 };
 
-async function fetchTextWithRetry(url: string, init: RequestInit): Promise<FetchTextResult> {
+async function fetchTextWithRetry(
+  url: string,
+  init: RequestInit,
+  maxAttempts = RETRY_DELAYS_MS.length
+): Promise<FetchTextResult> {
   const startedAt = Date.now();
   const retryErrors: string[] = [];
+  const retryDelays = RETRY_DELAYS_MS.slice(0, Math.max(1, Math.min(RETRY_DELAYS_MS.length, maxAttempts)));
 
-  for (const [index, delayMs] of RETRY_DELAYS_MS.entries()) {
+  for (const [index, delayMs] of retryDelays.entries()) {
     if (delayMs > 0) {
       await sleep(delayMs);
     }
@@ -381,7 +637,7 @@ async function fetchTextWithRetry(url: string, init: RequestInit): Promise<Fetch
     try {
       const response = await fetchWithTimeout(url, init);
       const text = await response.text();
-      if (!shouldRetryResponse(response) || attempt >= RETRY_DELAYS_MS.length) {
+      if (!shouldRetryResponse(response) || attempt >= retryDelays.length) {
         return {
           response,
           text,
@@ -393,7 +649,7 @@ async function fetchTextWithRetry(url: string, init: RequestInit): Promise<Fetch
       retryErrors.push(`attempt ${attempt}: ${response.status} ${response.statusText}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (attempt >= RETRY_DELAYS_MS.length) {
+      if (attempt >= retryDelays.length) {
         return {
           text: "",
           error: message,
@@ -409,7 +665,7 @@ async function fetchTextWithRetry(url: string, init: RequestInit): Promise<Fetch
   return {
     text: "",
     error: "Request failed after retries.",
-    attempts: RETRY_DELAYS_MS.length,
+    attempts: retryDelays.length,
     durationMs: Date.now() - startedAt,
     retryErrors
   };

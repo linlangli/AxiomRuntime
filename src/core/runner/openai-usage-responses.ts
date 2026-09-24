@@ -1,9 +1,12 @@
 import { fetch, type Dispatcher } from "undici";
+import { buildProviderAuthHeaders } from "../providers/provider-request-profile.js";
+import type { ProviderAuthScheme } from "../types.js";
 
 export type ResponsesChatFallbackInput = {
   upstreamBaseUrl: string;
   requestBody: Buffer;
   apiKey: string;
+  authScheme?: ProviderAuthScheme;
   dispatcher?: Dispatcher;
 };
 
@@ -112,7 +115,9 @@ export async function buildChatCompletionsResponsesSse(input: ResponsesChatFallb
   const chatResponse = await fetch(buildChatCompletionsUrl(input.upstreamBaseUrl), {
     method: "POST",
     headers: {
-      authorization: `Bearer ${input.apiKey}`,
+      ...(input.authScheme
+        ? buildProviderAuthHeaders(input.apiKey, input.authScheme)
+        : { authorization: `Bearer ${input.apiKey}` }),
       "content-type": "application/json",
       accept: "application/json"
     },

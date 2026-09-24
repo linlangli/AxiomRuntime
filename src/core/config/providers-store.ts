@@ -1,9 +1,10 @@
 import { getProvidersPath } from "./paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
-import { readNumber, readRecord, readString } from "./schema.js";
-import type { Provider, ProviderMode } from "../types.js";
+import { readNumber, readOptionalRecord, readRecord, readString } from "./schema.js";
+import type { Provider, ProviderAuthScheme, ProviderMode, ProviderRequestProfile } from "../types.js";
 
 const VALID_MODES = new Set<ProviderMode>(["ask", "auto"]);
+const VALID_AUTH_SCHEMES = new Set<ProviderAuthScheme>(["bearer", "x-api-key", "api-key"]);
 
 export async function readProviders(): Promise<Provider[]> {
   const raw = await readJsonFile<unknown>(getProvidersPath(), []);
@@ -59,7 +60,8 @@ export function normalizeProviders(providers: Provider[]): Provider[] {
       apiKey,
       mode: VALID_MODES.has(provider.mode) ? provider.mode : "auto",
       level: index + 1,
-      model: provider.model.trim()
+      model: provider.model.trim(),
+      ...(provider.requestProfile ? { requestProfile: normalizeRequestProfile(provider.requestProfile) } : {})
     };
   });
 }
@@ -93,12 +95,39 @@ export function swapProviderLevel(providers: Provider[], providerName: string, t
 function normalizeProviderShape(value: unknown): Provider {
   const provider = readRecord(value, "provider");
   const mode = readString(provider, "mode");
+  const requestProfile = readOptionalRecord(provider.requestProfile, "provider.requestProfile");
   return {
     name: readString(provider, "name"),
     baseUrl: readString(provider, "baseUrl"),
     apiKey: readString(provider, "apiKey"),
     mode: mode === "ask" ? "ask" : "auto",
     level: readNumber(provider, "level", Number.MAX_SAFE_INTEGER),
-    model: readString(provider, "model")
+    model: readString(provider, "model"),
+    ...(requestProfile ? { requestProfile: normalizeRequestProfileShape(requestProfile) } : {})
   };
+}
+
+function normalizeRequestProfileShape(value: Record<string, unknown>): ProviderRequestProfile {
+  const verifiedProtocols = Array.isArray(value.verifiedProtocols)
+    ? value.verifiedProtocols.filter((item): item is "openai" | "anthropic" => item === "openai" || item === "anthropic")
+    : [];
+  return normalizeRequestProfile({
+    discoveryAuth: normalizeAuthScheme(value.discoveryAuth, "bearer"),
+    openaiAuth: normalizeAuthScheme(value.openaiAuth, "bearer"),
+    anthropicAuth: normalizeAuthScheme(value.anthropicAuth, "x-api-key"),
+    verifiedProtocols
+  });
+}
+
+function normalizeRequestProfile(value: ProviderRequestProfile): ProviderRequestProfile {
+  return {
+    discoveryAuth: normalizeAuthScheme(value.discoveryAuth, "bearer"),
+    openaiAuth: normalizeAuthScheme(value.openaiAuth, "bearer"),
+    anthropicAuth: normalizeAuthScheme(value.anthropicAuth, "x-api-key"),
+    verifiedProtocols: [...new Set(value.verifiedProtocols.filter((item) => item === "openai" || item === "anthropic"))]
+  };
+}
+
+function normalizeAuthScheme(value: unknown, fallback: ProviderAuthScheme): ProviderAuthScheme {
+  return VALID_AUTH_SCHEMES.has(value as ProviderAuthScheme) ? value as ProviderAuthScheme : fallback;
 }

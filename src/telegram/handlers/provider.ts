@@ -9,6 +9,7 @@ import {
 } from "../../core/providers/provider-service.js";
 import type { AddProviderInput } from "../../core/providers/provider-service.js";
 import type { Provider, ProviderMode } from "../../core/types.js";
+import { describeProviderRequestProfile } from "../../core/providers/provider-request-profile.js";
 import { escapeHtml, truncateText } from "../interaction/formatter.js";
 
 type EditableProviderField = "name" | "baseUrl" | "apiKey" | "model";
@@ -293,7 +294,9 @@ async function showProviderDetails(
   prefix = ""
 ): Promise<void> {
   const models = await service.getCachedModels(provider.name).catch(() => []);
-  const modelCount = models.length ? `\n可用模型：<code>${models.length}</code>` : "";
+  const modelCount = models.length
+    ? `\n可用模型：<code>${models.length}</code>\n${escapeHtml(models.slice(0, 20).join(", "))}${models.length > 20 ? " …" : ""}`
+    : "";
   const text = [
     prefix,
     `<b>${escapeHtml(truncateText(provider.name, 200))}</b>`,
@@ -301,6 +304,7 @@ async function showProviderDetails(
     `Base URL：<code>${escapeHtml(truncateText(provider.baseUrl, 500))}</code>`,
     "API Key：<code>已配置</code>",
     `默认模型：<code>${escapeHtml(truncateText(provider.model || "未设置", 200))}</code>`,
+    `探测配置：<code>${escapeHtml(describeProviderRequestProfile(provider))}</code>`,
     `模式：<code>${provider.mode}</code>`,
     `优先级：<code>${provider.level}</code>${modelCount}`
   ].join("\n");

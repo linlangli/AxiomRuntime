@@ -10,6 +10,7 @@ import {
 } from "../core/config/cache-store.js";
 import { readProviders } from "../core/config/providers-store.js";
 import { writeLog } from "../core/logs/log-service.js";
+import { getProviderAuthScheme } from "../core/providers/provider-request-profile.js";
 import { resolveProviderCandidatesForTool, type ResolvedRun } from "../core/runner/fallback.js";
 import {
   buildUpstreamHeaders,
@@ -304,7 +305,9 @@ async function proxyWithFallback(input: {
     try {
       const response = await fetch(upstreamUrl, {
         method: input.req.method,
-        headers: buildUpstreamHeaders(input.req.headers, candidate.provider.apiKey),
+        headers: buildUpstreamHeaders(input.req.headers, candidate.provider.apiKey, {
+          authScheme: getProviderAuthScheme(candidate.provider, "openai")
+        }),
         body: input.requestBody.length && methodMayHaveBody(input.req.method) ? input.requestBody : undefined,
         dispatcher: input.dispatcher
       });
@@ -320,6 +323,7 @@ async function proxyWithFallback(input: {
             upstreamBaseUrl,
             requestBody: input.requestBody,
             apiKey: candidate.provider.apiKey,
+            authScheme: getProviderAuthScheme(candidate.provider, "openai"),
             dispatcher: input.dispatcher
           });
           const fallbackResponse: BufferedUpstream = {

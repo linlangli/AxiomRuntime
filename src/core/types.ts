@@ -4,6 +4,15 @@ export type RunToolType = CliToolType | "provider" | "telegram" | "image";
 
 export type ProviderMode = "ask" | "auto";
 
+export type ProviderAuthScheme = "bearer" | "x-api-key" | "api-key";
+
+export type ProviderRequestProfile = {
+  discoveryAuth: ProviderAuthScheme;
+  openaiAuth: ProviderAuthScheme;
+  anthropicAuth: ProviderAuthScheme;
+  verifiedProtocols: Array<"openai" | "anthropic">;
+};
+
 export type HealthStatus = "ok" | "error" | "unknown";
 
 export type Provider = {
@@ -13,6 +22,7 @@ export type Provider = {
   mode: ProviderMode;
   level: number;
   model: string;
+  requestProfile?: ProviderRequestProfile;
 };
 
 export type ProviderCache = {
@@ -24,6 +34,16 @@ export type ProviderCache = {
   lastFailureAt?: string | null;
   circuitOpenUntil?: string | null;
   healthScore?: number;
+  toolChecks?: Partial<Record<CliToolType, ProviderToolCheck>>;
+};
+
+export type ProviderToolCheck = {
+  status: "ok" | "error" | "not_applicable";
+  model: string | null;
+  checkedAt: string;
+  error: string | null;
+  attempts: number;
+  durationMs: number;
 };
 
 export type CacheFile = {
@@ -105,10 +125,13 @@ export type ProviderStatus = Provider & {
 };
 
 export type ToolProviderStatus = {
-  state: "ready" | "no-model" | "provider-error";
+  state: "ready" | "no-model" | "provider-error" | "unverified";
   baseUrl: string;
   model: string | null;
   note: string;
+  checkedAt: string | null;
+  attempts: number;
+  durationMs: number;
 };
 
 export type ConnectivityResult = {

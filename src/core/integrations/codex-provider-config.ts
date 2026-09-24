@@ -215,6 +215,9 @@ export function buildCodexProviderConfig(
 ): string {
   if (!provider.baseUrl.trim()) throw new Error(`Provider ${provider.name} has no base URL.`);
   if (!provider.apiKey.trim()) throw new Error(`Provider ${provider.name} has no API key.`);
+  if (provider.requestProfile && provider.requestProfile.openaiAuth !== "bearer") {
+    throw new Error(`Provider ${provider.name} requires ${provider.requestProfile.openaiAuth} for OpenAI requests; Codex persistent config currently supports Bearer authentication only.`);
+  }
   const selectedModel = assertCodexGptModel(model);
   const baseUrl = getRunnerEngine("codex").normalizeBaseUrl(provider.baseUrl);
   const eol = current.includes("\r\n") ? "\r\n" : "\n";

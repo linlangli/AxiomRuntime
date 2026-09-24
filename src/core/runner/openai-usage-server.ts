@@ -1,6 +1,7 @@
 import http from "node:http";
 import { Agent, fetch, type Response } from "undici";
 import { writeLog } from "../logs/log-service.js";
+import { getProviderAuthScheme } from "../providers/provider-request-profile.js";
 import type { RunToolType } from "../types.js";
 import {
   buildUpstreamHeaders,
@@ -110,8 +111,8 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
       const upstreamResponse = await fetch(upstreamUrl, {
         method: req.method,
         headers: buildUpstreamHeaders(req.headers, input.provider.apiKey, {
-          includeAnthropicApiKey: engine === "claude",
-          includeAuthorization: engine !== "claude"
+          authScheme: getProviderAuthScheme(input.provider, engine === "claude" ? "anthropic" : "openai"),
+          includeAnthropicVersion: engine === "claude"
         }),
         body: requestBody.length && methodMayHaveBody(req.method) ? requestBody : undefined,
         dispatcher: upstreamDispatcher
@@ -145,6 +146,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
             upstreamBaseUrl,
             requestBody,
             apiKey: input.provider.apiKey,
+            authScheme: getProviderAuthScheme(input.provider, "openai"),
             dispatcher: upstreamDispatcher,
             requestModel,
             provider: input.provider.name,
@@ -314,6 +316,7 @@ async function sendChatCompletionsResponsesSse(
     upstreamBaseUrl: input.upstreamBaseUrl,
     requestBody: input.requestBody,
     apiKey: input.apiKey,
+    authScheme: input.authScheme,
     dispatcher: input.dispatcher
   });
   input.res.statusCode = response.status;

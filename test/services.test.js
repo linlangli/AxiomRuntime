@@ -95,6 +95,26 @@ test("Codex provider config does not duplicate an existing v1 path", () => {
   assert.doesNotMatch(updated, /\/v1\/v1/);
 });
 
+test("Codex persistent config rejects a non-Bearer probed profile", () => {
+  assert.throws(
+    () => buildCodexProviderConfig("", {
+      name: "x-api",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "key",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.5",
+      requestProfile: {
+        discoveryAuth: "x-api-key",
+        openaiAuth: "x-api-key",
+        anthropicAuth: "x-api-key",
+        verifiedProtocols: ["openai"]
+      }
+    }, "x-api"),
+    /Codex persistent config currently supports Bearer authentication only/
+  );
+});
+
 test("Codex provider model selection keeps only GPT models and picks the newest flagship tier", () => {
   const models = listAvailableCodexGptModels([
     "claude-opus-4-6",
@@ -487,6 +507,18 @@ test("addProvider writes provider config and model cache", async () => {
   });
 });
 
+test("addProvider refuses failed probes without writing provider state", async () => {
+  await withTempHome(async () => {
+    mockFetch(() => jsonResponse({ error: "nope" }, { status: 401 }));
+    await assert.rejects(
+      addProvider({ name: "blocked", baseUrl: "https://blocked.test", apiKey: "key" }),
+      /Provider configuration probe failed/
+    );
+    assert.deepEqual(await readProviders(), []);
+    assert.deepEqual((await readCache()).providers, {});
+  });
+});
+
 test("updateProvider edits mode, swaps level, and renames cache", async () => {
   await withTempHome(async () => {
     mockFetchModels(["claude-opus-4-6"]);
@@ -505,6 +537,40 @@ test("updateProvider edits mode, swaps level, and renames cache", async () => {
     assert.equal(providers.find((provider) => provider.name === "a").level, 2);
     assert.equal(cache.providers.renamed.status, "ok");
     assert.equal(cache.providers.b, undefined);
+  });
+});
+
+test("updateProvider preserves the old connection when probing new credentials fails", async () => {
+  await withTempHome(async () => {
+    await writeProviders([{
+      name: "stable",
+      baseUrl: "https://stable.test/v1",
+      apiKey: "old-key",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.5"
+    }]);
+    await upsertProviderCache("stable", {
+      status: "ok",
+      models: ["gpt-5.5"],
+      lastCheckedAt: "old",
+      lastError: null
+    });
+    mockFetch(() => jsonResponse({ error: "invalid key" }, { status: 401 }));
+
+    await assert.rejects(
+      updateProvider("stable", { apiKey: "new-key", baseUrl: "https://bad.test" }),
+      /Provider configuration probe failed/
+    );
+    assert.deepEqual((await readProviders())[0], {
+      name: "stable",
+      baseUrl: "https://stable.test/v1",
+      apiKey: "old-key",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.5"
+    });
+    assert.equal((await readCache()).providers.stable.lastCheckedAt, "old");
   });
 });
 
@@ -618,7 +684,7 @@ test("getProviderStatuses refreshes health and aggregates weekly tokens", async 
     const statuses = await getProviderStatuses({ refresh: true });
     assert.equal(statuses[0].health, "ok");
     assert.equal(statuses[0].models.length, 1);
-    assert.equal(statuses[0].weeklyTokens, 20);
+    assert.equal(statuses[0].weeklyTokens, 22);
     assert.equal(statuses[0].usageShare, 100);
     assert.equal(statuses[0].codex.state, "ready");
     assert.equal(statuses[0].codex.baseUrl, "https://api.test/v1");
@@ -629,7 +695,19 @@ test("getProviderStatuses refreshes health and aggregates weekly tokens", async 
 
 test("getProviderStatuses reports tool-specific runtime readiness", async () => {
   await withTempHome(async () => {
-    mockFetchModels(["claude-sonnet-4-6", "gpt-5.5"]);
+    const requests = [];
+    mockFetch((url, init) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body });
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({
+          data: ["claude-sonnet-4-6", "claude-opus-4-6", "gpt-5.5", "gpt-4.1"]
+            .map((id) => ({ id }))
+        });
+      }
+      return jsonResponse({
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }
+      });
+    });
     await writeProviders([
       { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-sonnet-4-6" }
     ]);
@@ -640,8 +718,171 @@ test("getProviderStatuses reports tool-specific runtime readiness", async () => 
     assert.equal(statuses[0].claude.model, "claude-sonnet-4-6");
     assert.equal(statuses[0].claude.baseUrl, "https://api.test");
     assert.equal(statuses[0].codex.state, "ready");
-    assert.equal(statuses[0].codex.model, "gpt-5.5");
+    assert.equal(statuses[0].codex.model, "gpt-4.1");
     assert.equal(statuses[0].codex.baseUrl, "https://api.test/v1");
+    assert.equal(statuses[0].models.length, 4);
+    const probeRequests = requests.filter((request) => request.method === "POST");
+    assert.equal(probeRequests.length, 2);
+    assert.deepEqual(
+      probeRequests.map((request) => JSON.parse(String(request.body)).model).sort(),
+      ["claude-sonnet-4-6", "gpt-4.1"]
+    );
+    assert.equal((await readCache()).providers.api.models.length, 4);
+  });
+});
+
+test("getProviderStatuses skips token probes for missing tool families", async () => {
+  await withTempHome(async () => {
+    const postUrls = [];
+    mockFetch((url, init) => {
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "gpt-5.5" }, { id: "image-model" }] });
+      }
+      if (init?.method === "POST") postUrls.push(String(url));
+      return jsonResponse({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+    });
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+
+    assert.equal(status.health, "ok");
+    assert.equal(status.claude.state, "no-model");
+    assert.equal(status.claude.attempts, 0);
+    assert.equal(status.codex.state, "ready");
+    assert.deepEqual(postUrls, ["https://api.test/v1/chat/completions"]);
+    assert.deepEqual(status.models, ["gpt-5.5", "image-model"]);
+  });
+});
+
+test("getProviderStatuses keeps a provider usable when one tool protocol fails", async () => {
+  await withTempHome(async () => {
+    mockFetch((url, init) => {
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "claude-sonnet-4-6" }, { id: "gpt-5.5" }] });
+      }
+      if (String(url).endsWith("/v1/messages")) {
+        return jsonResponse({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+      }
+      if (init?.method === "POST") {
+        return jsonResponse({ error: { message: "model unavailable" } }, { status: 503 });
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-sonnet-4-6" }
+    ]);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+
+    assert.equal(status.health, "ok");
+    assert.equal(status.claude.state, "ready");
+    assert.equal(status.codex.state, "provider-error");
+    assert.match(status.codex.note, /503/);
+    assert.deepEqual(status.models, ["claude-sonnet-4-6", "gpt-5.5"]);
+  });
+});
+
+test("getProviderStatuses marks the provider unavailable when every applicable tool fails", async () => {
+  await withTempHome(async () => {
+    let postCount = 0;
+    mockFetch((url, init) => {
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "claude-sonnet-4-6" }, { id: "gpt-5.5" }] });
+      }
+      if (init?.method === "POST") postCount += 1;
+      return jsonResponse({ error: { message: "blocked" } }, { status: 503 });
+    });
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-sonnet-4-6" }
+    ]);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+
+    assert.equal(status.health, "error");
+    assert.equal(status.claude.state, "provider-error");
+    assert.equal(status.codex.state, "provider-error");
+    assert.equal(postCount, 2);
+  });
+});
+
+test("getProviderStatuses exposes model discovery failures without sending token probes", async () => {
+  await withTempHome(async () => {
+    let postCount = 0;
+    mockFetch((_url, init) => {
+      if (init?.method === "POST") postCount += 1;
+      return jsonResponse({ error: "unauthorized" }, { status: 401 });
+    });
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+
+    assert.equal(status.health, "error");
+    assert.equal(status.claude.state, "provider-error");
+    assert.equal(status.codex.state, "provider-error");
+    assert.match(status.codex.note, /401/);
+    assert.equal(postCount, 0);
+  });
+});
+
+test("getProviderStatuses reports legacy caches as unverified", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("api", {
+      status: "ok",
+      models: ["gpt-5.5"],
+      lastCheckedAt: "2026-01-01T00:00:00.000Z",
+      lastError: null
+    });
+
+    const [status] = await getProviderStatuses();
+
+    assert.equal(status.codex.state, "unverified");
+    assert.equal(status.claude.state, "no-model");
+  });
+});
+
+test("provider cache normalizes persisted tool checks", async () => {
+  await withTempHome(async () => {
+    await fs.writeFile(
+      path.join(process.env.AI_GATEWAY_HOME, ".ai-cache.json"),
+      JSON.stringify({
+        providers: {
+          api: {
+            status: "ok",
+            models: ["gpt-5.5"],
+            lastCheckedAt: null,
+            lastError: null,
+            toolChecks: {
+              codex: {
+                status: "ok",
+                model: "gpt-5.5",
+                checkedAt: "2026-01-01T00:00:00.000Z",
+                error: null,
+                attempts: 1,
+                durationMs: 12
+              }
+            }
+          }
+        }
+      })
+    );
+
+    const cache = await readCache();
+
+    assert.deepEqual(cache.providers.api.toolChecks.codex, {
+      status: "ok",
+      model: "gpt-5.5",
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      error: null,
+      attempts: 1,
+      durationMs: 12
+    });
   });
 });
 
