@@ -60,7 +60,8 @@ export async function resolveExactProviderForTool(
 export async function resolveProviderCandidatesForTool(
   tool: CliToolType,
   providerName?: string,
-  modelName?: string
+  modelName?: string,
+  traceId?: string
 ): Promise<ResolvedRun[]> {
   const providers = await readProviders();
   if (!providers.length) {
@@ -83,26 +84,29 @@ export async function resolveProviderCandidatesForTool(
   const resolved: ResolvedRun[] = [];
   for (const provider of candidates) {
     const cached = cache.providers[provider.name];
-    if (isProviderCircuitOpen(cached)) {
+    const explicitlySelected = providerName === provider.name;
+    if (!explicitlySelected && isProviderCircuitOpen(cached)) {
       await writeLog({
         level: "warn",
         category: "strategy",
         action: "fallback_skip_provider",
         message: `Skipped provider ${provider.name} because circuit breaker is open.`,
-        metadata: { provider: provider.name, tool, reason: "circuit_open", circuitOpenUntil: cached?.circuitOpenUntil ?? null }
+        ...(traceId ? { traceId } : {}),
+        metadata: { provider: provider.name, level: provider.level, tool, reason: "circuit_open", circuitOpenUntil: cached?.circuitOpenUntil ?? null }
       });
       continue;
     }
 
     // Runtime-opened circuits become half-open after their cooldown. A stale
     // status=error must not keep a provider disabled forever after the timer.
-    if (cached?.status === "error" && !cached.circuitOpenUntil) {
+    if (!explicitlySelected && cached?.status === "error" && !cached.circuitOpenUntil) {
       await writeLog({
         level: "warn",
         category: "strategy",
         action: "fallback_skip_provider",
         message: `Skipped provider ${provider.name} because health is error.`,
-        metadata: { provider: provider.name, tool, reason: cached.lastError }
+        ...(traceId ? { traceId } : {}),
+        metadata: { provider: provider.name, level: provider.level, tool, reason: "health_error", lastError: cached.lastError ?? null }
       });
       continue;
     }
@@ -115,7 +119,8 @@ export async function resolveProviderCandidatesForTool(
         category: "strategy",
         action: "fallback_skip_provider",
         message: `Skipped provider ${provider.name} because no compatible model is available.`,
-        metadata: { provider: provider.name, tool, defaultModel: provider.model, cachedModels: models.length }
+        ...(traceId ? { traceId } : {}),
+        metadata: { provider: provider.name, level: provider.level, tool, reason: "no_compatible_model", defaultModel: provider.model, cachedModels: models.length }
       });
       continue;
     }

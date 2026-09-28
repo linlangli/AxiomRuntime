@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
+import { newTraceId, readRecentLogs } from "../dist/core/logs/log-service.js";
 import { normalizeProviders, swapProviderLevel, writeProviders } from "../dist/core/config/providers-store.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { checkProvider, extractTokenUsage, probeProviderConfiguration } from "../dist/core/models/model-discovery.js";
@@ -1819,6 +1820,73 @@ test("CLI provider fallback tries next candidate after non-zero exit", async () 
       { provider: "bad", fallbackFrom: null },
       { provider: "good", fallbackFrom: "bad" }
     ]);
+  });
+});
+
+test("CLI provider fallback shares one traceId across every hop of the call chain", async () => {
+  await withTempHome(async () => {
+    const candidates = [
+      {
+        provider: { name: "bad", baseUrl: "https://bad.test/v1", apiKey: "bad", mode: "auto", level: 1, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      },
+      {
+        provider: { name: "good", baseUrl: "https://good.test/v1", apiKey: "good", mode: "auto", level: 2, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      }
+    ];
+
+    const traceId = newTraceId();
+    const code = await runResolvedProviderCandidates("codex", candidates, {
+      traceId,
+      runner: async (candidate) => candidate.provider.name === "bad" ? 42 : 0
+    });
+    assert.equal(code, 0);
+
+    const logs = await readRecentLogs(200);
+    const chain = logs.filter((event) => event.traceId === traceId);
+    // 两跳各一条 tool_start，加上一次切换和一次终止跳。
+    assert.deepEqual(chain.map((event) => event.action), [
+      "tool_start",
+      "runtime_fallback_retry",
+      "fallback_applied",
+      "tool_start",
+      "tool_run_settled"
+    ]);
+
+    const retry = chain.find((event) => event.action === "runtime_fallback_retry");
+    assert.equal(retry.metadata.from, "bad");
+    assert.equal(retry.metadata.to, "good");
+
+    const settled = chain.at(-1);
+    assert.equal(settled.metadata.provider, "good");
+    assert.equal(settled.metadata.attempt, 2);
+    assert.equal(settled.metadata.fellBack, true);
+  });
+});
+
+test("CLI provider fallback records an exhausted hop when every candidate fails", async () => {
+  await withTempHome(async () => {
+    const candidates = [
+      {
+        provider: { name: "bad", baseUrl: "https://bad.test/v1", apiKey: "bad", mode: "auto", level: 1, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      },
+      {
+        provider: { name: "worse", baseUrl: "https://worse.test/v1", apiKey: "worse", mode: "auto", level: 2, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      }
+    ];
+
+    const traceId = newTraceId();
+    await runResolvedProviderCandidates("codex", candidates, { traceId, runner: async () => 42 });
+
+    const chain = (await readRecentLogs(200)).filter((event) => event.traceId === traceId);
+    const exhausted = chain.find((event) => event.action === "tool_candidates_exhausted");
+    assert.ok(exhausted, "expected a terminal exhausted hop");
+    assert.equal(exhausted.level, "error");
+    assert.deepEqual(exhausted.metadata.attempted, ["bad", "worse"]);
+    assert.equal(exhausted.metadata.totalCandidates, 2);
   });
 });
 

@@ -427,6 +427,35 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 
 每个页面必须有 `empty` / `loading` / `degraded` / `permission-denied` / `partial-failure` 状态。危险操作必须展示影响范围、二次确认和 operation progress。
 
+### 8.1 调用链路可视化（R0 设计基线）🔴
+
+设计稿位于 `docs/AxiomRuntime.pen`，含运行时纵览、服务商、使用与日志、命令中心四屏。其中"使用与日志"页确立了 **调用链路（trace）视图** 作为 Execution & Audit 的默认形态：日志不以扁平事件流呈现，而按 `requestId` 聚合成一次请求的完整 provider 调用链路。
+
+链路卡片的每一跳（hop）必须展示：provider 的 `level`、provider 名称、触发的日志 `action`、该跳结果（成功 / 失败 / 跳过）、耗时，以及来自日志 `metadata` 的原因说明。四类典型链路必须可区分：直连成功、自动切换后成功、熔断跳过后降级、全部候选失败。
+
+数据来源均为已落库的 `writeLog` 事件，Web 只做聚合与呈现，不重算路由。
+
+链路聚合键是 `LogEvent.traceId` 🟢：一次请求 / 一条消息 / 一次 `ai use` 在入口处生成一个 traceId，之后候选解析、每次切换、终止跳全部复用它。HTTP 入口直接复用 `requestId` 作为 traceId，`x-request-id` 响应头因此可直接反查链路。历史日志没有该字段，读取方必须容忍缺失。
+
+| 链路语义 | 日志 action | 关键 metadata |
+|---|---|---|
+| 候选解析 | `provider_resolved` / `provider_resolved_exact` | `provider`、`tool`、`model`、`requestedProvider` |
+| 熔断 / 健康 / 无模型跳过 | `fallback_skip_provider` | `reason`（`circuit_open` / `health_error` / `no_compatible_model`）、`level`、`circuitOpenUntil` |
+| 请求级切换 | `runtime_server_provider_fallback` | `requestId`、`attempt`、`totalCandidates`、`level`、`error` |
+| 会话级切换 | `fallback_applied` / `runtime_fallback_retry` / `runtime_provider_fallback_retry` | `from`、`to`、`nextModel`、`attempt`、`error` |
+| 终止跳（成功） | `runtime_server_request_settled` / `tool_run_settled` / `runtime_provider_settled` | `provider`、`attempt`、`fellBack`、`status` |
+| 终止跳（全败） | `runtime_server_candidates_exhausted` / `tool_candidates_exhausted` / `runtime_provider_candidates_exhausted` | `attempted`、`totalCandidates`、`status` |
+
+每条链路都以一个终止跳收尾，`fellBack` 直接回答"这次请求是否发生过自动切换"，`attempt` / `totalCandidates` 给出第几跳落地。
+
+CLI 侧已可读同一条链路 🟢：
+
+```bash
+ai log --print --trace trc_70d90ad64d1846bf   # 只打印该链路的各跳，按时间先后排列
+```
+
+侧栏的"自动切换路由"卡展示 level 阶梯上各 provider 的切入 / 切出次数与熔断状态，对应 `Provider.level` 与 `ProviderCache` 的 `consecutiveFailures` / `circuitOpenUntil` / `healthScore`。
+
 ---
 
 ## 9. 命令路线图 🔴

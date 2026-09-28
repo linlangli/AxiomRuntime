@@ -260,7 +260,7 @@ flowchart TD
 
 `openai-usage-*` 这一组是当前的请求级路由与用量代理实现，**目标态按职责剥离到 ⑤ Transport Proxy**，拆成 `transport-core` / `TransformCoordinator` / `UsageObserver` / `MemoryExtension` + 兼容 facade。`startOpenAiUsageProxy()` 作为兼容 facade 保留，行为由 parity 测试锁定。
 
-`resolveProviderCandidatesForTool()` 必须先按当前 CLI 的模型族过滤候选：Claude Code 只能得到 Claude 模型，Codex 只能得到 Codex/OpenAI 兼容模型。Provider 默认模型不兼容时，可从已发现目录选择同族模型；目录为空且默认模型不兼容时不得乐观加入候选链。请求级自动切换只在过滤后的候选链内发生。
+`resolveProviderCandidatesForTool()` 必须先按当前 CLI 的模型族过滤候选：Claude Code 只能得到 Claude 模型，Codex 只能得到 Codex/OpenAI 兼容模型。Provider 默认模型不兼容时，可从已发现目录选择同族模型；目录为空且默认模型不兼容时不得乐观加入候选链。显式指定的 Provider 即使健康缓存为 `error` 也必须先实际尝试一次；请求级自动切换只在过滤后的候选链内发生。
 
 Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`engine-registry` 构造子进程环境时必须移除继承的 `ANTHROPIC_AUTH_TOKEN`；由于 Claude 的 `--settings` 是附加配置，`tool-runner` 还必须在临时 settings 中用空值显式遮蔽用户 settings 里的同名变量，避免 OAuth token 与 Provider key 同时存在。该隔离仅限 execution scope，不得修改用户 shell 或 `~/.claude/settings.json`。
 
@@ -652,6 +652,18 @@ payload **绝不**含：prompt、Memory 或 Skill 正文、Skill step 文本、�
 **trace、execution、principal、project、Memory、Skill 和 invocation id 不能作为 metric label**（高基数）。
 
 Cost 视图在**查询时**关联 UsageObserver 拥有的读模型；telemetry **永不**成为第二份用量账本。
+
+### 当前已落地的关联键 🟢
+
+`CapabilityObservation` 与 OpenTelemetry 导出仍未实现，但结构化日志已有跨 surface 的关联键：`LogEvent.traceId`（`src/core/types.ts`）。
+
+- 一次 HTTP 请求、一条 Telegram 消息、一次 `ai use` 在入口生成一个 traceId（`newTraceId()`，`src/core/logs/log-service.ts`），该次执行的候选解析、每次 provider 切换和终止跳全部复用它
+- 常驻服务直接把自身 `requestId` 当作 traceId，因此 `x-request-id` 响应头可反查整条链路
+- `resolveProviderCandidatesForTool(tool, provider, model, traceId)` 接受可选 traceId，让熔断 / 健康 / 无兼容模型这些**前置跳过**也进入同一条链路
+- 每条链路以终止跳收尾：`runtime_server_request_settled` / `tool_run_settled` / `runtime_provider_settled`（成功，带 `fellBack`、`attempt`、`totalCandidates`），或 `*_candidates_exhausted`（全败，带 `attempted`）
+- 读取入口：`ai log --print --trace <traceId>`
+
+traceId 是**诊断关联键，不是审计事实**：历史日志没有该字段，读取方必须容忍缺失；它同样受本节「缺失的 observation 使 trace 标记为 `partial`」约束，不证明某个操作没有发生。
 
 ---
 

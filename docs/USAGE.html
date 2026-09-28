@@ -690,6 +690,7 @@ ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
                 <h3>运行规则</h3>
                 <ul>
                   <li>正整数 <code>level</code> 组成自动切换链；<code>level: 0</code> 只允许显式使用，不进入自动候选。</li>
+                  <li>显式指定 Provider 时会先实际尝试该 Provider；健康缓存暂时为 <code>error</code> 不会在请求前静默跳过，失败后才进入同模型族的自动切换链。</li>
                   <li>Claude Code 只在提供 Claude 模型的 Provider 间切换；Codex 只在提供 Codex/OpenAI 兼容模型的 Provider 间切换，不跨模型族。</li>
                   <li>请求在产生有效输出前遇到连接错误、认证错误、限流或上游故障时，会在同一 Claude Code/Codex 会话内切换 Provider、改写备用模型并显示提示。</li>
                   <li>已经产生文字、推理或工具参数后不会静默重放；用户在当前 CLI 中重新提交或使用原生重试动作即确认切换，下一次请求使用备用 Provider。</li>

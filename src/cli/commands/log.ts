@@ -10,10 +10,29 @@ export async function runLogCommand(args: string[]): Promise<void> {
     return;
   }
 
-  const printableArgs = args.filter((arg) => arg !== "--print");
+  const traceId = parseTraceId(args);
+  const printableArgs = args.filter((arg) => arg !== "--print" && arg !== "--trace" && arg !== traceId);
   const limit = parseLimit(printableArgs[0]);
-  const logs = await readRecentLogs(limit);
-  printLogs(logs);
+  const logs = await readRecentLogs(traceId ? Math.max(limit, 500) : limit);
+  if (!traceId) {
+    printLogs(logs);
+    return;
+  }
+
+  // 按 traceId 聚合成一条调用链路：同一次请求的每一跳按时间先后排成一列。
+  const chain = logs.filter((event) => event.traceId === traceId);
+  if (!chain.length) {
+    console.log(`No logs found for trace ${traceId}.`);
+    return;
+  }
+  printLogs(chain);
+}
+
+function parseTraceId(args: string[]): string | undefined {
+  const index = args.indexOf("--trace");
+  if (index === -1) return undefined;
+  const value = args[index + 1]?.trim();
+  return value && !value.startsWith("--") ? value : undefined;
 }
 
 async function openFile(filePath: string): Promise<void> {
@@ -51,6 +70,10 @@ function printLogs(logs: LogEvent[]): void {
     console.log(`${index + 1}. ${badge} ${event.timestamp}`);
     console.log(`   ${event.category} / ${event.action}`);
     console.log(`   ${event.message}`);
+
+    if (event.traceId) {
+      console.log(`   trace: ${event.traceId}`);
+    }
 
     if (event.metadata && Object.keys(event.metadata).length) {
       console.log(`   metadata: ${formatMetadata(event.metadata)}`);

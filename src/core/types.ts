@@ -162,5 +162,10 @@ export type LogEvent = {
   category: LogCategory;
   action: string;
   message: string;
+  /**
+   * 同一次请求/任务内所有日志共享的关联 id，供调用链路视图按链路聚合多跳事件。
+   * 历史日志没有该字段，读取方必须容忍缺失。
+   */
+  traceId?: string;
   metadata?: Record<string, unknown>;
 };

@@ -7,6 +7,7 @@ import type { TelegramConfig, TelegramEngineName } from "../config.js";
 import type { Engine, ExecutionResult } from "../engine/types.js";
 import { getTelegramEngine, type TelegramEngineMap } from "../engine/registry.js";
 import { recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../../core/config/cache-store.js";
+import { newTraceId } from "../../core/logs/log-service.js";
 import { resolveProviderCandidatesForTool } from "../../core/runner/fallback.js";
 import type { ApprovalManager } from "../interaction/approval.js";
 import { parseTelegramCommand, resolveMappedCommand, safeSetChatCommandMenu } from "../interaction/command-menu.js";
@@ -303,7 +304,9 @@ async function executePromptLocked(
 
   try {
     const engine = resolveMessageEngine(deps, session.engine);
-    const attempts = await resolveTelegramProviderAttempts(session.engine, deps.config);
+    // 一条消息的处理是一条调用链路：解析跳过与后续每次 provider 切换共享同一个 traceId。
+    const traceId = newTraceId();
+    const attempts = await resolveTelegramProviderAttempts(session.engine, deps.config, traceId);
     let result: ExecutionResult | null = null;
     let successfulAttempt: ProviderAttempt | null = null;
     let lastError: unknown = null;
@@ -346,6 +349,19 @@ async function executePromptLocked(
         if (attempt.providerName) {
           await recordProviderRuntimeSuccess(attempt.providerName);
         }
+        await writeTelegramLog({
+          action: "runtime_provider_settled",
+          message: `Telegram ${session.engine} served by ${attempt.providerLabel}.`,
+          traceId,
+          metadata: {
+            chatId,
+            engine: session.engine,
+            provider: attempt.providerLabel,
+            model: attempt.modelLabel,
+            attempt: index + 1,
+            fellBack: index > 0 || Boolean(attempt.fallbackFrom)
+          }
+        });
         break;
       } catch (error) {
         lastError = error;
@@ -354,6 +370,23 @@ async function executePromptLocked(
           await recordProviderRuntimeFailure(attempt.providerName, error);
         }
         if (!next || isNonFallbackTelegramError(error)) {
+          // 链路终止跳：候选用尽，或错误类型明确不该继续切换。
+          await writeTelegramLog({
+            level: "error",
+            action: "runtime_provider_candidates_exhausted",
+            message: `Telegram ${session.engine} failed on ${attempt.providerLabel}; no further fallback.`,
+            traceId,
+            metadata: {
+              chatId,
+              engine: session.engine,
+              provider: attempt.providerLabel,
+              model: attempt.modelLabel,
+              attempt: index + 1,
+              totalCandidates: attempts.length,
+              reason: next ? "non_fallback_error" : "candidates_exhausted",
+              error: summarizeError(error instanceof Error ? error.message : String(error))
+            }
+          });
           throw error;
         }
         await writeTelegramFallbackLog({
@@ -363,7 +396,9 @@ async function executePromptLocked(
           to: next.providerLabel,
           model: attempt.modelLabel,
           nextModel: next.modelLabel,
-          error
+          error,
+          traceId,
+          attempt: index + 1
         });
         await reporter.update({
           phase: "thinking",
@@ -575,10 +610,11 @@ async function replyHtmlWithPlainFallback(ctx: Context, html: string, fallbackTe
 
 async function resolveTelegramProviderAttempts(
   engine: TelegramEngineName,
-  config: TelegramConfig
+  config: TelegramConfig,
+  traceId: string
 ): Promise<ProviderAttempt[]> {
   try {
-    const candidates = await resolveProviderCandidatesForTool(engine, config.provider, config.model);
+    const candidates = await resolveProviderCandidatesForTool(engine, config.provider, config.model, traceId);
     if (candidates.length) {
       return candidates.map((candidate, index) => ({
         providerName: candidate.provider.name,
@@ -594,6 +630,7 @@ async function resolveTelegramProviderAttempts(
       level: "warn",
       action: "provider_candidates_unavailable",
       message: error instanceof Error ? error.message : String(error),
+      traceId,
       metadata: { engine, provider: config.provider ?? null, model: config.model ?? null }
     });
   }
@@ -634,12 +671,15 @@ async function writeTelegramFallbackLog(input: {
   model?: string;
   nextModel?: string;
   error: unknown;
+  traceId: string;
+  attempt: number;
 }): Promise<void> {
   const error = input.error instanceof Error ? input.error.message : String(input.error);
   await writeTelegramLog({
     level: "warn",
     action: "runtime_provider_fallback_retry",
     message: `Provider fallback ${input.from} -> ${input.to} for Telegram ${input.engine}.`,
+    traceId: input.traceId,
     metadata: {
       chatId: input.chatId,
       engine: input.engine,
@@ -647,6 +687,7 @@ async function writeTelegramFallbackLog(input: {
       to: input.to,
       model: input.model ?? null,
       nextModel: input.nextModel ?? null,
+      attempt: input.attempt,
       error: summarizeError(error)
     }
   });

@@ -1262,6 +1262,30 @@ test("resolveProviderForTool skips unhealthy providers and falls back", async ()
   });
 });
 
+test("explicitly selected provider is attempted before fallback despite stale health error", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "selected", baseUrl: "https://selected.test/v1", apiKey: "selected", mode: "auto", level: 2, model: "gpt-5.5" },
+      { name: "default", baseUrl: "https://default.test/v1", apiKey: "default", mode: "auto", level: 1, model: "gpt-5.4" }
+    ]);
+    await upsertProviderCache("selected", {
+      status: "error",
+      models: ["gpt-5.5"],
+      lastCheckedAt: "now",
+      lastError: "stale health result"
+    });
+    await upsertProviderCache("default", {
+      status: "ok",
+      models: ["gpt-5.4"],
+      lastCheckedAt: "now",
+      lastError: null
+    });
+
+    const candidates = await resolveProviderCandidatesForTool("codex", "selected");
+    assert.deepEqual(candidates.map((candidate) => candidate.provider.name), ["selected", "default"]);
+  });
+});
+
 test("level zero providers are excluded from automatic fallback but remain explicitly selectable", async () => {
   await withTempHome(async () => {
     await writeProviders([

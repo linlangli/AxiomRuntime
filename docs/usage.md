@@ -185,6 +185,7 @@ ai last                                # 沿用上次的工具、服务商和模
 
 - 不指定服务商 → 用 `level: 1` 那个
 - 不指定模型 → 用该服务商的默认 `model`
+- 显式指定服务商 → 先实际尝试该 Provider；即使健康缓存暂时为 `error`，也不会在请求前静默跳过
 - 当前服务商不可用 → 按 `level` 顺序自动降级
 - `level: 0` → 不参与自动降级；显式指定该 Provider 时只使用它
 - Claude Code 只会选择提供 Claude 模型的 Provider；Codex 只会选择提供 Codex/OpenAI 兼容模型的 Provider，不会跨模型族切换
@@ -426,11 +427,22 @@ ai doctor --deep --tool codex # 深度检查，会真实调用模型
 ```bash
 ai log                  # 打开日志文件
 ai log --print 100      # 打印最近 100 条
+ai log --print --trace trc_70d90ad64d1846bf   # 只看这一条调用链路
 ai context              # 生成项目上下文到 .ai-gateway/context.md
 ai context --print
 ```
 
 日志包含使用痕迹、报错、健康检查、降级策略执行和诊断记录，文件在 `~/.ai-gateway/.ai-gateway.log`。
+
+**按调用链路查看**：一次请求、一条 Telegram 消息、一次 `ai use` 会在入口生成一个 `traceId`，该次执行涉及的所有日志都带上它——包括熔断跳过、每次 provider 自动切换，以及标明最终由谁承接的终止跳。`--print` 输出里每条日志会打印 `trace:` 行，拿这个值配合 `--trace` 就能把一次请求试过的服务商按顺序完整看一遍：
+
+```
+1. [WARN ] strategy / fallback_skip_provider          legacy-gw 熔断中跳过
+2. [WARN ] strategy / runtime_server_provider_fallback openrouter HTTP 429
+3. [INFO ] strategy / runtime_server_request_settled   由 zhipu 承接（第 2 跳，fellBack=true）
+```
+
+内网 API 服务的 `x-request-id` 响应头即该请求的 `traceId`，可直接用它反查链路。
 
 `ai context` 汇总项目路径、Git 分支和最近提交、`git status`、`git diff --stat`、`package.json` scripts、文件树摘要、关键文档摘要和最近日志。自动排除 `node_modules`、`dist`、`.git`、`providers.json`、`usage.json`、`.env`、`*.key`、`*.pem` 等。
 
