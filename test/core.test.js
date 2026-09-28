@@ -15,6 +15,7 @@ import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/mode
 import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
 import { isPrivilegedProcess, resolveClaudePermissionMode } from "../dist/core/runner/claude-permission-policy.js";
 import { getRunnerEngine, listRunnerEngines } from "../dist/core/runner/engine-registry.js";
+import { buildFailoverSseNotice, formatFailoverSummary } from "../dist/core/runner/failover-notice.js";
 import { startOpenAiUsageProxy } from "../dist/core/runner/openai-usage-proxy.js";
 import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl, resolveRunnerLaunchPolicy, runTool, writeTemporaryClaudeSettings } from "../dist/core/runner/tool-runner.js";
 import { estimateTokenCostUsd } from "../dist/core/usage/pricing.js";
@@ -809,6 +810,31 @@ test("usage proxy does not rotate providers for non-model GET probes", async () 
   });
 });
 
+test("failover notices stay in-protocol and summarize after the CLI exits", () => {
+  const route = (name, model) => ({ provider: { name, baseUrl: "https://x.test", apiKey: "k", mode: "auto", level: 1, model }, model });
+  const pending = { type: "confirmation_required", from: route("a", "m1"), to: route("b", "m2"), reason: "stream_error" };
+
+  // 协议内提示按引擎选择各自的错误事件形状，交给原生 TUI 渲染。
+  const claudeNotice = buildFailoverSseNotice("claude", pending);
+  assert.match(claudeNotice, /^event: error\ndata: /);
+  assert.match(claudeNotice, /"type":"api_error"/);
+  assert.match(claudeNotice, /b\/m2/);
+  assert.match(buildFailoverSseNotice("codex", pending), /"code":"provider_failover_pending"/);
+
+  // 没有切换时不打印任何汇总，避免正常执行也多出噪声行。
+  assert.equal(formatFailoverSummary([]), null);
+
+  const summary = formatFailoverSummary([
+    { type: "automatic", from: route("a", "m1"), to: route("b", "m2"), reason: "http_429" },
+    pending
+  ]);
+  // confirmation_required 未真正切换，不计入已切换次数。
+  assert.match(summary, /发生 1 次 provider 切换/);
+  assert.match(summary, /1\. a\/m1 在产生有效输出前失败（http_429）/);
+  assert.match(summary, /2\. a\/m1 已输出部分内容后中断/);
+  assert.match(summary, /ai log --print --trace/);
+});
+
 test("usage proxy requires a new request before switching after partial output", async () => {
   await withTempHome(async () => {
     const failovers = [];
@@ -847,7 +873,12 @@ test("usage proxy requires a new request before switching after partial output",
         body: JSON.stringify({ model: "claude-primary", messages: [], stream: true })
       });
       const first = await request();
-      assert.match(await first.text(), /partial/);
+      const firstText = await first.text();
+      assert.match(firstText, /partial/);
+      // 提示必须走协议内，让原生 TUI 自己排版，而不是父进程往终端插字节。
+      assert.match(firstText, /event: error/);
+      assert.match(firstText, /\[AxiomRuntime\][^\n]*claude-backup/);
+      assert.match(firstText, /"type":"api_error"/);
       assert.equal(primaryRequests, 1);
       assert.equal(backupRequests, 0);
       assert.deepEqual(failovers.map((event) => event.type), ["confirmation_required"]);

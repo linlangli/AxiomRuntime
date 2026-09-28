@@ -412,6 +412,41 @@
                   "fontWeight": "normal"
                 }
               ]
+            },
+            {
+              "type": "frame",
+              "id": "fZFz6",
+              "name": "Nav Help",
+              "width": "fill_container",
+              "cornerRadius": 8,
+              "gap": 10,
+              "padding": [
+                9,
+                10
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon",
+                  "id": "sfJed",
+                  "name": "Icon",
+                  "width": 17,
+                  "height": 17,
+                  "icon": "book-open",
+                  "library": "lucide",
+                  "fill": "$exp-text-hint"
+                },
+                {
+                  "type": "text",
+                  "id": "dymLG",
+                  "name": "Label",
+                  "fill": "$exp-text-hint",
+                  "content": "帮助",
+                  "fontFamily": "$exp-font",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
             }
           ]
         },
@@ -421,6 +456,142 @@
           "name": "Spacer",
           "width": "fill_container",
           "height": "fill_container"
+        },
+        {
+          "type": "frame",
+          "id": "eHKLL",
+          "name": "Active Run",
+          "width": "fill_container",
+          "fill": "$exp-primary-container",
+          "cornerRadius": 10,
+          "layout": "vertical",
+          "gap": 9,
+          "padding": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "Thtgo",
+              "name": "Head",
+              "width": "fill_container",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "wNORa",
+                  "name": "Live Dot",
+                  "fill": "$exp-primary",
+                  "width": 7,
+                  "height": 7
+                },
+                {
+                  "type": "text",
+                  "id": "AsQxU",
+                  "name": "Head Label",
+                  "fill": "$exp-primary-dark",
+                  "content": "当前 provider",
+                  "fontFamily": "$exp-font",
+                  "fontSize": 11,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "p04DmC",
+              "name": "Provider Row",
+              "width": "fill_container",
+              "gap": 6,
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Cu0JZ",
+                  "name": "Provider Name",
+                  "fill": "$exp-text",
+                  "content": "zhipu",
+                  "fontFamily": "$exp-font-mono",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "q1MTtu",
+                  "name": "Level Chip",
+                  "fill": "$exp-surface",
+                  "cornerRadius": 4,
+                  "padding": [
+                    2,
+                    6
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "A1wL7",
+                      "name": "Level",
+                      "fill": "$exp-text-secondary",
+                      "content": "L2",
+                      "fontFamily": "$exp-font-mono",
+                      "fontSize": 9,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "K68XU",
+              "name": "Model",
+              "fill": "$exp-text-secondary",
+              "content": "glm-4.6",
+              "fontFamily": "$exp-font-mono",
+              "fontSize": 10,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "wzV8Z",
+              "name": "Fallback Row",
+              "width": "fill_container",
+              "gap": 5,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon",
+                  "id": "kiMeq",
+                  "name": "Icon",
+                  "width": 11,
+                  "height": 11,
+                  "icon": "arrow-right",
+                  "library": "lucide",
+                  "fill": "$exp-primary-dark"
+                },
+                {
+                  "type": "text",
+                  "id": "Z5Bsg",
+                  "name": "Fallback Text",
+                  "fill": "$exp-primary-dark",
+                  "content": "已从 openrouter 切换 · 第 2 跳",
+                  "fontFamily": "$exp-font",
+                  "fontSize": 10,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "fd5HD",
+              "name": "Trace",
+              "fill": "$exp-text-hint",
+              "content": "trc_70d90ad64d18",
+              "fontFamily": "$exp-font-mono",
+              "fontSize": 9,
+              "fontWeight": "normal"
+            }
+          ]
         },
         {
           "type": "frame",
@@ -7144,6 +7315,43 @@
                                 },
                                 {
                                   "type": "frame",
+                                  "id": "Tqx1j",
+                                  "name": "Chip 进行中",
+                                  "fill": "$exp-warning-light",
+                                  "cornerRadius": 7,
+                                  "stroke": "$exp-warning",
+                                  "strokeWidth": 1,
+                                  "gap": 5,
+                                  "padding": [
+                                    6,
+                                    10
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "xWztC",
+                                      "name": "Label",
+                                      "fill": "$exp-warning",
+                                      "content": "进行中",
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 11,
+                                      "fontWeight": "600"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "e5OzcJ",
+                                      "name": "Count",
+                                      "fill": "$exp-warning",
+                                      "content": "1",
+                                      "fontFamily": "$exp-font-mono",
+                                      "fontSize": 10,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
                                   "id": "DGLsi",
                                   "name": "Chip 全部",
                                   "fill": "$exp-primary-container",
@@ -7337,6 +7545,563 @@
                             16
                           ],
                           "children": [
+                            {
+                              "type": "frame",
+                              "id": "K6WNYz",
+                              "name": "Live Trace",
+                              "clip": true,
+                              "width": "fill_container",
+                              "fill": "$exp-surface",
+                              "cornerRadius": 10,
+                              "stroke": "$exp-primary",
+                              "strokeWidth": 1,
+                              "layout": "vertical",
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "M8Bq2",
+                                  "name": "Head",
+                                  "width": "fill_container",
+                                  "fill": "$exp-primary-container",
+                                  "stroke": "$exp-primary-light",
+                                  "strokeWidth": {
+                                    "bottom": 1
+                                  },
+                                  "gap": 10,
+                                  "padding": [
+                                    9,
+                                    12
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "icon",
+                                      "id": "riNSa",
+                                      "name": "Icon",
+                                      "width": 12,
+                                      "height": 12,
+                                      "icon": "radio",
+                                      "library": "lucide",
+                                      "fill": "$exp-primary"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "miIV6",
+                                      "name": "ReqId",
+                                      "fill": "$exp-text",
+                                      "content": "req_c93f70ad",
+                                      "fontFamily": "$exp-font-mono",
+                                      "fontSize": 11,
+                                      "fontWeight": "600"
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "L9jlo",
+                                      "name": "Tool",
+                                      "fill": "$exp-surface",
+                                      "cornerRadius": 5,
+                                      "padding": [
+                                        2,
+                                        7
+                                      ],
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "WXugp",
+                                          "name": "Label",
+                                          "fill": "$exp-primary-dark",
+                                          "content": "claude",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 10,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "fnIs7",
+                                      "name": "Model",
+                                      "fill": "$exp-text-secondary",
+                                      "content": "glm-4.6",
+                                      "fontFamily": "$exp-font-mono",
+                                      "fontSize": 10,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "I0SbM",
+                                      "name": "Spacer",
+                                      "fill": "#00000000",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 10,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "rBn2t",
+                                      "name": "Hops",
+                                      "fill": "$exp-text-hint",
+                                      "content": "第 2 跳",
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 10,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "y75O4",
+                                      "name": "Dur",
+                                      "fill": "$exp-primary-dark",
+                                      "content": "进行中 4.2 秒",
+                                      "fontFamily": "$exp-font-mono",
+                                      "fontSize": 10,
+                                      "fontWeight": "500"
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "xMynL",
+                                      "name": "Result",
+                                      "fill": "$exp-warning-light",
+                                      "cornerRadius": 5,
+                                      "padding": [
+                                        2,
+                                        7
+                                      ],
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "T3s9oS",
+                                          "name": "Label",
+                                          "fill": "$exp-warning",
+                                          "content": "等待确认切换",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 10,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "jqODy",
+                                  "name": "Chain",
+                                  "width": "fill_container",
+                                  "layout": "vertical",
+                                  "padding": [
+                                    6,
+                                    12
+                                  ],
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "oHBpF",
+                                      "name": "Hop 1",
+                                      "width": "fill_container",
+                                      "gap": 9,
+                                      "padding": [
+                                        5,
+                                        0
+                                      ],
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "frame",
+                                          "id": "hyeDC",
+                                          "name": "Gutter",
+                                          "width": 18,
+                                          "justifyContent": "center",
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon",
+                                              "id": "cZmf8",
+                                              "name": "Icon",
+                                              "width": 13,
+                                              "height": 13,
+                                              "icon": "arrow-down-right",
+                                              "library": "lucide",
+                                              "fill": "$exp-warning"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "NSphe",
+                                          "name": "Level",
+                                          "width": 28,
+                                          "fill": "$exp-surface-dim",
+                                          "cornerRadius": 4,
+                                          "padding": [
+                                            2,
+                                            0
+                                          ],
+                                          "justifyContent": "center",
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "text",
+                                              "id": "ghl5H",
+                                              "name": "Label",
+                                              "fill": "$exp-text-secondary",
+                                              "content": "L1",
+                                              "fontFamily": "$exp-font-mono",
+                                              "fontSize": 9,
+                                              "fontWeight": "600"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "qmFnf",
+                                          "name": "Provider",
+                                          "fill": "$exp-text",
+                                          "textGrowth": "fixed-width",
+                                          "width": 82,
+                                          "content": "openrouter",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 11,
+                                          "fontWeight": "500"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "p9aWX",
+                                          "name": "Action",
+                                          "fill": "$exp-text-hint",
+                                          "textGrowth": "fixed-width",
+                                          "width": 198,
+                                          "content": "proxy_request",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 10,
+                                          "fontWeight": "normal"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "L5PEin",
+                                          "name": "State",
+                                          "fill": "$exp-warning",
+                                          "textGrowth": "fixed-width",
+                                          "width": 112,
+                                          "content": "429 限流",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 10,
+                                          "fontWeight": "600"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "q2y3C",
+                                          "name": "Lat",
+                                          "fill": "$exp-text-secondary",
+                                          "textGrowth": "fixed-width",
+                                          "width": 44,
+                                          "content": "132ms",
+                                          "textAlign": "right",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 10,
+                                          "fontWeight": "normal"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "pXgtH",
+                                          "name": "Note",
+                                          "fill": "$exp-text-hint",
+                                          "textGrowth": "fixed-width",
+                                          "width": "fill_container",
+                                          "content": "无输出，自动切换",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 10,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "R3mVA",
+                                      "name": "Hop 2",
+                                      "width": "fill_container",
+                                      "gap": 9,
+                                      "padding": [
+                                        5,
+                                        0
+                                      ],
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "frame",
+                                          "id": "C5h8s4",
+                                          "name": "Gutter",
+                                          "width": 18,
+                                          "justifyContent": "center",
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon",
+                                              "id": "CC9KI",
+                                              "name": "Icon",
+                                              "width": 13,
+                                              "height": 13,
+                                              "icon": "octagon-alert",
+                                              "library": "lucide",
+                                              "fill": "$exp-danger"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "VzTYx",
+                                          "name": "Level",
+                                          "width": 28,
+                                          "fill": "$exp-surface-dim",
+                                          "cornerRadius": 4,
+                                          "padding": [
+                                            2,
+                                            0
+                                          ],
+                                          "justifyContent": "center",
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "text",
+                                              "id": "EHtJJ",
+                                              "name": "Label",
+                                              "fill": "$exp-text-secondary",
+                                              "content": "L2",
+                                              "fontFamily": "$exp-font-mono",
+                                              "fontSize": 9,
+                                              "fontWeight": "600"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "W8kWZF",
+                                          "name": "Provider",
+                                          "fill": "$exp-text",
+                                          "textGrowth": "fixed-width",
+                                          "width": 82,
+                                          "content": "zhipu",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 11,
+                                          "fontWeight": "500"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "s1f2v",
+                                          "name": "Action",
+                                          "fill": "$exp-text-hint",
+                                          "textGrowth": "fixed-width",
+                                          "width": 198,
+                                          "content": "stream_response",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 10,
+                                          "fontWeight": "normal"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "oBF4s",
+                                          "name": "State",
+                                          "fill": "$exp-danger",
+                                          "textGrowth": "fixed-width",
+                                          "width": 112,
+                                          "content": "输出后中断",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 10,
+                                          "fontWeight": "600"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "c9a8Rv",
+                                          "name": "Lat",
+                                          "fill": "$exp-text-secondary",
+                                          "textGrowth": "fixed-width",
+                                          "width": 44,
+                                          "content": "3.1s",
+                                          "textAlign": "right",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 10,
+                                          "fontWeight": "normal"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "RX4Dx",
+                                          "name": "Note",
+                                          "fill": "$exp-text-hint",
+                                          "textGrowth": "fixed-width",
+                                          "width": "fill_container",
+                                          "content": "上下文保留，等待重提交",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 10,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "M9rSdY",
+                                      "name": "Hop 3",
+                                      "width": "fill_container",
+                                      "gap": 9,
+                                      "padding": [
+                                        5,
+                                        0
+                                      ],
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "frame",
+                                          "id": "qOnvm",
+                                          "name": "Gutter",
+                                          "width": 18,
+                                          "justifyContent": "center",
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "icon",
+                                              "id": "unGev",
+                                              "name": "Icon",
+                                              "width": 13,
+                                              "height": 13,
+                                              "icon": "loader",
+                                              "library": "lucide",
+                                              "fill": "$exp-primary"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "frame",
+                                          "id": "P02Sge",
+                                          "name": "Level",
+                                          "width": 28,
+                                          "fill": "$exp-surface-dim",
+                                          "cornerRadius": 4,
+                                          "padding": [
+                                            2,
+                                            0
+                                          ],
+                                          "justifyContent": "center",
+                                          "alignItems": "center",
+                                          "children": [
+                                            {
+                                              "type": "text",
+                                              "id": "tob90",
+                                              "name": "Label",
+                                              "fill": "$exp-text-secondary",
+                                              "content": "L3",
+                                              "fontFamily": "$exp-font-mono",
+                                              "fontSize": 9,
+                                              "fontWeight": "600"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "f9whE",
+                                          "name": "Provider",
+                                          "fill": "$exp-text",
+                                          "textGrowth": "fixed-width",
+                                          "width": 82,
+                                          "content": "kimi",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 11,
+                                          "fontWeight": "500"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "WwIf5",
+                                          "name": "Action",
+                                          "fill": "$exp-text-hint",
+                                          "textGrowth": "fixed-width",
+                                          "width": 198,
+                                          "content": "awaiting_confirm",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 10,
+                                          "fontWeight": "normal"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "xHCcs",
+                                          "name": "State",
+                                          "fill": "$exp-text-hint",
+                                          "textGrowth": "fixed-width",
+                                          "width": 112,
+                                          "content": "待确认",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 10,
+                                          "fontWeight": "600"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "qA7uD",
+                                          "name": "Lat",
+                                          "fill": "$exp-text-secondary",
+                                          "textGrowth": "fixed-width",
+                                          "width": 44,
+                                          "content": "—",
+                                          "textAlign": "right",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 10,
+                                          "fontWeight": "normal"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "Q8IXbD",
+                                          "name": "Note",
+                                          "fill": "$exp-text-hint",
+                                          "textGrowth": "fixed-width",
+                                          "width": "fill_container",
+                                          "content": "重新提交即切换",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 10,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "DxluK",
+                                  "name": "Pending Hint",
+                                  "width": "fill_container",
+                                  "fill": "$exp-warning-light",
+                                  "stroke": "$exp-outline-soft",
+                                  "strokeWidth": {
+                                    "top": 1
+                                  },
+                                  "gap": 7,
+                                  "padding": [
+                                    8,
+                                    12
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "icon",
+                                      "id": "TxPEG",
+                                      "name": "Icon",
+                                      "width": 12,
+                                      "height": 12,
+                                      "icon": "corner-down-right",
+                                      "library": "lucide",
+                                      "fill": "$exp-warning"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "Z86xbz",
+                                      "name": "Hint",
+                                      "fill": "$exp-text-secondary",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "重新提交或重试本次请求即确认切换到 kimi/kimi-k2；Runtime 不会自动重放已输出的内容",
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 10,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
                             {
                               "type": "frame",
                               "id": "OEw97",
@@ -12791,6 +13556,2314 @@
                               "fontWeight": "normal"
                             }
                           ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "ovMdh",
+      "x": 7580,
+      "y": 0,
+      "name": "Screen Help",
+      "clip": true,
+      "width": 1440,
+      "height": 1024,
+      "fill": "$exp-bg",
+      "children": [
+        {
+          "id": "EGO9j",
+          "type": "ref",
+          "ref": "lucKM",
+          "name": "Sidebar Instance",
+          "descendants": {
+            "I7wk0": {
+              "fill": "#00000000"
+            },
+            "PLiM2": {
+              "fill": "$exp-text-secondary"
+            },
+            "W3Uvox": {
+              "fill": "$exp-text-secondary",
+              "fontWeight": "500"
+            },
+            "xqdL8": {
+              "fill": "#00000000"
+            },
+            "R7aI4D": {
+              "fill": "$exp-text-secondary"
+            },
+            "bZfoi": {
+              "fill": "$exp-text-secondary",
+              "fontWeight": "500"
+            },
+            "MKsmd": {
+              "fill": "#00000000"
+            },
+            "lPAC6": {
+              "fill": "$exp-text-secondary"
+            },
+            "bPtWR": {
+              "fill": "$exp-text-secondary",
+              "fontWeight": "500"
+            },
+            "b189mT": {
+              "fill": "#00000000"
+            },
+            "wcFY4": {
+              "fill": "$exp-text-secondary"
+            },
+            "Xmd9b": {
+              "fill": "$exp-text-secondary",
+              "fontWeight": "500"
+            },
+            "fZFz6": {
+              "fill": "$exp-primary-container"
+            },
+            "sfJed": {
+              "fill": "$exp-primary-dark"
+            },
+            "dymLG": {
+              "fill": "$exp-primary-dark",
+              "fontWeight": "600"
+            }
+          }
+        },
+        {
+          "type": "frame",
+          "id": "yfiS4",
+          "name": "Main",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "ycPFI",
+              "name": "Topbar",
+              "width": "fill_container",
+              "fill": "$exp-surface",
+              "stroke": "$exp-outline-soft",
+              "strokeWidth": {
+                "bottom": 1
+              },
+              "gap": 16,
+              "padding": [
+                18,
+                32
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "i4NjD",
+                  "name": "Title Col",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "E30rTU",
+                      "name": "Page Title",
+                      "fill": "$exp-text",
+                      "content": "帮助中心",
+                      "fontFamily": "$exp-font",
+                      "fontSize": 19,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "LJQRV",
+                      "name": "Page Sub",
+                      "fill": "$exp-text-secondary",
+                      "content": "安装、运行规则与配置说明，原 ai help 页面已并入此处",
+                      "fontFamily": "$exp-font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "jWST7",
+                  "name": "Command Search",
+                  "width": 300,
+                  "fill": "$exp-surface",
+                  "cornerRadius": 8,
+                  "stroke": "$exp-outline",
+                  "strokeWidth": 1,
+                  "gap": 8,
+                  "padding": [
+                    9,
+                    12
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "yyQbw",
+                      "name": "Icon",
+                      "width": 14,
+                      "height": 14,
+                      "icon": "search",
+                      "library": "lucide",
+                      "fill": "$exp-text-hint"
+                    },
+                    {
+                      "type": "text",
+                      "id": "rCEbd",
+                      "name": "Placeholder",
+                      "fill": "$exp-text-hint",
+                      "content": "搜索文档与命令",
+                      "fontFamily": "$exp-font",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "CCBxH",
+                      "name": "Kbd",
+                      "fill": "$exp-surface-dim",
+                      "cornerRadius": 4,
+                      "padding": [
+                        2,
+                        6
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "kCQXO",
+                          "name": "Label",
+                          "fill": "$exp-text-hint",
+                          "content": "⌘/",
+                          "fontFamily": "$exp-font-mono",
+                          "fontSize": 10,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "RYHcE",
+              "name": "Body",
+              "width": "fill_container",
+              "height": "fill_container",
+              "gap": 20,
+              "padding": [
+                24,
+                32
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "LFPDH",
+                  "name": "Toc",
+                  "clip": true,
+                  "width": 224,
+                  "height": "fill_container",
+                  "fill": "$exp-surface",
+                  "cornerRadius": 12,
+                  "stroke": "$exp-outline-soft",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 2,
+                  "padding": [
+                    14,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "HABrY",
+                      "name": "Toc Section 入门",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": [
+                        8,
+                        0,
+                        2,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "o4E2N",
+                          "name": "Section Label",
+                          "width": "fill_container",
+                          "padding": [
+                            0,
+                            10
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "zxEyZ",
+                              "name": "Label",
+                              "fill": "$exp-text-hint",
+                              "content": "入门",
+                              "fontFamily": "$exp-font",
+                              "fontSize": 10,
+                              "fontWeight": "600",
+                              "letterSpacing": 0.8
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "FuF3M",
+                          "name": "Items",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 1,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "Lneen",
+                              "name": "Toc 安装与初始化",
+                              "width": "fill_container",
+                              "fill": "$exp-primary-container",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "PzVyL",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "download",
+                                  "library": "lucide",
+                                  "fill": "$exp-primary-dark"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "INucm",
+                                  "name": "Label",
+                                  "fill": "$exp-primary-dark",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "安装与初始化",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "600"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "C4jA5",
+                              "name": "Toc 命令索引",
+                              "width": "fill_container",
+                              "fill": "#00000000",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "g7FBI",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "layout-list",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "FIMtf",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "命令索引",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "F66qPE",
+                      "name": "Toc Section 使用",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": [
+                        8,
+                        0,
+                        2,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "ffgkV",
+                          "name": "Section Label",
+                          "width": "fill_container",
+                          "padding": [
+                            0,
+                            10
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "t4b1D",
+                              "name": "Label",
+                              "fill": "$exp-text-hint",
+                              "content": "使用",
+                              "fontFamily": "$exp-font",
+                              "fontSize": 10,
+                              "fontWeight": "600",
+                              "letterSpacing": 0.8
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "k2a4L",
+                          "name": "Items",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 1,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "fN6DT",
+                              "name": "Toc 使用模型",
+                              "width": "fill_container",
+                              "fill": "#00000000",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "eKh0F",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "play",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "t2P0UW",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "使用模型",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "xIFN2",
+                              "name": "Toc 出站代理",
+                              "width": "fill_container",
+                              "fill": "#00000000",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "Vy3GS",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "globe",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "gjmHr",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "出站代理",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "j1F3d",
+                              "name": "Toc 生成图片",
+                              "width": "fill_container",
+                              "fill": "#00000000",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "w4aJqQ",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "image",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "XFWeS",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "生成图片",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "L4OjR",
+                      "name": "Toc Section 运行时",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": [
+                        8,
+                        0,
+                        2,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "JPoMI",
+                          "name": "Section Label",
+                          "width": "fill_container",
+                          "padding": [
+                            0,
+                            10
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "FKniq",
+                              "name": "Label",
+                              "fill": "$exp-text-hint",
+                              "content": "运行时",
+                              "fontFamily": "$exp-font",
+                              "fontSize": 10,
+                              "fontWeight": "600",
+                              "letterSpacing": 0.8
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "TmsJk",
+                          "name": "Items",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 1,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "zWKEn",
+                              "name": "Toc 运行规则",
+                              "width": "fill_container",
+                              "fill": "#00000000",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "kI6eA",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "git-branch",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "xW8An",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "运行规则",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "VrFTa",
+                              "name": "Toc Memory 配置",
+                              "width": "fill_container",
+                              "fill": "#00000000",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "K8oAp",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "brain",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "ih4cK",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Memory 配置",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "G0wE5y",
+                              "name": "Toc Telegram Bot",
+                              "width": "fill_container",
+                              "fill": "#00000000",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "E10zs",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "send",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "uzzR4",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Telegram Bot",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "hjQS7",
+                      "name": "Toc Section 运维",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": [
+                        8,
+                        0,
+                        2,
+                        0
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "YlrFr",
+                          "name": "Section Label",
+                          "width": "fill_container",
+                          "padding": [
+                            0,
+                            10
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Dl5iG",
+                              "name": "Label",
+                              "fill": "$exp-text-hint",
+                              "content": "运维",
+                              "fontFamily": "$exp-font",
+                              "fontSize": 10,
+                              "fontWeight": "600",
+                              "letterSpacing": 0.8
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "F4qtw",
+                          "name": "Items",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 1,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "MqIfU",
+                              "name": "Toc 状态与诊断",
+                              "width": "fill_container",
+                              "fill": "#00000000",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "qYgSu",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "activity",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "usAXz",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "状态与诊断",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "Cz2qB",
+                              "name": "Toc 会话与报告",
+                              "width": "fill_container",
+                              "fill": "#00000000",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "kjtul",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "file-text",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "x6IQhl",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "会话与报告",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "N8eTC",
+                              "name": "Toc 配置文件",
+                              "width": "fill_container",
+                              "fill": "#00000000",
+                              "cornerRadius": 7,
+                              "gap": 9,
+                              "padding": [
+                                8,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "At4R6",
+                                  "name": "Icon",
+                                  "width": 14,
+                                  "height": 14,
+                                  "icon": "folder",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "RSaMn",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "配置文件",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "b0tqJ",
+                  "name": "Doc Col",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "layout": "vertical",
+                  "gap": 14,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "lnpo8",
+                      "name": "Install Card",
+                      "clip": true,
+                      "width": "fill_container",
+                      "fill": "$exp-surface",
+                      "cornerRadius": 12,
+                      "stroke": "$exp-outline-soft",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 12,
+                      "padding": [
+                        16,
+                        20
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "m6FxoX",
+                          "name": "Head",
+                          "width": "fill_container",
+                          "gap": 10,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "IZSuR",
+                              "name": "Title Col",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "gap": 3,
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "kEhVm",
+                                  "name": "Title",
+                                  "fill": "$exp-text",
+                                  "content": "安装与初始化",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 15,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "CcATE",
+                                  "name": "Sub",
+                                  "fill": "$exp-text-secondary",
+                                  "content": "npm 包名 @offerpilot/axiomruntime，安装后注册的可执行命令是 ai",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 11,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "mkFRh",
+                              "name": "Node Chip",
+                              "fill": "$exp-success-light",
+                              "cornerRadius": 6,
+                              "gap": 6,
+                              "padding": [
+                                5,
+                                10
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "cpQOO",
+                                  "name": "Icon",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "check",
+                                  "library": "lucide",
+                                  "fill": "$exp-success"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "cmjjX",
+                                  "name": "Label",
+                                  "fill": "$exp-success",
+                                  "content": "需要 Node.js 22.19.0+",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 11,
+                                  "fontWeight": "600"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "GmNhN",
+                          "name": "Install Tabs",
+                          "fill": "$exp-surface-dim",
+                          "cornerRadius": 8,
+                          "gap": 2,
+                          "padding": 3,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "lywnh",
+                              "name": "Tab npm 全局安装",
+                              "fill": "$exp-surface",
+                              "cornerRadius": 6,
+                              "stroke": "$exp-outline-soft",
+                              "strokeWidth": 1,
+                              "padding": [
+                                6,
+                                14
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "NYjUX",
+                                  "name": "Label",
+                                  "fill": "$exp-text",
+                                  "content": "npm 全局安装",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "600"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "SrgAe",
+                              "name": "Tab Homebrew",
+                              "fill": "#00000000",
+                              "cornerRadius": 6,
+                              "stroke": "#00000000",
+                              "padding": [
+                                6,
+                                14
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "lzg2o",
+                                  "name": "Label",
+                                  "fill": "$exp-text-hint",
+                                  "content": "Homebrew",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "NLleo",
+                          "name": "Code Block",
+                          "clip": true,
+                          "width": "fill_container",
+                          "fill": "$exp-code-bg",
+                          "cornerRadius": 10,
+                          "layout": "vertical",
+                          "gap": 7,
+                          "padding": [
+                            14,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "l18cB",
+                              "name": "Line",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "XoDwP",
+                                  "name": "Prompt",
+                                  "fill": "#5B6A86",
+                                  "content": "$",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "dhNWS",
+                                  "name": "Cmd",
+                                  "fill": "$exp-code-text",
+                                  "content": "node --version",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "jOAsj",
+                                  "name": "Note",
+                                  "fill": "#5B6A86",
+                                  "content": "# 确认 Node 版本",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 11,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "L6n9oe",
+                              "name": "Line",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "o94IPB",
+                                  "name": "Prompt",
+                                  "fill": "#5B6A86",
+                                  "content": "$",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "u4hALy",
+                                  "name": "Cmd",
+                                  "fill": "$exp-code-text",
+                                  "content": "npm install --global @offerpilot/axiomruntime",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "jEAoK",
+                              "name": "Line",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "Yaq2f",
+                                  "name": "Prompt",
+                                  "fill": "#5B6A86",
+                                  "content": "$",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "cFHRw",
+                                  "name": "Cmd",
+                                  "fill": "$exp-code-text",
+                                  "content": "ai --version",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "kMJW5",
+                                  "name": "Note",
+                                  "fill": "#5B6A86",
+                                  "content": "# 无副作用地验证安装",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 11,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "Kqnxz",
+                              "name": "Line",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "gK8k3",
+                                  "name": "Prompt",
+                                  "fill": "#5B6A86",
+                                  "content": "$",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "UPThZ",
+                                  "name": "Cmd",
+                                  "fill": "$exp-code-text",
+                                  "content": "ai setup",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "giFrx",
+                                  "name": "Note",
+                                  "fill": "#5B6A86",
+                                  "content": "# 初始化 Runtime",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 11,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "cccPU",
+                          "name": "Notes",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 8,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "Ptbbk",
+                              "name": "Note EBADENGINE",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "OVAZ5",
+                                  "name": "Icon",
+                                  "width": 13,
+                                  "height": 13,
+                                  "icon": "triangle-alert",
+                                  "library": "lucide",
+                                  "fill": "$exp-warning"
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "Qc8QG",
+                                  "name": "Text Col",
+                                  "width": "fill_container",
+                                  "layout": "vertical",
+                                  "gap": 2,
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "VBRmp",
+                                      "name": "Bold",
+                                      "fill": "$exp-text",
+                                      "content": "EBADENGINE",
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 11,
+                                      "fontWeight": "600"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "U9hrxX",
+                                      "name": "Body",
+                                      "fill": "$exp-text-secondary",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "npm 出现该警告时先升级 Node，不要继续使用警告状态下安装的 CLI。",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "s4o3hw",
+                              "name": "Note 非 root 运行",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "Lf5Wq",
+                                  "name": "Icon",
+                                  "width": 13,
+                                  "height": 13,
+                                  "icon": "shield",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-hint"
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "K94ebp",
+                                  "name": "Text Col",
+                                  "width": "fill_container",
+                                  "layout": "vertical",
+                                  "gap": 2,
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "QFUQ3",
+                                      "name": "Bold",
+                                      "fill": "$exp-text",
+                                      "content": "非 root 运行",
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 11,
+                                      "fontWeight": "600"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "aLmqd",
+                                      "name": "Body",
+                                      "fill": "$exp-text-secondary",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "全局安装可由 root 完成，日常执行与常驻服务应使用专用非 root 用户。",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "hlwSh",
+                      "name": "Rules Row",
+                      "width": "fill_container",
+                      "gap": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "YXzBL",
+                          "name": "Rules Card",
+                          "clip": true,
+                          "width": "fill_container",
+                          "fill": "$exp-surface",
+                          "cornerRadius": 12,
+                          "stroke": "$exp-outline-soft",
+                          "strokeWidth": 1,
+                          "layout": "vertical",
+                          "gap": 11,
+                          "padding": [
+                            16,
+                            20
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "Or3Lo",
+                              "name": "Head",
+                              "width": "fill_container",
+                              "gap": 9,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "MyiTK",
+                                  "name": "Icon",
+                                  "width": 15,
+                                  "height": 15,
+                                  "icon": "git-branch",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-secondary"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "Wm6mD",
+                                  "name": "Title",
+                                  "fill": "$exp-text",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "运行规则",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 14,
+                                  "fontWeight": "600"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "fThxQ",
+                              "name": "Rule List",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "gap": 10,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "BhYIF",
+                                  "name": "Rule 1",
+                                  "width": "fill_container",
+                                  "gap": 10,
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "yqV86",
+                                      "name": "Num",
+                                      "width": 20,
+                                      "height": 20,
+                                      "fill": "$exp-primary-container",
+                                      "cornerRadius": 5,
+                                      "justifyContent": "center",
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "r8hhbz",
+                                          "name": "N",
+                                          "fill": "$exp-primary-dark",
+                                          "content": "1",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 11,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "kBCSI",
+                                      "name": "Text Col",
+                                      "width": "fill_container",
+                                      "layout": "vertical",
+                                      "gap": 3,
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "EG63n",
+                                          "name": "Bold",
+                                          "fill": "$exp-text",
+                                          "content": "level 决定切换链",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 12,
+                                          "fontWeight": "600"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "V3S2D",
+                                          "name": "Body",
+                                          "fill": "$exp-text-secondary",
+                                          "textGrowth": "fixed-width",
+                                          "width": "fill_container",
+                                          "content": "正整数 level 组成自动切换链；level: 0 只允许显式使用，不进入自动候选。",
+                                          "lineHeight": 1.55,
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 11,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "m6TF7g",
+                                  "name": "Rule 2",
+                                  "width": "fill_container",
+                                  "gap": 10,
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "M5ujzo",
+                                      "name": "Num",
+                                      "width": 20,
+                                      "height": 20,
+                                      "fill": "$exp-primary-container",
+                                      "cornerRadius": 5,
+                                      "justifyContent": "center",
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "zUCOl",
+                                          "name": "N",
+                                          "fill": "$exp-primary-dark",
+                                          "content": "2",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 11,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "ueCXl",
+                                      "name": "Text Col",
+                                      "width": "fill_container",
+                                      "layout": "vertical",
+                                      "gap": 3,
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "B2nUQN",
+                                          "name": "Bold",
+                                          "fill": "$exp-text",
+                                          "content": "不跨模型族",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 12,
+                                          "fontWeight": "600"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "V5l3o8",
+                                          "name": "Body",
+                                          "fill": "$exp-text-secondary",
+                                          "textGrowth": "fixed-width",
+                                          "width": "fill_container",
+                                          "content": "Claude Code 只在提供 Claude 模型的 Provider 间切换，Codex 只在 Codex/OpenAI 兼容 Provider 间切换。",
+                                          "lineHeight": 1.55,
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 11,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "WCbAj",
+                                  "name": "Rule 3",
+                                  "width": "fill_container",
+                                  "gap": 10,
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "ss5jp",
+                                      "name": "Num",
+                                      "width": 20,
+                                      "height": 20,
+                                      "fill": "$exp-primary-container",
+                                      "cornerRadius": 5,
+                                      "justifyContent": "center",
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "VT15C",
+                                          "name": "N",
+                                          "fill": "$exp-primary-dark",
+                                          "content": "3",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 11,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "i2Ea8",
+                                      "name": "Text Col",
+                                      "width": "fill_container",
+                                      "layout": "vertical",
+                                      "gap": 3,
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "X2jEr",
+                                          "name": "Bold",
+                                          "fill": "$exp-text",
+                                          "content": "仅带请求体的 POST 触发",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 12,
+                                          "fontWeight": "600"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "XGN9K",
+                                          "name": "Body",
+                                          "fill": "$exp-text-secondary",
+                                          "textGrowth": "fixed-width",
+                                          "width": "fill_container",
+                                          "content": "有效输出前遇到连接错误、认证错误、限流或上游故障才切换；启动期无请求体 GET 探测不触发轮转。",
+                                          "lineHeight": 1.55,
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 11,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "nxCmv",
+                                  "name": "Rule 4",
+                                  "width": "fill_container",
+                                  "gap": 10,
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "g5oonL",
+                                      "name": "Num",
+                                      "width": 20,
+                                      "height": 20,
+                                      "fill": "$exp-primary-container",
+                                      "cornerRadius": 5,
+                                      "justifyContent": "center",
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "PMsNG",
+                                          "name": "N",
+                                          "fill": "$exp-primary-dark",
+                                          "content": "4",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 11,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "Loa6P",
+                                      "name": "Text Col",
+                                      "width": "fill_container",
+                                      "layout": "vertical",
+                                      "gap": 3,
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "zeNa7",
+                                          "name": "Bold",
+                                          "fill": "$exp-text",
+                                          "content": "不静默重放",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 12,
+                                          "fontWeight": "600"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "MCwLa",
+                                          "name": "Body",
+                                          "fill": "$exp-text-secondary",
+                                          "textGrowth": "fixed-width",
+                                          "width": "fill_container",
+                                          "content": "已产生文字、推理或工具参数后不会重放；用户重新提交即确认切换。",
+                                          "lineHeight": 1.55,
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 11,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "S8rjj",
+                                  "name": "Rule 5",
+                                  "width": "fill_container",
+                                  "gap": 10,
+                                  "children": [
+                                    {
+                                      "type": "frame",
+                                      "id": "O1KEA",
+                                      "name": "Num",
+                                      "width": 20,
+                                      "height": 20,
+                                      "fill": "$exp-primary-container",
+                                      "cornerRadius": 5,
+                                      "justifyContent": "center",
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "NVR43",
+                                          "name": "N",
+                                          "fill": "$exp-primary-dark",
+                                          "content": "5",
+                                          "fontFamily": "$exp-font-mono",
+                                          "fontSize": 11,
+                                          "fontWeight": "600"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "frame",
+                                      "id": "ghlea",
+                                      "name": "Text Col",
+                                      "width": "fill_container",
+                                      "layout": "vertical",
+                                      "gap": 3,
+                                      "children": [
+                                        {
+                                          "type": "text",
+                                          "id": "RMF2g",
+                                          "name": "Bold",
+                                          "fill": "$exp-text",
+                                          "content": "不修改用户配置",
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 12,
+                                          "fontWeight": "600"
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "E9vz0r",
+                                          "name": "Body",
+                                          "fill": "$exp-text-secondary",
+                                          "textGrowth": "fixed-width",
+                                          "width": "fill_container",
+                                          "content": "Claude Code 通过临时 --settings 注入，Codex 通过本次子进程 -c model_provider 固定，均不改全局认证。",
+                                          "lineHeight": 1.55,
+                                          "fontFamily": "$exp-font",
+                                          "fontSize": 11,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "sFoeE",
+                          "name": "Proxy Card",
+                          "clip": true,
+                          "width": 336,
+                          "fill": "$exp-surface",
+                          "cornerRadius": 12,
+                          "stroke": "$exp-outline-soft",
+                          "strokeWidth": 1,
+                          "layout": "vertical",
+                          "gap": 11,
+                          "padding": [
+                            16,
+                            20
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "Gxkaq",
+                              "name": "Head",
+                              "width": "fill_container",
+                              "gap": 9,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "SD47n",
+                                  "name": "Icon",
+                                  "width": 15,
+                                  "height": 15,
+                                  "icon": "globe",
+                                  "library": "lucide",
+                                  "fill": "$exp-text-secondary"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "k3nz1B",
+                                  "name": "Title",
+                                  "fill": "$exp-text",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "出站代理",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 14,
+                                  "fontWeight": "600"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "yUGuf",
+                              "name": "Code Block",
+                              "clip": true,
+                              "width": "fill_container",
+                              "fill": "$exp-code-bg",
+                              "cornerRadius": 9,
+                              "layout": "vertical",
+                              "gap": 5,
+                              "padding": [
+                                12,
+                                14
+                              ],
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "R20qF8",
+                                  "name": "Line",
+                                  "width": "fill_container",
+                                  "gap": 7,
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "HbUYI",
+                                      "name": "Prompt",
+                                      "fill": "#5B6A86",
+                                      "content": "$",
+                                      "fontFamily": "$exp-font-mono",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "Uqjqw",
+                                      "name": "Cmd",
+                                      "fill": "$exp-code-text",
+                                      "content": "ai proxy",
+                                      "fontFamily": "$exp-font-mono",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "wGTxV",
+                                  "name": "Line",
+                                  "width": "fill_container",
+                                  "gap": 7,
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "E3DyB",
+                                      "name": "Prompt",
+                                      "fill": "#5B6A86",
+                                      "content": "$",
+                                      "fontFamily": "$exp-font-mono",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "NasHD",
+                                      "name": "Cmd",
+                                      "fill": "$exp-code-text",
+                                      "content": "ai proxy 127.0.0.1 8081",
+                                      "fontFamily": "$exp-font-mono",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "V96BvE",
+                                  "name": "Line",
+                                  "width": "fill_container",
+                                  "gap": 7,
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "WEmMU",
+                                      "name": "Prompt",
+                                      "fill": "#5B6A86",
+                                      "content": "$",
+                                      "fontFamily": "$exp-font-mono",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "uzrp5",
+                                      "name": "Cmd",
+                                      "fill": "$exp-code-text",
+                                      "content": "ai proxy --disable",
+                                      "fontFamily": "$exp-font-mono",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "Up6G6",
+                              "name": "Points",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "gap": 8,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "duX50",
+                                  "name": "Point",
+                                  "width": "fill_container",
+                                  "gap": 8,
+                                  "children": [
+                                    {
+                                      "type": "ellipse",
+                                      "id": "dflhV",
+                                      "name": "Dot",
+                                      "fill": "$exp-primary",
+                                      "width": 5,
+                                      "height": 5
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "nrC24",
+                                      "name": "Body",
+                                      "fill": "$exp-text-secondary",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "新增或编辑先做零 Token 的 TCP 连通检查，失败时保留原配置。",
+                                      "lineHeight": 1.55,
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "uNHvb",
+                                  "name": "Point",
+                                  "width": "fill_container",
+                                  "gap": 8,
+                                  "children": [
+                                    {
+                                      "type": "ellipse",
+                                      "id": "vKfGM",
+                                      "name": "Dot",
+                                      "fill": "$exp-primary",
+                                      "width": 5,
+                                      "height": 5
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "OE4AD",
+                                      "name": "Body",
+                                      "fill": "$exp-text-secondary",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "配置保存在 ~/.ai-gateway/runtime.json，作用于 Runtime 及其启动的 Claude/Codex。",
+                                      "lineHeight": 1.55,
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "QBXQY",
+                                  "name": "Point",
+                                  "width": "fill_container",
+                                  "gap": 8,
+                                  "children": [
+                                    {
+                                      "type": "ellipse",
+                                      "id": "z67uzC",
+                                      "name": "Dot",
+                                      "fill": "$exp-primary",
+                                      "width": 5,
+                                      "height": 5
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "ze4BB",
+                                      "name": "Body",
+                                      "fill": "$exp-text-secondary",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "本地回环地址自动加入 NO_PROXY，避免代理回环。",
+                                      "lineHeight": 1.55,
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "vWbfN",
+                                  "name": "Point",
+                                  "width": "fill_container",
+                                  "gap": 8,
+                                  "children": [
+                                    {
+                                      "type": "ellipse",
+                                      "id": "w4tlai",
+                                      "name": "Dot",
+                                      "fill": "$exp-primary",
+                                      "width": 5,
+                                      "height": 5
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "xo0WO",
+                                      "name": "Body",
+                                      "fill": "$exp-text-secondary",
+                                      "textGrowth": "fixed-width",
+                                      "width": "fill_container",
+                                      "content": "不修改 ~/.claude 或 ~/.codex，原生命令不受影响。",
+                                      "lineHeight": 1.55,
+                                      "fontFamily": "$exp-font",
+                                      "fontSize": 11,
+                                      "fontWeight": "normal"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "BsmUZ",
+                      "name": "Config Card",
+                      "clip": true,
+                      "width": "fill_container",
+                      "fill": "$exp-surface",
+                      "cornerRadius": 12,
+                      "stroke": "$exp-outline-soft",
+                      "strokeWidth": 1,
+                      "layout": "vertical",
+                      "gap": 10,
+                      "padding": [
+                        14,
+                        20
+                      ],
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "wWHHR",
+                          "name": "Head",
+                          "width": "fill_container",
+                          "gap": 9,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "UAkpc",
+                              "name": "Icon",
+                              "width": 15,
+                              "height": 15,
+                              "icon": "folder",
+                              "library": "lucide",
+                              "fill": "$exp-text-secondary"
+                            },
+                            {
+                              "type": "text",
+                              "id": "o6YnA",
+                              "name": "Title",
+                              "fill": "$exp-text",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "配置文件",
+                              "fontFamily": "$exp-font",
+                              "fontSize": 14,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "CBgCR",
+                              "name": "Warn Chip",
+                              "fill": "$exp-warning-light",
+                              "cornerRadius": 6,
+                              "gap": 6,
+                              "padding": [
+                                4,
+                                9
+                              ],
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "fyEcd",
+                                  "name": "Icon",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "key-round",
+                                  "library": "lucide",
+                                  "fill": "#92400E"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "q3yRi9",
+                                  "name": "Label",
+                                  "fill": "#92400E",
+                                  "content": "apiKey 当前为明文保存，请限制权限且勿提交仓库",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 10,
+                                  "fontWeight": "600"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "mDqZa",
+                          "name": "Row 用户可编辑",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "atU7b",
+                              "name": "Head",
+                              "width": 150,
+                              "layout": "vertical",
+                              "gap": 1,
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "Cz2DK",
+                                  "name": "Label",
+                                  "fill": "$exp-text",
+                                  "content": "用户可编辑",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 11,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "xjeCD",
+                                  "name": "Hint",
+                                  "fill": "$exp-text-hint",
+                                  "content": "可手动修改",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 10,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "vxT2r",
+                              "name": "Path providers.json",
+                              "fill": "$exp-surface-dim",
+                              "cornerRadius": 6,
+                              "padding": [
+                                5,
+                                9
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "VRq9w",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "content": "providers.json",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 10,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "HECTt",
+                              "name": "Path memory.json",
+                              "fill": "$exp-surface-dim",
+                              "cornerRadius": 6,
+                              "padding": [
+                                5,
+                                9
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "m7a1Mw",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "content": "memory.json",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 10,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "DZK8D",
+                              "name": "Path model-pricing.json",
+                              "fill": "$exp-surface-dim",
+                              "cornerRadius": 6,
+                              "padding": [
+                                5,
+                                9
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "lSUSz",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "content": "model-pricing.json",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 10,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "xlMBH",
+                          "name": "Row 内部状态",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "TQetQ",
+                              "name": "Head",
+                              "width": 150,
+                              "layout": "vertical",
+                              "gap": 1,
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "ykOWV",
+                                  "name": "Label",
+                                  "fill": "$exp-text",
+                                  "content": "内部状态",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 11,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "ZPsBy",
+                                  "name": "Hint",
+                                  "fill": "$exp-text-hint",
+                                  "content": "除调试外不要手动修改",
+                                  "fontFamily": "$exp-font",
+                                  "fontSize": 10,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "GSB6l",
+                              "name": "Path .ai-cache.json",
+                              "fill": "$exp-surface-dim",
+                              "cornerRadius": 6,
+                              "padding": [
+                                5,
+                                9
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "v9b6H",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "content": ".ai-cache.json",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 10,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "r2nkeT",
+                              "name": "Path usage.json",
+                              "fill": "$exp-surface-dim",
+                              "cornerRadius": 6,
+                              "padding": [
+                                5,
+                                9
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "Tl1Dy",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "content": "usage.json",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 10,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "HPqne",
+                              "name": "Path sessions.json",
+                              "fill": "$exp-surface-dim",
+                              "cornerRadius": 6,
+                              "padding": [
+                                5,
+                                9
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "bFhvn",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "content": "sessions.json",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 10,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "j3bRO",
+                              "name": "Path telegram.sqlite",
+                              "fill": "$exp-surface-dim",
+                              "cornerRadius": 6,
+                              "padding": [
+                                5,
+                                9
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "u5F2v",
+                                  "name": "Label",
+                                  "fill": "$exp-text-secondary",
+                                  "content": "telegram.sqlite",
+                                  "fontFamily": "$exp-font-mono",
+                                  "fontSize": 10,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "XkVZF",
+                          "name": "Root Note",
+                          "fill": "$exp-text-hint",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "全部位于 ~/.ai-gateway/（可用 AI_GATEWAY_HOME 覆盖）。凭证改由 SecretStore 管理、配置只留 apiKeyRef 是目标架构，尚未实现。",
+                          "lineHeight": 1.5,
+                          "fontFamily": "$exp-font",
+                          "fontSize": 10,
+                          "fontWeight": "normal"
                         }
                       ]
                     }

@@ -193,9 +193,38 @@ ai last                                # 沿用上次的工具、服务商和模
 
 ### 请求级自动切换
 
-`ai use` 只启动一个 Claude Code 或 Codex 进程，候选 Provider 由同一个 execution-scoped Transport Proxy 管理。真正带请求体的模型 `POST` 遇到连接失败、认证失败、`404`、`408`、`409`、`425`、`429`、`5xx`，或流式响应在有效内容出现前中断时，Runtime 会丢弃失败尝试，按 `level` 切到下一个 Provider，将请求中的 `model` 改为该 Provider 的候选模型，并在终端显示切换提示。CLI 启动期间的无请求体 `GET` 探测不会触发 Provider 轮转。原生 CLI 进程没有重启，因此它发送的完整会话上下文仍在同一请求中。
+`ai use` 只启动一个 Claude Code 或 Codex 进程，候选 Provider 由同一个 execution-scoped Transport Proxy 管理。真正带请求体的模型 `POST` 遇到连接失败、认证失败、`404`、`408`、`409`、`425`、`429`、`5xx`，或流式响应在有效内容出现前中断时，Runtime 会丢弃失败尝试，按 `level` 切到下一个 Provider，并将请求中的 `model` 改为该 Provider 的候选模型。原生 CLI 进程没有重启，因此它发送的完整会话上下文仍在同一请求中。
 
-一旦已经向 Claude Code/Codex 返回文字、推理增量或工具参数，Runtime 不会自动重放，避免重复输出或重复工具调用。终端会提示候选 Provider；用户在当前 CLI 中重新提交或使用原生重试动作，即表示确认切换，下一次请求才使用候选 Provider。`400`、`413`、`422` 等通常由请求本身导致的错误不会跨 Provider 重试。当前确认方式依赖“重新提交/重试”动作，不会抢占原生 TUI 弹出额外的 `y/n` 输入框。
+一旦已经向 Claude Code/Codex 返回文字、推理增量或工具参数，Runtime 不会自动重放，避免重复输出或重复工具调用。此时 Runtime 只记下候选 Provider，**下一个**经过代理的请求才真正切过去。`400`、`413`、`422` 等通常由请求本身导致的错误不会跨 Provider 重试。确认动作依赖你在当前 CLI 里重新提交或重试，不会抢占原生 TUI 弹出额外的 `y/n` 输入框。
+
+**两处与上述描述不符的实际行为**（已核实，修复前请按实际行为理解）：
+
+| 场景 | 实际行为 |
+|---|---|
+| 无请求体 `GET` 探测（如 `/v1/models`）**在连接层失败**——连不上、socket 断开、响应头超时 | **会**触发 Provider 轮转，并且**永久改变**后续请求的落点。只有基于 HTTP 错误状态码（`404`/`429`/`5xx` 等）的切换判定才受「必须是带请求体的 `POST`」约束 |
+| 处于「等待确认切换」状态时，CLI 自发的**无关请求**（包括无请求体 `GET`）先到达 | 该请求会**替你消耗掉**待确认状态并记为已确认切换，不需要你真的重新提交 |
+
+两者都不会造成重复输出或重复计费——切换本身仍然只对失败的尝试生效。影响是**落点可能比你预期的更早发生变化**：想确认这次请求最终由谁承接，用 `ai log --print --trace <traceId>` 看终止跳，而不是假设它还在启动时选定的 Provider 上。
+
+**提示显示在哪里**：原生 CLI 的 TUI 独占终端并整屏重绘，因此 Runtime **不会**在会话期间往终端插入提示行——那会打乱 TUI 的排版。切换提示按通道分两处呈现：
+
+- **会话期间**：已输出部分内容后中断时，提示作为协议内的错误事件写回当前响应流（Claude 用 `api_error`，Codex 用 `provider_failover_pending`），由原生 CLI 按自己的样式渲染，格式不会错乱。
+- **会话结束后**：`ai use` 退出、终端所有权回到 Runtime 时，统一打印本次执行的切换汇总，包含每次切换的来源、目标、原因，以及用 `ai log --print --trace <traceId>` 查看完整链路的入口。有效输出前的自动切换不打断当前请求，只计入这份汇总。
+
+### 怎么知道当前在用哪个 Provider
+
+因为上面那条限制，`ai use` **运行期间**终端里看不到当前落在哪个 Provider —— 原生 TUI 的画面归它自己，Runtime 不往里插字节。目前可用的查看方式都是**事后**的：
+
+```bash
+# 退出 ai use 后，终端会打印本次执行的切换汇总（发生过切换才打印）
+ai log --print --trace <traceId>   # 按链路回看这次请求试过的每个 Provider
+ai session list                    # 会话记录里的服务商和模型
+ai last                            # 上次选择的工具 / 服务商 / 模型
+```
+
+> 已知限制：`ai session list` 和 `ai last` 记的是**启动时选定**的 Provider。如果执行期间发生过请求级自动切换，实际承接请求的 Provider 要用 `ai log --trace` 确认。
+>
+> 实时查看是 Web 面板的职责，设计稿 `docs/AxiomRuntime.pen` 已确立两处落点：侧栏「当前 provider」卡（五屏共享，显示 provider / level / model / 切换来源 / traceId）和「使用与日志」页首项的「进行中」链路卡（逐跳展示已试过的 Provider，以及是否在等待你重新提交以确认切换）。**Web 面板本身仍是 🔴 未实现**，见第 13 节。
 
 ### 它对你的环境做了什么
 
@@ -496,6 +525,8 @@ ai help          # 打开 HTML 命令手册
 ai --version
 ```
 
+> `ai help` 当前用系统默认程序打开独立的 `USAGE.html`。设计稿 `docs/AxiomRuntime.pen` 已补充「帮助中心」屏（`Screen Help`），把这份手册并入 Web 管理页的侧边栏导航；Web 面板本身仍是 🔴 未实现。
+
 ---
 
 ## 11. 配置文件
@@ -599,3 +630,5 @@ Node.js 版本低于 22.19.0。升级后重新安装，别忽略警告。
 
 - `ai provider list` 和 `ai status` 显示掩码 API Key（保留首末 4 位）。目标是只显示「已配置 / 缺失」状态，录屏分享前请注意
 - 编辑 `apiKey` 时当前值会作为输入默认值显示
+- `ai use` 运行期间无法实时查看当前 Provider（原生 TUI 独占终端），只能退出后看切换汇总或 `ai log --trace`；实时视图依赖未实现的 Web 面板
+- `ai session list` / `ai last` 记的是**启动时**选定的 Provider，执行期间发生的请求级自动切换不回写，实际承接者用 `ai log --trace` 确认

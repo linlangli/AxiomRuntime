@@ -10,8 +10,9 @@ import type { CliToolType, Provider } from "../types.js";
 import { isRecord } from "../utils/is-record.js";
 import { resolveToolCommand } from "./command-resolver.js";
 import { getRunnerEngine } from "./engine-registry.js";
+import { formatFailoverSummary } from "./failover-notice.js";
 import { startOpenAiUsageProxy } from "./openai-usage-proxy.js";
-import type { OpenAiUsageProxyRoute } from "./openai-usage-types.js";
+import type { OpenAiUsageProxyFailoverEvent, OpenAiUsageProxyRoute } from "./openai-usage-types.js";
 import {
   CLAUDE_ROOT_PERMISSION_WARNING,
   resolveClaudePermissionMode,
@@ -31,6 +32,7 @@ export async function runTool(
     throw new Error(`Failed to find ${tool} CLI. Run \`ai doctor\` to check local CLI installation.`);
   }
   const engine = getRunnerEngine(tool);
+  const failoverEvents: OpenAiUsageProxyFailoverEvent[] = [];
   const launchPolicy = resolveRunnerLaunchPolicy(tool, provider);
   if (launchPolicy.warning) {
     console.warn(`Warning: ${launchPolicy.warning}`);
@@ -46,16 +48,9 @@ export async function runTool(
       if (success) await recordProviderRuntimeSuccess(route.provider.name);
       else await recordProviderRuntimeFailure(route.provider.name, reason ?? "request_failed");
     },
+    // 子进程独占终端期间不直接写 stdio：提示由代理写回协议内，这里只累积，退出后统一汇总。
     onFailover: (event) => {
-      const from = `${event.from.provider.name}/${event.from.model}`;
-      const to = `${event.to.provider.name}/${event.to.model}`;
-      if (event.type === "automatic") {
-        process.stderr.write(`\n[AxiomRuntime] ${from} 在产生有效输出前失败，已自动切换到 ${to}。\n`);
-      } else if (event.type === "confirmation_required") {
-        process.stderr.write(`\n[AxiomRuntime] ${from} 已产生部分输出，未自动重放。请在当前 CLI 中重新提交或重试，以确认切换到 ${to}。\n`);
-      } else {
-        process.stderr.write(`\n[AxiomRuntime] 已确认切换到 ${to}，本次请求保留当前 CLI 会话上下文。\n`);
-      }
+      failoverEvents.push(event);
     }
   });
   const temporaryFiles: string[] = [];
@@ -125,6 +120,9 @@ export async function runTool(
         }).catch(() => undefined);
       });
       await finishSession(session.id, exitCode).catch(() => undefined);
+      // 子进程已退出，终端所有权回到父进程：此时打印汇总不会破坏 TUI 渲染。
+      const summary = formatFailoverSummary(failoverEvents);
+      if (summary) console.error(summary);
       if (error) {
         reject(error);
       } else {

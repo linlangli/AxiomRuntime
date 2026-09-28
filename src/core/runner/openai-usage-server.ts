@@ -16,6 +16,7 @@ import {
   shouldFallbackResponsesToChat,
   type ResponsesChatFallbackResult
 } from "./openai-usage-responses.js";
+import { buildFailoverSseNotice } from "./failover-notice.js";
 import { extractRequestModel, recordUsageFromResponse } from "./openai-usage-recording.js";
 import type {
   OpenAiUsageProxy,
@@ -199,7 +200,10 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
             }
             if (streamed.outputStarted && nextRoute && canFailover) {
               pendingRouteIndex = routeIndex + 1;
-              await emitFailover(input, { type: "confirmation_required", from: route, to: nextRoute, reason });
+              const event: OpenAiUsageProxyFailoverEvent = { type: "confirmation_required", from: route, to: nextRoute, reason };
+              await emitFailover(input, event);
+              // 流已打开：把提示写回协议内，交给原生 TUI 排版，避免父进程插字节破坏整屏重绘。
+              res.write(buildFailoverSseNotice(engine, event));
             }
             res.end();
             finalizeMetrics(false, reason);
