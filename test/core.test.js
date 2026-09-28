@@ -2,17 +2,20 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
+import { newTraceId, readRecentLogs } from "../dist/core/logs/log-service.js";
 import { normalizeProviders, swapProviderLevel, writeProviders } from "../dist/core/config/providers-store.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
-import { checkProvider, extractTokenUsage } from "../dist/core/models/model-discovery.js";
+import { checkProvider, extractTokenUsage, probeProviderConfiguration } from "../dist/core/models/model-discovery.js";
 import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
 import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
 import { isPrivilegedProcess, resolveClaudePermissionMode } from "../dist/core/runner/claude-permission-policy.js";
 import { getRunnerEngine, listRunnerEngines } from "../dist/core/runner/engine-registry.js";
+import { buildFailoverSseNotice, formatFailoverSummary } from "../dist/core/runner/failover-notice.js";
 import { startOpenAiUsageProxy } from "../dist/core/runner/openai-usage-proxy.js";
 import { buildRunnerArgs, getSecretFingerprint, getToolBaseUrl, resolveRunnerLaunchPolicy, runTool, writeTemporaryClaudeSettings } from "../dist/core/runner/tool-runner.js";
 import { estimateTokenCostUsd } from "../dist/core/usage/pricing.js";
@@ -20,6 +23,7 @@ import { runResolvedProviderCandidates } from "../dist/cli/commands/use.js";
 import { resolveImageCommandInput } from "../dist/cli/commands/image.js";
 import { getCliCommand, listInteractiveCliCommands, registerCliCommand } from "../dist/cli/registry.js";
 import { generateImage } from "../dist/core/images/image-generation-service.js";
+import { applyProxyToEnv, checkProxyEndpoint, normalizeProxyUrl, splitProxyUrl } from "../dist/core/network/proxy.js";
 
 test("normalizes provider levels by priority", () => {
   const providers = normalizeProviders([
@@ -49,6 +53,24 @@ test("provider config validation rejects empty connection fields", () => {
   );
 });
 
+test("normalizes split proxy input and protects local runtime traffic", () => {
+  assert.equal(normalizeProxyUrl("127.0.0.1", "8081"), "http://127.0.0.1:8081");
+  assert.equal(normalizeProxyUrl("127.0.0.1:", ":8081"), "http://127.0.0.1:8081");
+  assert.equal(normalizeProxyUrl("https://proxy.test:8443"), "https://proxy.test:8443");
+  assert.throws(() => normalizeProxyUrl("off"), /Disable proxy action/);
+  assert.deepEqual(splitProxyUrl("http://127.0.0.1:8081"), {
+    host: "http://127.0.0.1",
+    port: "8081"
+  });
+  assert.throws(() => normalizeProxyUrl("127.0.0.1", "70000"), /between 1 and 65535/);
+
+  const env = applyProxyToEnv({ NO_PROXY: "internal.test" }, "http://127.0.0.1:8081");
+  assert.equal(env.HTTPS_PROXY, "http://127.0.0.1:8081");
+  assert.equal(env.https_proxy, "http://127.0.0.1:8081");
+  assert.equal(env.NO_PROXY, "internal.test,127.0.0.1,localhost,::1");
+  assert.equal(env.no_proxy, env.NO_PROXY);
+});
+
 test("swaps provider levels", () => {
   const providers = normalizeProviders([
     { name: "a", baseUrl: "https://a.test", apiKey: "a", mode: "auto", level: 1, model: "gpt-5" },
@@ -59,6 +81,20 @@ test("swaps provider levels", () => {
   const swapped = swapProviderLevel(providers, "c", 2);
   assert.equal(swapped.find((provider) => provider.name === "b").level, 3);
   assert.equal(swapped.find((provider) => provider.name === "c").level, 2);
+});
+
+test("level zero excludes providers and occupied add levels move to the tail", () => {
+  const providers = normalizeProviders([
+    { name: "expensive", baseUrl: "https://zero.test", apiKey: "z", mode: "auto", level: 0, model: "gpt-5" },
+    { name: "a", baseUrl: "https://a.test", apiKey: "a", mode: "auto", level: 1, model: "gpt-5" },
+    { name: "b", baseUrl: "https://b.test", apiKey: "b", mode: "auto", level: 2, model: "gpt-5" },
+    { name: "new", baseUrl: "https://new.test", apiKey: "n", mode: "auto", level: 3, model: "gpt-5" }
+  ]);
+
+  const swapped = swapProviderLevel(providers, "new", 2);
+  assert.equal(swapped.find((provider) => provider.name === "new").level, 2);
+  assert.equal(swapped.find((provider) => provider.name === "b").level, 3);
+  assert.equal(swapped.find((provider) => provider.name === "expensive").level, 0);
 });
 
 test("filters compatible models", () => {
@@ -73,10 +109,18 @@ test("runner engine registry exposes built-in engines", () => {
   assert.deepEqual(listRunnerEngines().map((engine) => engine.name).sort(), ["claude", "codex"]);
   const claude = getRunnerEngine("claude");
   const codex = getRunnerEngine("codex");
+  const claudeProvider = { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" };
   assert.equal(claude.normalizeBaseUrl("https://api.test/v1"), "https://api.test");
+  const claudeEnv = claude.buildEnv(claudeProvider, "claude-opus-4-6", {
+    ANTHROPIC_AUTH_TOKEN: "inherited-oauth-token",
+    KEEP_ME: "yes"
+  });
+  assert.equal(claudeEnv.ANTHROPIC_AUTH_TOKEN, undefined);
+  assert.equal(claudeEnv.ANTHROPIC_API_KEY, "key");
+  assert.equal(claudeEnv.KEEP_ME, "yes");
   assert.equal(codex.normalizeBaseUrl("https://api.test"), "https://api.test/v1");
   assert.equal(claude.buildArgs({
-    provider: { name: "api", baseUrl: "https://api.test", apiKey: "key", mode: "auto", level: 1, model: "claude-opus-4-6" },
+    provider: claudeProvider,
     model: "claude-opus-4-6",
     uid: 0
   }).includes("--dangerously-skip-permissions"), false);
@@ -314,6 +358,46 @@ test("setup command initializes an empty runtime home non-interactively", async 
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
+test("proxy command normalizes split input and redacts command logs", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-proxy-test-"));
+  const runtimeHome = path.join(tempDir, "runtime-home");
+  const host = "127.0.0.1";
+  const server = net.createServer();
+  await new Promise((resolve) => server.listen(0, host, resolve));
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  const port = String(address.port);
+  const result = spawnSync(process.execPath, [
+    path.resolve("dist/cli/index.js"),
+    "proxy",
+    host,
+    port
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, AI_GATEWAY_HOME: runtimeHome }
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    JSON.parse(await fs.readFile(path.join(runtimeHome, "runtime.json"), "utf8")).proxyUrl,
+    `http://${host}:${port}`
+  );
+  assert.equal((await checkProxyEndpoint(`http://${host}:${port}`)).ok, true);
+  const logs = await fs.readFile(path.join(runtimeHome, ".ai-gateway.log"), "utf8");
+  assert.equal(logs.includes(host), false);
+  assert.match(logs, /proxy-redacted/);
+
+  await fs.writeFile(path.join(runtimeHome, "runtime.json"), JSON.stringify({ proxyUrl: "not a valid proxy path/value" }));
+  const clearResult = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "proxy", "--disable"], {
+    encoding: "utf8",
+    env: { ...process.env, AI_GATEWAY_HOME: runtimeHome }
+  });
+  assert.equal(clearResult.status, 0, clearResult.stderr);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "runtime.json"), "utf8")), {});
+  await new Promise((resolve) => server.close(resolve));
+  await fs.rm(tempDir, { recursive: true, force: true });
+});
+
 test("image command redacts its prompt from usage logs", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-image-log-test-"));
   const runtimeHome = path.join(tempDir, "runtime-home");
@@ -443,6 +527,125 @@ test("checkProvider retries transient model discovery failures", async () => {
   }
 });
 
+test("provider probe selects /v1 and bearer authentication with one model check", async () => {
+  const requests = [];
+  const server = await startTestServer((req, res) => {
+    requests.push({ url: req.url, authorization: req.headers.authorization });
+    if (req.url === "/v1/models" && req.headers.authorization === "Bearer key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "gpt-5.5" }] }));
+      return;
+    }
+    if (req.url === "/v1/responses" && req.headers.authorization === "Bearer key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+      return;
+    }
+    if (req.url === "/v1/chat/completions" && req.headers.authorization === "Bearer key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+
+  try {
+    const result = await probeProviderConfiguration({
+      name: "probe",
+      baseUrl: server.url,
+      apiKey: "key",
+      mode: "auto",
+      level: 1,
+      model: ""
+    });
+    assert.equal(result.status, "ok");
+    assert.equal(result.provider.baseUrl, `${server.url}/v1`);
+    assert.equal(result.provider.requestProfile?.discoveryAuth, "bearer");
+    assert.equal(result.provider.requestProfile?.openaiAuth, "bearer");
+    assert.deepEqual(result.models, ["gpt-5.5"]);
+    assert.ok(requests.some((request) => request.url === "/v1/models"));
+  } finally {
+    await server.close();
+  }
+});
+
+test("provider probe can select x-api-key without trying arbitrary headers", async () => {
+  const server = await startTestServer((req, res) => {
+    if (req.url === "/models" && req.headers["x-api-key"] === "key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "claude-opus-4-6" }] }));
+      return;
+    }
+    if (req.url === "/v1/messages" && req.headers["x-api-key"] === "key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+      return;
+    }
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "authentication required" }));
+  });
+
+  try {
+    const result = await probeProviderConfiguration({
+      name: "anthropic",
+      baseUrl: server.url,
+      apiKey: "key",
+      mode: "auto",
+      level: 1,
+      model: ""
+    });
+    assert.equal(result.status, "ok");
+    assert.equal(result.provider.requestProfile?.discoveryAuth, "x-api-key");
+    assert.equal(result.provider.requestProfile?.anthropicAuth, "x-api-key");
+  } finally {
+    await server.close();
+  }
+});
+
+test("provider probe verifies an explicit model when the model catalog is blocked", async () => {
+  const requests = [];
+  const server = await startTestServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    requests.push({ url: req.url, method: req.method, authorization: req.headers.authorization, body });
+    if (req.method === "GET" && (req.url === "/v1/models" || req.url === "/models")) {
+      res.writeHead(451, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "model catalog unavailable" }));
+      return;
+    }
+    if (req.method === "POST" && req.url === "/v1/responses" && req.headers.authorization === "Bearer key") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+
+  try {
+    const result = await probeProviderConfiguration({
+      name: "manual-catalog",
+      baseUrl: `${server.url}/v1`,
+      apiKey: "key",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.5"
+    });
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.provider.baseUrl, `${server.url}/v1`);
+    assert.equal(result.provider.requestProfile?.openaiAuth, "bearer");
+    assert.deepEqual(result.provider.requestProfile?.verifiedProtocols, ["openai"]);
+    assert.deepEqual(result.models, ["gpt-5.5"]);
+    assert.equal(requests.filter((request) => request.method === "POST").length, 1);
+    assert.equal(requests.some((request) => request.url === "/v1/chat/completions"), false);
+    assert.equal(JSON.parse(requests.find((request) => request.url === "/v1/responses").body).model, "gpt-5.5");
+  } finally {
+    await server.close();
+  }
+});
+
 test("estimates token cost from model pricing table", () => {
   const usage = { inputTokens: 1000, outputTokens: 500, totalTokens: 1500 };
   assert.equal(
@@ -523,6 +726,172 @@ test("OpenAI usage proxy forwards JSON response and records priced usage", async
     } finally {
       await proxy.close();
       await upstream.close();
+    }
+  });
+});
+
+test("usage proxy switches providers before effective output and rewrites the model", async () => {
+  await withTempHome(async () => {
+    const failovers = [];
+    const primary = await startTestServer(async (req, res) => {
+      await readRequestBody(req);
+      res.statusCode = 502;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: { message: "upstream unavailable" } }));
+    });
+    const backup = await startTestServer(async (req, res) => {
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      assert.equal(body.model, "gpt-backup");
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ model: body.model, usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 } }));
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "primary", baseUrl: primary.url, apiKey: "a", mode: "auto", level: 1, model: "gpt-primary" },
+      model: "gpt-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "gpt-backup" },
+        model: "gpt-backup"
+      }],
+      tool: "codex",
+      engine: "codex",
+      onFailover: (event) => failovers.push(event)
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-primary", input: "hello" })
+      });
+      assert.equal(response.status, 200);
+      assert.equal(JSON.parse(await response.text()).model, "gpt-backup");
+      assert.deepEqual(failovers.map((event) => event.type), ["automatic"]);
+      assert.equal(proxy.getRecords()[0].provider, "backup");
+    } finally {
+      await proxy.close();
+      await primary.close();
+      await backup.close();
+    }
+  });
+});
+
+test("usage proxy does not rotate providers for non-model GET probes", async () => {
+  await withTempHome(async () => {
+    const failovers = [];
+    const primary = await startTestServer(async (_req, res) => {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+    const backup = await startTestServer(async (_req, res) => {
+      res.statusCode = 200;
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "primary", baseUrl: primary.url, apiKey: "a", mode: "auto", level: 1, model: "claude-primary" },
+      model: "claude-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "claude-backup" },
+        model: "claude-backup"
+      }],
+      tool: "claude",
+      engine: "claude",
+      onFailover: (event) => failovers.push(event)
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/api/hello`);
+      assert.equal(response.status, 404);
+      assert.deepEqual(failovers, []);
+    } finally {
+      await proxy.close();
+      await primary.close();
+      await backup.close();
+    }
+  });
+});
+
+test("failover notices stay in-protocol and summarize after the CLI exits", () => {
+  const route = (name, model) => ({ provider: { name, baseUrl: "https://x.test", apiKey: "k", mode: "auto", level: 1, model }, model });
+  const pending = { type: "confirmation_required", from: route("a", "m1"), to: route("b", "m2"), reason: "stream_error" };
+
+  // 协议内提示按引擎选择各自的错误事件形状，交给原生 TUI 渲染。
+  const claudeNotice = buildFailoverSseNotice("claude", pending);
+  assert.match(claudeNotice, /^event: error\ndata: /);
+  assert.match(claudeNotice, /"type":"api_error"/);
+  assert.match(claudeNotice, /b\/m2/);
+  assert.match(buildFailoverSseNotice("codex", pending), /"code":"provider_failover_pending"/);
+
+  // 没有切换时不打印任何汇总，避免正常执行也多出噪声行。
+  assert.equal(formatFailoverSummary([]), null);
+
+  const summary = formatFailoverSummary([
+    { type: "automatic", from: route("a", "m1"), to: route("b", "m2"), reason: "http_429" },
+    pending
+  ]);
+  // confirmation_required 未真正切换，不计入已切换次数。
+  assert.match(summary, /发生 1 次 provider 切换/);
+  assert.match(summary, /1\. a\/m1 在产生有效输出前失败（http_429）/);
+  assert.match(summary, /2\. a\/m1 已输出部分内容后中断/);
+  assert.match(summary, /ai log --print --trace/);
+});
+
+test("usage proxy requires a new request before switching after partial output", async () => {
+  await withTempHome(async () => {
+    const failovers = [];
+    let primaryRequests = 0;
+    let backupRequests = 0;
+    const primary = await startTestServer(async (req, res) => {
+      primaryRequests += 1;
+      await readRequestBody(req);
+      res.setHeader("content-type", "text/event-stream");
+      res.write('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}\n\n');
+      setImmediate(() => res.destroy(new Error("stream interrupted")));
+    });
+    const backup = await startTestServer(async (req, res) => {
+      backupRequests += 1;
+      const body = JSON.parse((await readRequestBody(req)).toString("utf8"));
+      assert.equal(body.model, "claude-backup");
+      res.setHeader("content-type", "text/event-stream");
+      res.end('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"recovered"}}\n\n');
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "primary", baseUrl: primary.url, apiKey: "a", mode: "auto", level: 1, model: "claude-primary" },
+      model: "claude-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "claude-backup" },
+        model: "claude-backup"
+      }],
+      tool: "claude",
+      engine: "claude",
+      onFailover: (event) => failovers.push(event)
+    });
+
+    try {
+      const request = () => fetch(`${proxy.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-primary", messages: [], stream: true })
+      });
+      const first = await request();
+      const firstText = await first.text();
+      assert.match(firstText, /partial/);
+      // 提示必须走协议内，让原生 TUI 自己排版，而不是父进程往终端插字节。
+      assert.match(firstText, /event: error/);
+      assert.match(firstText, /\[AxiomRuntime\][^\n]*claude-backup/);
+      assert.match(firstText, /"type":"api_error"/);
+      assert.equal(primaryRequests, 1);
+      assert.equal(backupRequests, 0);
+      assert.deepEqual(failovers.map((event) => event.type), ["confirmation_required"]);
+
+      const second = await request();
+      assert.match(await second.text(), /recovered/);
+      assert.equal(primaryRequests, 1);
+      assert.equal(backupRequests, 1);
+      assert.deepEqual(failovers.map((event) => event.type), ["confirmation_required", "confirmed"]);
+    } finally {
+      await proxy.close();
+      await primary.close();
+      await backup.close();
     }
   });
 });
@@ -1329,7 +1698,7 @@ test("writeTemporaryClaudeSettings injects bypass permissions in auto mode", asy
     await fs.mkdir(path.join(tempHome, ".claude"), { recursive: true });
     await fs.writeFile(
       path.join(tempHome, ".claude", "settings.json"),
-      `${JSON.stringify({ env: { SOME_VAR: "keep-me" } }, null, 2)}\n`,
+      `${JSON.stringify({ env: { SOME_VAR: "keep-me", ANTHROPIC_AUTH_TOKEN: "inherited-oauth-token" } }, null, 2)}\n`,
       { mode: 0o600 }
     );
 
@@ -1347,6 +1716,7 @@ test("writeTemporaryClaudeSettings injects bypass permissions in auto mode", asy
 
     assert.equal(written.env.ANTHROPIC_API_KEY, "sk-test");
     assert.equal(written.env.ANTHROPIC_BASE_URL, "https://api.kunkunout.cn");
+    assert.equal(written.env.ANTHROPIC_AUTH_TOKEN, "");
     assert.equal(written.env.SOME_VAR, "keep-me");
     assert.equal(written.permissions.defaultMode, "bypassPermissions");
     assert.ok(written.permissions.allow.includes("Bash"));
@@ -1516,6 +1886,73 @@ test("CLI provider fallback tries next candidate after non-zero exit", async () 
       { provider: "bad", fallbackFrom: null },
       { provider: "good", fallbackFrom: "bad" }
     ]);
+  });
+});
+
+test("CLI provider fallback shares one traceId across every hop of the call chain", async () => {
+  await withTempHome(async () => {
+    const candidates = [
+      {
+        provider: { name: "bad", baseUrl: "https://bad.test/v1", apiKey: "bad", mode: "auto", level: 1, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      },
+      {
+        provider: { name: "good", baseUrl: "https://good.test/v1", apiKey: "good", mode: "auto", level: 2, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      }
+    ];
+
+    const traceId = newTraceId();
+    const code = await runResolvedProviderCandidates("codex", candidates, {
+      traceId,
+      runner: async (candidate) => candidate.provider.name === "bad" ? 42 : 0
+    });
+    assert.equal(code, 0);
+
+    const logs = await readRecentLogs(200);
+    const chain = logs.filter((event) => event.traceId === traceId);
+    // 两跳各一条 tool_start，加上一次切换和一次终止跳。
+    assert.deepEqual(chain.map((event) => event.action), [
+      "tool_start",
+      "runtime_fallback_retry",
+      "fallback_applied",
+      "tool_start",
+      "tool_run_settled"
+    ]);
+
+    const retry = chain.find((event) => event.action === "runtime_fallback_retry");
+    assert.equal(retry.metadata.from, "bad");
+    assert.equal(retry.metadata.to, "good");
+
+    const settled = chain.at(-1);
+    assert.equal(settled.metadata.provider, "good");
+    assert.equal(settled.metadata.attempt, 2);
+    assert.equal(settled.metadata.fellBack, true);
+  });
+});
+
+test("CLI provider fallback records an exhausted hop when every candidate fails", async () => {
+  await withTempHome(async () => {
+    const candidates = [
+      {
+        provider: { name: "bad", baseUrl: "https://bad.test/v1", apiKey: "bad", mode: "auto", level: 1, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      },
+      {
+        provider: { name: "worse", baseUrl: "https://worse.test/v1", apiKey: "worse", mode: "auto", level: 2, model: "gpt-5.5" },
+        model: "gpt-5.5"
+      }
+    ];
+
+    const traceId = newTraceId();
+    await runResolvedProviderCandidates("codex", candidates, { traceId, runner: async () => 42 });
+
+    const chain = (await readRecentLogs(200)).filter((event) => event.traceId === traceId);
+    const exhausted = chain.find((event) => event.action === "tool_candidates_exhausted");
+    assert.ok(exhausted, "expected a terminal exhausted hop");
+    assert.equal(exhausted.level, "error");
+    assert.deepEqual(exhausted.metadata.attempted, ["bad", "worse"]);
+    assert.equal(exhausted.metadata.totalCandidates, 2);
   });
 });
 

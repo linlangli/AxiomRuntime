@@ -71,6 +71,7 @@ src/
 │   ├── logs/               结构化日志
 │   ├── memory/             embedding 配置（仅配置，非检索）
 │   ├── models/             模型发现与兼容性过滤
+│   ├── network/            出站代理规范化与进程网络策略
 │   ├── providers/          Provider 健康检查与刷新
 │   ├── reports/            会话报告
 │   ├── runner/             执行引擎 + 用量代理（详见 §5）
@@ -197,14 +198,34 @@ flowchart TB
 flowchart LR
   Select["用户选择<br/>ai use claude 站点 模型"] --> Resolve["resolveProviderForTool()<br/>fallback.ts"]
   Resolve --> Candidates["resolveProviderCandidatesForTool()<br/>候选 provider 列表"]
-  Candidates --> Run["runResolvedProviderCandidates()<br/>逐个尝试"]
+  Candidates --> Run["runTool()<br/>一次启动"]
   Run --> Spawn["child_process.spawn<br/>claude / codex"]
-  Run -.->|"子进程非 0 退出"| Candidates
   Spawn --> Proxy["execution-scoped<br/>本地用量代理"]
-  Proxy --> Upstream["Provider 上游"]
+  Proxy --> Primary["首选 Provider"]
+  Primary -.->|"有效输出前失败"| Backup["下一 level Provider"]
+  Primary -.->|"已有有效输出"| Confirm["提示重新提交/重试确认"]
+  Confirm --> Backup
 ```
 
-候选排序规则在 `src/core/runner/fallback.ts`：**健康状态 → 引擎兼容性 → level 优先级 + 显式覆盖**。
+候选排序规则在 `src/core/runner/fallback.ts`：**健康状态 → 引擎兼容性 → level 优先级 + 显式覆盖**。正整数 `level` 组成自动候选链；`level: 0` 可重复存在，只在显式指定时返回，而且不追加其他候选。新增 Provider 的正整数等级范围为 `1..activeCount+1`；占用已有等级时，新 Provider 与队尾位置交换，原 Provider 移到队尾。
+
+CLI `ai use` 的 fallback 由唯一 Transport Proxy 在请求级完成，不重启原生 CLI。每个候选携带自己的 `Provider`、`model`、认证 profile 和规范化 Base URL；切换时必须改写 JSON 请求中的 `model`，用实际候选凭证构造上游 header，并把 usage 归属到实际成功的 Provider。连接错误以及 `401`、`403`、`404`、`408`、`409`、`425`、`429`、`5xx` 可在尚未产生有效输出时安全重试；`400`、`413`、`422` 不跨 Provider 重试。
+
+Streaming 响应在首个文字、推理或工具参数增量前由代理暂存协议前导事件；此前中断可丢弃并无感切换。首个有效增量写给客户端后即越过不可自动重放边界：中断时只记录待切换候选并显示提示，不重放请求；当前 CLI 发起下一次请求视为用户通过“重新提交/重试”确认，随后激活候选 Provider。父进程禁止与原生 TUI 争抢 stdin 弹出并行 `y/n` 提示。
+
+### Provider 配置探测 🟢
+
+`core/providers` 拥有 Provider 配置探测与持久化事务。CLI、Telegram 和后续 Surface 只能调用同一个 core API，不得各自拼接 `/v1`、猜测认证 header 或在探测失败后写入半成品配置。
+
+探测分为两层：先以不消耗 token 的 `GET /models` 在“原始 Base URL / 切换末尾 `/v1`”与受限认证配置（`Bearer`、`x-api-key`、`api-key`）之间按最小变更顺序寻找可用组合；发现非空模型列表后，针对列表中实际存在的 OpenAI/Anthropic 模型族各选择一个代表模型，以 `max_tokens` / `max_output_tokens = 1` 做真实协议验证。若模型目录不可用，只有调用方明确提供 `provider.model` 时才允许进入手工模型回退：按模型族直接验证 Responses 或 Messages 协议，成功后只缓存该模型；禁止自动猜测模型名或跳过真实验证。确定性的 `4xx` 不重试，只有超时、`429` 和 `5xx` 使用有界短重试；找到更低变更成本的可用配置后立即停止，不做任意 header 名和值的暴力枚举。
+
+成功结果写入可序列化的 `ProviderRequestProfile`，记录模型发现、OpenAI 和 Anthropic 各自采用的认证方式。API Key 始终单独保存，profile 只保存 header 策略枚举，禁止复制 secret。Transport Proxy、模型发现和模型探测共同消费该 profile；旧 Provider 缺少 profile 时使用向后兼容默认值。新增或修改 `baseUrl` / `apiKey` 时必须先完成探测，再分别以原子文件写入 Provider 与缓存；探测失败时原配置、模型缓存和集成 revision 均保持不变。
+
+`ai status` 的“可用”语义是实时协议验证，不是模型名称推断。每个 Provider 先执行零 Token 模型发现，再从每个实际存在的工具模型族中确定性选择一个代表模型；Claude 与 Codex 各最多选择一个模型做 1-token 调用，Codex 必须优先验证 Responses API，只有明确不支持时才回退 Chat Completions。产生 Token 的请求不自动重试，并将 `toolChecks` 独立写入健康缓存。完整模型目录继续保留，不因只验证代表模型而被裁剪。对于具备 `verifiedProtocols` 且已有缓存模型的 Provider，模型目录失败时必须使用已验证缓存模型完成实时协议检查；实时检查成功可覆盖目录失败结论，普通模型刷新也不得因此破坏原健康状态。某工具没有兼容模型时记为 `not_applicable`；收到明确失败响应才记为 `error`。代表模型调用最多等待 30 秒，超时属于不确定结果：工具和 Provider 记为 `unknown`，保留运行候选资格，因为上游可能已经完成请求但响应晚于本地中止。
+
+`ai check [provider]` 是同一 core 状态能力的单 Provider 适配器：CLI 只负责显式名称解析或交互选择，`core/status` 负责精确查找并调用 `refreshProvider(..., { verifyRepresentativeModels: true })`。它不得退化为先刷新全部 Provider 再过滤结果，否则会引入不必要的等待和 Token 消耗。
+
+`ai models [provider]` 是模型目录发现适配器，只允许通过 `checkProvider` 发起 `GET /models`，不得调用任何模型推理端点。成功后只替换目标 Provider 的 `models` 缓存，必须保留 `status`、`lastError`、`toolChecks`、熔断状态和健康分数；模型发现失败时不得清空旧目录或改变真实可用性结论。
 
 ### Telegram 执行流程
 
@@ -233,11 +254,17 @@ flowchart TD
 | `engine-registry.ts` | Claude/Codex 策略注册 | ③ Capabilities |
 | `claude-permission-policy.ts` | UID 0 下约束 `bypassPermissions` 为 `default` | ⑨ Security |
 | `tool-runner.ts` | 运行环境 + 密钥注入 + 临时文件 | ④ Kernel |
-| `fallback.ts` | 候选排序与逐个执行 | ③ + ④ |
+| `fallback.ts` | 候选排序、`level: 0` 排除、显式覆盖与 Claude/Codex 模型族隔离 | ③ + ④ |
 | `openai-usage-*.ts`（7 个） | 本地 HTTP 代理、协议翻译、用量记录 | ⑤ Transport |
 | `images/image-generation-service.ts` | 图片模型解析、请求、响应校验和安全落盘 | ③ Capability + ⑤ Transport |
 
-`openai-usage-*` 这一组是当前的用量代理实现，**目标态按职责剥离到 ⑤ Transport Proxy**，拆成 `transport-core` / `TransformCoordinator` / `UsageObserver` / `MemoryExtension` + 兼容 facade。`startOpenAiUsageProxy()` 作为兼容 facade 保留，行为由 parity 测试锁定。
+`openai-usage-*` 这一组是当前的请求级路由与用量代理实现，**目标态按职责剥离到 ⑤ Transport Proxy**，拆成 `transport-core` / `TransformCoordinator` / `UsageObserver` / `MemoryExtension` + 兼容 facade。`startOpenAiUsageProxy()` 作为兼容 facade 保留，行为由 parity 测试锁定。
+
+请求级 failover 只适用于带请求体的模型 `POST`。Claude Code/Codex 启动或能力探测产生的无请求体 `GET` 必须原样返回当前 Provider 的响应，不能把探测端点的 `404` 解释为模型失败并轮转整条 Provider 链。
+
+`resolveProviderCandidatesForTool()` 必须先按当前 CLI 的模型族过滤候选：Claude Code 只能得到 Claude 模型，Codex 只能得到 Codex/OpenAI 兼容模型。Provider 默认模型不兼容时，可从已发现目录选择同族模型；目录为空且默认模型不兼容时不得乐观加入候选链。显式指定的 Provider 即使健康缓存为 `error` 也必须先实际尝试一次；请求级自动切换只在过滤后的候选链内发生。
+
+Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`engine-registry` 构造子进程环境时必须移除继承的 `ANTHROPIC_AUTH_TOKEN`；由于 Claude 的 `--settings` 是附加配置，`tool-runner` 还必须在临时 settings 中用空值显式遮蔽用户 settings 里的同名变量，避免 OAuth token 与 Provider key 同时存在。该隔离仅限 execution scope，不得修改用户 shell 或 `~/.claude/settings.json`。
 
 ### 统一用量采集 🟢
 
@@ -267,6 +294,7 @@ flowchart TD
 | 决策 | 方案 | 理由 |
 |---|---|---|
 | 配置存储 | JSON (`~/.ai-gateway/`) + `proper-lockfile` | 可手编 + 文件锁/原子重命名防 CLI/Telegram 并发覆盖 |
+| Runtime 出站代理 | `core/network` 统一规范化，`runtime.json` 持久化 | CLI/Provider 探测与子进程共享语义，Surface 不重复拼 URL |
 | Telegram 会话 | SQLite (`better-sqlite3`) | 需要查询、索引和并发安全 |
 | 工具执行 | `child_process.spawn` | 完整 TTY 继承（CLI）或 JSON stream 捕获（headless） |
 | 用量追踪 | execution-scoped 本地 HTTP 代理 | 透明拦截，不改原生 TUI / JSON stream 交互 |
@@ -274,6 +302,8 @@ flowchart TD
 | Bot Memory | 中央 SQLite + scope 逻辑隔离 | 用户画像跨 bot 共享，Bot 人设仅当前 bot |
 | **目标传输代理** | Usage Proxy **原位演进**为单一 Transport Proxy；UsageObserver 与 MemoryExtension 共用 listener | 保留 usage/compat 能力，避免双代理、环境变量回环、重复解析 |
 | **成熟能力复用** | 自研 Runtime/Evidence/Policy/Capability 控制面；抽取/检索/向量/图/队列/策略求值走可替换 adapter | 保留产品差异化，避免重建通用问题 |
+
+🟢 `ai proxy` 的控制面配置保存在 `runtime.json`。`core/network` 负责把分离的 host/port、裸 `host:port` 或完整 URL 规范成同一 HTTP(S) origin，并在提交前用零 Token TCP 检查验证代理端点；失败不得覆盖旧配置。配置应用于 Runtime 的全局出站 dispatcher。CLI 子进程继承大小写 HTTP(S)/ALL proxy 变量，同时强制保留本地回环地址于 `NO_PROXY`，因此 execution-scoped Transport Proxy 仍是每次执行唯一的数据面入口。Telegram 可拥有独立 `proxyUrl`，复用同一规范化与端点检查，并额外通过候选代理调用 `getMe` 完成端到端验证；Surface 负责显示当前状态、采集编辑/关闭决策与渲染检查结果。
 
 ### 自研 vs 复用的边界
 
@@ -624,6 +654,18 @@ payload **绝不**含：prompt、Memory 或 Skill 正文、Skill step 文本、�
 **trace、execution、principal、project、Memory、Skill 和 invocation id 不能作为 metric label**（高基数）。
 
 Cost 视图在**查询时**关联 UsageObserver 拥有的读模型；telemetry **永不**成为第二份用量账本。
+
+### 当前已落地的关联键 🟢
+
+`CapabilityObservation` 与 OpenTelemetry 导出仍未实现，但结构化日志已有跨 surface 的关联键：`LogEvent.traceId`（`src/core/types.ts`）。
+
+- 一次 HTTP 请求、一条 Telegram 消息、一次 `ai use` 在入口生成一个 traceId（`newTraceId()`，`src/core/logs/log-service.ts`），该次执行的候选解析、每次 provider 切换和终止跳全部复用它
+- 常驻服务直接把自身 `requestId` 当作 traceId，因此 `x-request-id` 响应头可反查整条链路
+- `resolveProviderCandidatesForTool(tool, provider, model, traceId)` 接受可选 traceId，让熔断 / 健康 / 无兼容模型这些**前置跳过**也进入同一条链路
+- 每条链路以终止跳收尾：`runtime_server_request_settled` / `tool_run_settled` / `runtime_provider_settled`（成功，带 `fellBack`、`attempt`、`totalCandidates`），或 `*_candidates_exhausted`（全败，带 `attempted`）
+- 读取入口：`ai log --print --trace <traceId>`
+
+traceId 是**诊断关联键，不是审计事实**：历史日志没有该字段，读取方必须容忍缺失；它同样受本节「缺失的 observation 使 trace 标记为 `partial`」约束，不证明某个操作没有发生。
 
 ---
 

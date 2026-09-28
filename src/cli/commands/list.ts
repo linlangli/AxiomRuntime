@@ -1,5 +1,6 @@
 import { listProviders } from "../../core/providers/provider-service.js";
 import { maskSecret } from "../output/table.js";
+import { describeProviderRequestProfile } from "../../core/providers/provider-request-profile.js";
 
 export async function runListCommand(): Promise<void> {
   const providers = await listProviders();
@@ -22,6 +23,7 @@ export async function runListCommand(): Promise<void> {
     console.log(`  API Key   ${maskSecret(provider.apiKey)}`);
     console.log(`  Mode      ${provider.mode}`);
     console.log(`  Model     ${provider.model || "(none)"}`);
+    console.log(`  Probe     ${describeProviderRequestProfile(provider)}`);
 
     if (index < providers.length - 1) {
       console.log("");

@@ -7,6 +7,7 @@ export type TelegramLogInput = {
   level?: "info" | "warn" | "error";
   action: string;
   message: string;
+  traceId?: string;
   metadata?: Record<string, unknown>;
 };
 
@@ -16,6 +17,7 @@ export async function writeTelegramLog(input: TelegramLogInput): Promise<void> {
     level: input.level ?? "info",
     action: input.action,
     message: input.message,
+    ...(input.traceId ? { traceId: input.traceId } : {}),
     metadata: input.metadata
   };
 
@@ -24,6 +26,7 @@ export async function writeTelegramLog(input: TelegramLogInput): Promise<void> {
     category: "telegram",
     action: line.action,
     message: line.message,
+    ...(input.traceId ? { traceId: input.traceId } : {}),
     metadata: line.metadata
   });
 

@@ -4,6 +4,15 @@ export type RunToolType = CliToolType | "provider" | "telegram" | "image";
 
 export type ProviderMode = "ask" | "auto";
 
+export type ProviderAuthScheme = "bearer" | "x-api-key" | "api-key";
+
+export type ProviderRequestProfile = {
+  discoveryAuth: ProviderAuthScheme;
+  openaiAuth: ProviderAuthScheme;
+  anthropicAuth: ProviderAuthScheme;
+  verifiedProtocols: Array<"openai" | "anthropic">;
+};
+
 export type HealthStatus = "ok" | "error" | "unknown";
 
 export type Provider = {
@@ -13,6 +22,7 @@ export type Provider = {
   mode: ProviderMode;
   level: number;
   model: string;
+  requestProfile?: ProviderRequestProfile;
 };
 
 export type ProviderCache = {
@@ -24,6 +34,16 @@ export type ProviderCache = {
   lastFailureAt?: string | null;
   circuitOpenUntil?: string | null;
   healthScore?: number;
+  toolChecks?: Partial<Record<CliToolType, ProviderToolCheck>>;
+};
+
+export type ProviderToolCheck = {
+  status: "ok" | "error" | "unknown" | "not_applicable";
+  model: string | null;
+  checkedAt: string;
+  error: string | null;
+  attempts: number;
+  durationMs: number;
 };
 
 export type CacheFile = {
@@ -105,10 +125,13 @@ export type ProviderStatus = Provider & {
 };
 
 export type ToolProviderStatus = {
-  state: "ready" | "no-model" | "provider-error";
+  state: "ready" | "no-model" | "provider-error" | "unknown" | "unverified";
   baseUrl: string;
   model: string | null;
   note: string;
+  checkedAt: string | null;
+  attempts: number;
+  durationMs: number;
 };
 
 export type ConnectivityResult = {
@@ -139,5 +162,10 @@ export type LogEvent = {
   category: LogCategory;
   action: string;
   message: string;
+  /**
+   * 同一次请求/任务内所有日志共享的关联 id，供调用链路视图按链路聚合多跳事件。
+   * 历史日志没有该字段，读取方必须容忍缺失。
+   */
+  traceId?: string;
   metadata?: Record<string, unknown>;
 };

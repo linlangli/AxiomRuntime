@@ -6,9 +6,9 @@ import path from "node:path";
 import test from "node:test";
 import {
   parseTelegramTargetArgs,
-  runTelegramCommand,
-  TELEGRAM_PROXY_URL_PROMPT
+  runTelegramCommand
 } from "../dist/cli/commands/telegram.js";
+import { PROXY_HOST_PROMPT, PROXY_PORT_PROMPT, promptProxyUrl } from "../dist/cli/prompts/proxy.js";
 import {
   loadBotConfig,
   loadTelegramConfig,
@@ -83,9 +83,38 @@ import { parseModelPriceInput } from "../dist/telegram/handlers/usage.js";
 import { SessionManager } from "../dist/telegram/session/manager.js";
 import { SessionStore } from "../dist/telegram/session/store.js";
 
-test("telegram proxy prompt shows a complete URL example", () => {
-  assert.match(TELEGRAM_PROXY_URL_PROMPT, /include protocol/i);
-  assert.match(TELEGRAM_PROXY_URL_PROMPT, /http:\/\/127\.0\.0\.1:7890/);
+test("proxy prompt collects host and port separately", async () => {
+  const prompts = [];
+  const answers = ["127.0.0.1", "8081"];
+  const proxyUrl = await promptProxyUrl({
+    text: async (message, options) => {
+      prompts.push({ message, defaultValue: options?.defaultValue });
+      return answers.shift() ?? "";
+    }
+  });
+  assert.deepEqual(prompts, [
+    { message: PROXY_HOST_PROMPT, defaultValue: undefined },
+    { message: PROXY_PORT_PROMPT, defaultValue: undefined }
+  ]);
+  assert.equal(proxyUrl, "http://127.0.0.1:8081");
+
+  const currentProxy = await promptProxyUrl({
+    currentUrl: "http://127.0.0.1:8081",
+    select: async () => "edit",
+    text: async () => "",
+    write: () => {}
+  });
+  assert.equal(currentProxy, "http://127.0.0.1:8081");
+
+  const clearedProxy = await promptProxyUrl({
+    currentUrl: "http://127.0.0.1:8081",
+    select: async () => "disable",
+    text: async () => {
+      throw new Error("disable should not prompt for an address");
+    },
+    write: () => {}
+  });
+  assert.equal(clearedProxy, null);
 });
 
 test("normalizes telegram config and parses config values", async () => {
@@ -98,7 +127,7 @@ test("normalizes telegram config and parses config values", async () => {
       defaultPermissionMode: "full-auto",
       sessionTimeoutHours: "12",
       maxOutputLength: "3000",
-      proxyUrl: " http://127.0.0.1:7890 "
+      proxyUrl: " 127.0.0.1:7890 "
     });
 
     assert.equal(config.token, "123:abc");
@@ -110,6 +139,7 @@ test("normalizes telegram config and parses config values", async () => {
     assert.equal(config.maxOutputLength, 3000);
     assert.equal(config.proxyUrl, "http://127.0.0.1:7890");
     assert.deepEqual(parseTelegramConfigValue("allowedUserIds", "10, 11 12"), [10, 11, 12]);
+    assert.equal(parseTelegramConfigValue("proxyUrl", "127.0.0.1:8081"), "http://127.0.0.1:8081");
     assert.equal(normalizePermissionMode("auto-edit"), "acceptEdits");
     assert.equal(normalizeTelegramConfig({}).defaultPermissionMode, "bypassPermissions");
 
@@ -276,6 +306,19 @@ test("telegram CLI redacts a targeted bot token from command logs and output", a
     assert.equal(result.stdout.includes(token), false);
     assert.equal(result.stderr.includes(token), false);
     assert.equal((await loadBotConfig("ops")).token, token);
+
+    const proxyAddress = "127.0.0.1:1";
+    const proxyResult = spawnSync(process.execPath, [
+      path.join(process.cwd(), "dist", "cli", "index.js"),
+      "telegram", "config", "set", "proxyUrl", proxyAddress, "--bot", "ops"
+    ], {
+      encoding: "utf8",
+      env: { ...process.env, AI_GATEWAY_HOME: tempDir }
+    });
+    assert.equal(proxyResult.status, 1);
+    const updatedLog = await fs.readFile(path.join(tempDir, ".ai-gateway.log"), "utf8");
+    assert.equal(updatedLog.includes(proxyAddress), false);
+    assert.equal((await loadBotConfig("ops")).proxyUrl, undefined);
   });
 });
 
@@ -1408,6 +1451,8 @@ test("telegram provider flow adds, edits, and deletes through provider service",
   await handleProviderAdminInput(ctx, "https://new.example.com/v1", service);
   assert.equal(isProviderSecretInput(702), true);
   await handleProviderAdminInput(ctx, "new-secret-key", service);
+  const addLevelCallback = findInlineButton(events.at(-1).extra, "1（最低）").callback_data;
+  await handleProviderAdminCallback(ctx, addLevelCallback, service);
 
   assert.equal(state.deletedMessages, 1);
   assert.equal(isProviderSecretInput(702), false);
@@ -1461,6 +1506,8 @@ test("telegram provider errors redact the submitted API key", async () => {
   await handleProviderAdminInput(ctx, "failing-provider", service);
   await handleProviderAdminInput(ctx, "https://failure.example/v1", service);
   await handleProviderAdminInput(ctx, "must-not-leak", service);
+  const addLevelCallback = findInlineButton(events.at(-1).extra, "1（最低）").callback_data;
+  await handleProviderAdminCallback(ctx, addLevelCallback, service);
 
   assert.equal(JSON.stringify(events).includes("must-not-leak"), false);
   assert.match(events.at(-1).text, /\[REDACTED\]/);
@@ -2802,7 +2849,7 @@ function createFakeProviderAdminService(initialProviders) {
       const provider = {
         ...input,
         mode: input.mode ?? "auto",
-        level: state.providers.length + 1,
+        level: input.level ?? state.providers.length + 1,
         model: input.model ?? "detected-model"
       };
       state.providers.push(provider);

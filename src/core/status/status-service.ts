@@ -1,17 +1,36 @@
 import { readCache } from "../config/cache-store.js";
 import { readProviders } from "../config/providers-store.js";
 import { isModelCompatible, pickCompatibleModel } from "../models/model-filter.js";
-import { refreshAllProviders } from "../providers/provider-service.js";
+import { refreshAllProviders, refreshProvider } from "../providers/provider-service.js";
 import { getToolBaseUrl } from "../runner/tool-runner.js";
 import { getUsageShare, getWeeklyTokenMap } from "../usage/usage-service.js";
-import type { CliToolType, HealthStatus, Provider, ProviderStatus, ToolProviderStatus } from "../types.js";
+import type { CliToolType, HealthStatus, Provider, ProviderStatus, ProviderToolCheck, ToolProviderStatus } from "../types.js";
 
 export async function getProviderStatuses(options: { refresh?: boolean } = {}): Promise<ProviderStatus[]> {
   if (options.refresh) {
-    await refreshAllProviders();
+    await refreshAllProviders({ verifyRepresentativeModels: true });
   }
 
-  const [providers, cache, weeklyTokens] = await Promise.all([readProviders(), readCache(), getWeeklyTokenMap()]);
+  return buildProviderStatuses(await readProviders());
+}
+
+export async function getProviderStatus(
+  providerName: string,
+  options: { refresh?: boolean } = {}
+): Promise<ProviderStatus> {
+  const providers = await readProviders();
+  const provider = providers.find((candidate) => candidate.name === providerName.trim());
+  if (!provider) {
+    throw new Error(`Provider not found: ${providerName}`);
+  }
+  if (options.refresh) {
+    await refreshProvider(provider, { verifyRepresentativeModels: true });
+  }
+  return (await buildProviderStatuses([provider]))[0]!;
+}
+
+async function buildProviderStatuses(providers: Provider[]): Promise<ProviderStatus[]> {
+  const [cache, weeklyTokens] = await Promise.all([readCache(), getWeeklyTokenMap()]);
   const allTokens = [...weeklyTokens.values()].reduce((sum, value) => sum + value, 0);
 
   return providers.map((provider) => {
@@ -25,8 +44,22 @@ export async function getProviderStatuses(options: { refresh?: boolean } = {}): 
       lastError: cached?.lastError ?? null,
       weeklyTokens: tokens,
       usageShare: getUsageShare(tokens, allTokens),
-      claude: buildToolStatus("claude", provider, cached?.status ?? "unknown", cached?.models ?? []),
-      codex: buildToolStatus("codex", provider, cached?.status ?? "unknown", cached?.models ?? [])
+      claude: buildToolStatus(
+        "claude",
+        provider,
+        cached?.status ?? "unknown",
+        cached?.models ?? [],
+        cached?.toolChecks?.claude,
+        cached?.lastError ?? null
+      ),
+      codex: buildToolStatus(
+        "codex",
+        provider,
+        cached?.status ?? "unknown",
+        cached?.models ?? [],
+        cached?.toolChecks?.codex,
+        cached?.lastError ?? null
+      )
     };
   });
 }
@@ -35,33 +68,92 @@ function buildToolStatus(
   tool: CliToolType,
   provider: Provider,
   health: HealthStatus,
-  models: string[]
+  models: string[],
+  check: ProviderToolCheck | undefined,
+  providerError: string | null
 ): ToolProviderStatus {
   const baseUrl = getToolBaseUrl(tool, provider);
-  if (health === "error") {
+  const model = resolveToolModel(tool, provider.model, models);
+  if (health === "error" && !check) {
     return {
       state: "provider-error",
       baseUrl,
-      model: null,
-      note: "provider health error"
+      model,
+      note: providerError ?? "provider health error",
+      checkedAt: null,
+      attempts: 0,
+      durationMs: 0
     };
   }
 
-  const model = resolveToolModel(tool, provider.model, models);
   if (!model) {
     return {
       state: "no-model",
       baseUrl,
       model: null,
-      note: "no compatible cached model"
+      note: "no compatible model discovered; no token probe sent",
+      checkedAt: check?.checkedAt ?? null,
+      attempts: 0,
+      durationMs: 0
+    };
+  }
+
+  if (check?.status === "error") {
+    return {
+      state: "provider-error",
+      baseUrl,
+      model: check?.model ?? model,
+      note: check?.error ?? providerError ?? "live protocol check failed",
+      checkedAt: check?.checkedAt ?? null,
+      attempts: check?.attempts ?? 0,
+      durationMs: check?.durationMs ?? 0
+    };
+  }
+
+  if (check?.status === "unknown") {
+    return {
+      state: "unknown",
+      baseUrl,
+      model: check.model ?? model,
+      note: check.error ?? providerError ?? "live protocol check was inconclusive",
+      checkedAt: check.checkedAt,
+      attempts: check.attempts,
+      durationMs: check.durationMs
+    };
+  }
+
+  if (!check) {
+    return {
+      state: "unverified",
+      baseUrl,
+      model,
+      note: "model discovered but no live protocol check is cached",
+      checkedAt: null,
+      attempts: 0,
+      durationMs: 0
+    };
+  }
+
+  if (check.status === "not_applicable") {
+    return {
+      state: "no-model",
+      baseUrl,
+      model: null,
+      note: "no compatible model discovered; no token probe sent",
+      checkedAt: check.checkedAt,
+      attempts: check.attempts,
+      durationMs: check.durationMs
     };
   }
 
   return {
     state: "ready",
     baseUrl,
-    model,
-    note: models.includes(model) ? "model listed" : "default model not verified"
+    model: check.model ?? model,
+    note: "live 1-token protocol check passed",
+    checkedAt: check.checkedAt,
+    attempts: check.attempts,
+    durationMs: check.durationMs
   };
 }
 

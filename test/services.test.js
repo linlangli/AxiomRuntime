@@ -3,10 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { addProvider, deleteProvider, updateProvider } from "../dist/core/providers/provider-service.js";
+import { addProvider, deleteProvider, getProviderPriorityOptions, refreshAllProviders, updateProvider } from "../dist/core/providers/provider-service.js";
 import { readCache, recordProviderRuntimeFailure, upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
-import { getProviderStatuses } from "../dist/core/status/status-service.js";
+import { getProviderStatus, getProviderStatuses } from "../dist/core/status/status-service.js";
+import { runCheckCommand } from "../dist/cli/commands/check.js";
+import { runModelsCommand } from "../dist/cli/commands/models.js";
+import { runAddCommand } from "../dist/cli/commands/add.js";
+import { buildProviderLevelChoices } from "../dist/cli/commands/edit.js";
+import { runProxyCommand } from "../dist/cli/commands/proxy.js";
+import { loadRuntimeConfig } from "../dist/core/config/runtime-config.js";
+import { configureGlobalProxy } from "../dist/core/network/proxy.js";
 import { getExecutionUserDoctorItem, runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveExactProviderForTool, resolveProviderForTool, resolveProviderCandidatesForTool } from "../dist/core/runner/fallback.js";
 import { checkAndRecordMemoryEmbeddingConfig } from "../dist/core/memory/embedding-check.js";
@@ -93,6 +100,26 @@ test("Codex provider config does not duplicate an existing v1 path", () => {
 
   assert.match(updated, /base_url = "https:\/\/cq\.example\.com\/v1"/);
   assert.doesNotMatch(updated, /\/v1\/v1/);
+});
+
+test("Codex persistent config rejects a non-Bearer probed profile", () => {
+  assert.throws(
+    () => buildCodexProviderConfig("", {
+      name: "x-api",
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "key",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.5",
+      requestProfile: {
+        discoveryAuth: "x-api-key",
+        openaiAuth: "x-api-key",
+        anthropicAuth: "x-api-key",
+        verifiedProtocols: ["openai"]
+      }
+    }, "x-api"),
+    /Codex persistent config currently supports Bearer authentication only/
+  );
 });
 
 test("Codex provider model selection keeps only GPT models and picks the newest flagship tier", () => {
@@ -487,6 +514,157 @@ test("addProvider writes provider config and model cache", async () => {
   });
 });
 
+test("addProvider can occupy an existing priority or opt out with level zero", async () => {
+  await withTempHome(async () => {
+    mockFetchModels(["gpt-5.5"]);
+    await writeProviders([
+      { name: "first", baseUrl: "https://first.test/v1", apiKey: "a", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "second", baseUrl: "https://second.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-5.5" }
+    ]);
+
+    const inserted = await addProvider({
+      name: "inserted",
+      baseUrl: "https://inserted.test/v1",
+      apiKey: "c",
+      level: 2
+    });
+    const excluded = await addProvider({
+      name: "expensive",
+      baseUrl: "https://expensive.test/v1",
+      apiKey: "d",
+      level: 0
+    });
+    const providers = await readProviders();
+
+    assert.equal(inserted.level, 2);
+    assert.equal(providers.find((provider) => provider.name === "second").level, 3);
+    assert.equal(excluded.level, 0);
+  });
+});
+
+test("provider priority choices include zero through the new tail position", () => {
+  const providers = Array.from({ length: 5 }, (_, index) => ({
+    name: `provider-${index + 1}`,
+    baseUrl: `https://provider-${index + 1}.test/v1`,
+    apiKey: `key-${index + 1}`,
+    mode: "auto",
+    level: index + 1,
+    model: "gpt-5.5"
+  }));
+
+  const choices = getProviderPriorityOptions(providers);
+  assert.deepEqual(choices.map((choice) => choice.level), [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(choices[2].occupiedBy, "provider-2");
+  assert.equal(choices[6].occupiedBy, null);
+});
+
+test("provider edit priority choices identify the current provider by name", () => {
+  const providers = [
+    { name: "first", baseUrl: "https://first.test/v1", apiKey: "a", mode: "auto", level: 1, model: "gpt-5.5" },
+    { name: "86-codex", baseUrl: "https://codex.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-5.5" }
+  ];
+
+  assert.deepEqual(buildProviderLevelChoices(providers, "86-codex"), [
+    { label: "0 - excluded from automatic fallback", value: 0 },
+    { label: "1 - swap with first", value: 1 },
+    { label: "2 - current: 86-codex", value: 2 }
+  ]);
+});
+
+test("addProvider refuses failed probes without writing provider state", async () => {
+  await withTempHome(async () => {
+    mockFetch(() => jsonResponse({ error: "nope" }, { status: 401 }));
+    await assert.rejects(
+      addProvider({ name: "blocked", baseUrl: "https://blocked.test", apiKey: "key" }),
+      /Provider configuration probe failed/
+    );
+    assert.deepEqual(await readProviders(), []);
+    assert.deepEqual((await readCache()).providers, {});
+  });
+});
+
+test("ai proxy persists a normalized Runtime proxy and supports clearing", async () => {
+  await withTempHome(async () => {
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    try {
+      await runProxyCommand(["127.0.0.1", "8081"], {
+        check: async () => ({ ok: true, durationMs: 1, error: null })
+      });
+      assert.equal((await loadRuntimeConfig()).proxyUrl, "http://127.0.0.1:8081");
+      assert.equal(output.some((line) => line.includes("AI Runtime proxy set")), true);
+
+      await assert.rejects(
+        runProxyCommand(["127.0.0.1", "9090"], {
+          check: async () => ({ ok: false, durationMs: 1, error: "connection refused" })
+        }),
+        /Previous proxy kept/
+      );
+      assert.equal((await loadRuntimeConfig()).proxyUrl, "http://127.0.0.1:8081");
+
+      await runProxyCommand(["--disable"]);
+      assert.equal((await loadRuntimeConfig()).proxyUrl, undefined);
+      assert.equal(output.some((line) => line.includes("AI Runtime proxy cleared")), true);
+    } finally {
+      configureGlobalProxy(null);
+      console.log = originalLog;
+    }
+  });
+});
+
+test("interactive add accepts a manually verified model when GET models is unavailable", async () => {
+  await withTempHome(async () => {
+    const requests = [];
+    mockFetch((url, init) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET" });
+      if (init?.method === "POST" && String(url).endsWith("/responses")) {
+        return jsonResponse({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+      }
+      return jsonResponse({ error: "catalog blocked" }, { status: 451 });
+    });
+    const answers = new Map([
+      ["Provider name", "manual"],
+      ["Base URL", "https://manual.test/v1"],
+      ["API key", "secret"],
+      ["Model name", "gpt-5.5"]
+    ]);
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    try {
+      await runAddCommand([], {
+        text: async (message) => answers.get(message) ?? "",
+        select: async (message) => {
+          if (message === "Select priority (0 excludes automatic fallback)") return 1;
+          throw new Error("model selector should not run after manual verification");
+        }
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const [provider] = await readProviders();
+    assert.equal(provider.name, "manual");
+    assert.equal(provider.model, "gpt-5.5");
+    assert.equal(provider.requestProfile.openaiAuth, "bearer");
+    assert.deepEqual((await readCache()).providers.manual.models, ["gpt-5.5"]);
+    assert.equal(requests.filter((request) => request.method === "POST").length, 1);
+    assert.equal(output.some((line) => line.includes("Automatic model discovery failed")), true);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+    assert.equal(status.health, "ok");
+    assert.equal(status.codex.state, "ready");
+    assert.match(status.lastError, /Model catalog unavailable/);
+    assert.equal(requests.filter((request) => request.method === "POST").length, 2);
+
+    await refreshAllProviders();
+    const cache = await readCache();
+    assert.equal(cache.providers.manual.status, "ok");
+    assert.deepEqual(cache.providers.manual.models, ["gpt-5.5"]);
+  });
+});
+
 test("updateProvider edits mode, swaps level, and renames cache", async () => {
   await withTempHome(async () => {
     mockFetchModels(["claude-opus-4-6"]);
@@ -505,6 +683,40 @@ test("updateProvider edits mode, swaps level, and renames cache", async () => {
     assert.equal(providers.find((provider) => provider.name === "a").level, 2);
     assert.equal(cache.providers.renamed.status, "ok");
     assert.equal(cache.providers.b, undefined);
+  });
+});
+
+test("updateProvider preserves the old connection when probing new credentials fails", async () => {
+  await withTempHome(async () => {
+    await writeProviders([{
+      name: "stable",
+      baseUrl: "https://stable.test/v1",
+      apiKey: "old-key",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.5"
+    }]);
+    await upsertProviderCache("stable", {
+      status: "ok",
+      models: ["gpt-5.5"],
+      lastCheckedAt: "old",
+      lastError: null
+    });
+    mockFetch(() => jsonResponse({ error: "invalid key" }, { status: 401 }));
+
+    await assert.rejects(
+      updateProvider("stable", { apiKey: "new-key", baseUrl: "https://bad.test" }),
+      /Provider configuration probe failed/
+    );
+    assert.deepEqual((await readProviders())[0], {
+      name: "stable",
+      baseUrl: "https://stable.test/v1",
+      apiKey: "old-key",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.5"
+    });
+    assert.equal((await readCache()).providers.stable.lastCheckedAt, "old");
   });
 });
 
@@ -618,7 +830,7 @@ test("getProviderStatuses refreshes health and aggregates weekly tokens", async 
     const statuses = await getProviderStatuses({ refresh: true });
     assert.equal(statuses[0].health, "ok");
     assert.equal(statuses[0].models.length, 1);
-    assert.equal(statuses[0].weeklyTokens, 20);
+    assert.equal(statuses[0].weeklyTokens, 22);
     assert.equal(statuses[0].usageShare, 100);
     assert.equal(statuses[0].codex.state, "ready");
     assert.equal(statuses[0].codex.baseUrl, "https://api.test/v1");
@@ -629,7 +841,19 @@ test("getProviderStatuses refreshes health and aggregates weekly tokens", async 
 
 test("getProviderStatuses reports tool-specific runtime readiness", async () => {
   await withTempHome(async () => {
-    mockFetchModels(["claude-sonnet-4-6", "gpt-5.5"]);
+    const requests = [];
+    mockFetch((url, init) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET", body: init?.body });
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({
+          data: ["claude-sonnet-4-6", "claude-opus-4-6", "gpt-5.5", "gpt-4.1"]
+            .map((id) => ({ id }))
+        });
+      }
+      return jsonResponse({
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }
+      });
+    });
     await writeProviders([
       { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-sonnet-4-6" }
     ]);
@@ -640,8 +864,300 @@ test("getProviderStatuses reports tool-specific runtime readiness", async () => 
     assert.equal(statuses[0].claude.model, "claude-sonnet-4-6");
     assert.equal(statuses[0].claude.baseUrl, "https://api.test");
     assert.equal(statuses[0].codex.state, "ready");
-    assert.equal(statuses[0].codex.model, "gpt-5.5");
+    assert.equal(statuses[0].codex.model, "gpt-4.1");
     assert.equal(statuses[0].codex.baseUrl, "https://api.test/v1");
+    assert.equal(statuses[0].models.length, 4);
+    const probeRequests = requests.filter((request) => request.method === "POST");
+    assert.equal(probeRequests.length, 2);
+    assert.deepEqual(
+      probeRequests.map((request) => JSON.parse(String(request.body)).model).sort(),
+      ["claude-sonnet-4-6", "gpt-4.1"]
+    );
+    assert.equal((await readCache()).providers.api.models.length, 4);
+  });
+});
+
+test("getProviderStatuses skips token probes for missing tool families", async () => {
+  await withTempHome(async () => {
+    const postUrls = [];
+    mockFetch((url, init) => {
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "gpt-5.5" }, { id: "image-model" }] });
+      }
+      if (init?.method === "POST") postUrls.push(String(url));
+      return jsonResponse({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+    });
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+
+    assert.equal(status.health, "ok");
+    assert.equal(status.claude.state, "no-model");
+    assert.equal(status.claude.attempts, 0);
+    assert.equal(status.codex.state, "ready");
+    assert.deepEqual(postUrls, ["https://api.test/v1/responses"]);
+    assert.deepEqual(status.models, ["gpt-5.5", "image-model"]);
+  });
+});
+
+test("getProviderStatuses keeps a provider usable when one tool protocol fails", async () => {
+  await withTempHome(async () => {
+    mockFetch((url, init) => {
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "claude-sonnet-4-6" }, { id: "gpt-5.5" }] });
+      }
+      if (String(url).endsWith("/v1/messages")) {
+        return jsonResponse({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+      }
+      if (init?.method === "POST") {
+        return jsonResponse({ error: { message: "model unavailable" } }, { status: 503 });
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-sonnet-4-6" }
+    ]);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+
+    assert.equal(status.health, "ok");
+    assert.equal(status.claude.state, "ready");
+    assert.equal(status.codex.state, "provider-error");
+    assert.match(status.codex.note, /503/);
+    assert.deepEqual(status.models, ["claude-sonnet-4-6", "gpt-5.5"]);
+  });
+});
+
+test("getProviderStatuses marks the provider unavailable when every applicable tool fails", async () => {
+  await withTempHome(async () => {
+    let postCount = 0;
+    mockFetch((url, init) => {
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "claude-sonnet-4-6" }, { id: "gpt-5.5" }] });
+      }
+      if (init?.method === "POST") postCount += 1;
+      return jsonResponse({ error: { message: "blocked" } }, { status: 503 });
+    });
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "claude-sonnet-4-6" }
+    ]);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+
+    assert.equal(status.health, "error");
+    assert.equal(status.claude.state, "provider-error");
+    assert.equal(status.codex.state, "provider-error");
+    assert.equal(postCount, 2);
+  });
+});
+
+test("getProviderStatuses exposes model discovery failures without sending token probes", async () => {
+  await withTempHome(async () => {
+    let postCount = 0;
+    mockFetch((_url, init) => {
+      if (init?.method === "POST") postCount += 1;
+      return jsonResponse({ error: "unauthorized" }, { status: 401 });
+    });
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+
+    assert.equal(status.health, "error");
+    assert.equal(status.claude.state, "provider-error");
+    assert.equal(status.codex.state, "provider-error");
+    assert.match(status.codex.note, /401/);
+    assert.equal(postCount, 0);
+  });
+});
+
+test("getProviderStatuses treats an aborted live probe as unknown and keeps it routable", async () => {
+  await withTempHome(async () => {
+    let postCount = 0;
+    mockFetch((url, init) => {
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "gpt-6-astra" }] });
+      }
+      if (init?.method === "POST") {
+        postCount += 1;
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+    await writeProviders([
+      { name: "vibe", baseUrl: "https://api.vibe.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-6-astra" }
+    ]);
+
+    const [status] = await getProviderStatuses({ refresh: true });
+    const resolved = await resolveProviderForTool("codex");
+
+    assert.equal(status.health, "unknown");
+    assert.equal(status.codex.state, "unknown");
+    assert.match(status.codex.note, /timed out after 30000ms/);
+    assert.match(status.lastError, /upstream may still have completed/);
+    assert.equal(postCount, 1);
+    assert.equal(resolved.provider.name, "vibe");
+  });
+});
+
+test("ai check refreshes only the named or interactively selected provider", async () => {
+  await withTempHome(async () => {
+    const requests = [];
+    mockFetch((url, init) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET" });
+      if (String(url).endsWith("/models")) {
+        return jsonResponse({ data: [{ id: "gpt-5.5" }] });
+      }
+      return jsonResponse({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+    });
+    await writeProviders([
+      { name: "alpha", baseUrl: "https://alpha.test/v1", apiKey: "a", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "vibe", baseUrl: "https://vibe.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-5.5" }
+    ]);
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    try {
+      await runCheckCommand(["vibe"]);
+      assert.equal(requests.every((request) => request.url.startsWith("https://vibe.test/")), true);
+      assert.equal(output.some((line) => line.includes("AI Gateway Provider Check: vibe")), true);
+
+      requests.length = 0;
+      output.length = 0;
+      await runCheckCommand([], {
+        selectProvider: async (message, choices) => {
+          assert.equal(message, "Select provider to check");
+          assert.deepEqual(choices.map((choice) => choice.value), ["alpha", "vibe"]);
+          return "alpha";
+        }
+      });
+      assert.equal(requests.every((request) => request.url.startsWith("https://alpha.test/")), true);
+      assert.equal(output.some((line) => line.includes("AI Gateway Provider Check: alpha")), true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    await assert.rejects(getProviderStatus("missing", { refresh: true }), /Provider not found: missing/);
+  });
+});
+
+test("ai models lists one provider through GET models without changing live health", async () => {
+  await withTempHome(async () => {
+    const requests = [];
+    mockFetch((url, init) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET" });
+      return jsonResponse({ data: [{ id: "gpt-6-astra" }, { id: "gpt-5.5" }, { id: "image-v1" }] });
+    });
+    await writeProviders([
+      { name: "alpha", baseUrl: "https://alpha.test/v1", apiKey: "a", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "vibe", baseUrl: "https://vibe.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-6-astra" }
+    ]);
+    await upsertProviderCache("vibe", {
+      status: "unknown",
+      models: ["old-model"],
+      lastCheckedAt: "2026-01-01T00:00:00.000Z",
+      lastError: "live probe timed out",
+      toolChecks: {
+        codex: {
+          status: "unknown",
+          model: "gpt-6-astra",
+          checkedAt: "2026-01-01T00:00:00.000Z",
+          error: "live probe timed out",
+          attempts: 1,
+          durationMs: 30000
+        }
+      }
+    });
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    try {
+      await runModelsCommand(["vibe"]);
+      assert.equal(requests.every((request) => request.method === "GET"), true);
+      assert.equal(requests.every((request) => request.url.startsWith("https://vibe.test/")), true);
+      assert.equal(output.some((line) => line.includes("Models for vibe (3)")), true);
+      assert.equal(output.some((line) => line.includes("gpt-6-astra")), true);
+
+      requests.length = 0;
+      await runModelsCommand([], {
+        selectProvider: async (_message, choices) => {
+          assert.deepEqual(choices.map((choice) => choice.value), ["alpha", "vibe"]);
+          return "alpha";
+        }
+      });
+      assert.equal(requests.every((request) => request.url.startsWith("https://alpha.test/")), true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const cache = await readCache();
+    assert.equal(cache.providers.vibe.status, "unknown");
+    assert.equal(cache.providers.vibe.lastError, "live probe timed out");
+    assert.equal(cache.providers.vibe.toolChecks.codex.status, "unknown");
+    assert.deepEqual(cache.providers.vibe.models, ["gpt-5.5", "gpt-6-astra", "image-v1"]);
+  });
+});
+
+test("getProviderStatuses reports legacy caches as unverified", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "api", baseUrl: "https://api.test/v1", apiKey: "key", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("api", {
+      status: "ok",
+      models: ["gpt-5.5"],
+      lastCheckedAt: "2026-01-01T00:00:00.000Z",
+      lastError: null
+    });
+
+    const [status] = await getProviderStatuses();
+
+    assert.equal(status.codex.state, "unverified");
+    assert.equal(status.claude.state, "no-model");
+  });
+});
+
+test("provider cache normalizes persisted tool checks", async () => {
+  await withTempHome(async () => {
+    await fs.writeFile(
+      path.join(process.env.AI_GATEWAY_HOME, ".ai-cache.json"),
+      JSON.stringify({
+        providers: {
+          api: {
+            status: "ok",
+            models: ["gpt-5.5"],
+            lastCheckedAt: null,
+            lastError: null,
+            toolChecks: {
+              codex: {
+                status: "ok",
+                model: "gpt-5.5",
+                checkedAt: "2026-01-01T00:00:00.000Z",
+                error: null,
+                attempts: 1,
+                durationMs: 12
+              }
+            }
+          }
+        }
+      })
+    );
+
+    const cache = await readCache();
+
+    assert.deepEqual(cache.providers.api.toolChecks.codex, {
+      status: "ok",
+      model: "gpt-5.5",
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      error: null,
+      attempts: 1,
+      durationMs: 12
+    });
   });
 });
 
@@ -746,6 +1262,46 @@ test("resolveProviderForTool skips unhealthy providers and falls back", async ()
   });
 });
 
+test("explicitly selected provider is attempted before fallback despite stale health error", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "selected", baseUrl: "https://selected.test/v1", apiKey: "selected", mode: "auto", level: 2, model: "gpt-5.5" },
+      { name: "default", baseUrl: "https://default.test/v1", apiKey: "default", mode: "auto", level: 1, model: "gpt-5.4" }
+    ]);
+    await upsertProviderCache("selected", {
+      status: "error",
+      models: ["gpt-5.5"],
+      lastCheckedAt: "now",
+      lastError: "stale health result"
+    });
+    await upsertProviderCache("default", {
+      status: "ok",
+      models: ["gpt-5.4"],
+      lastCheckedAt: "now",
+      lastError: null
+    });
+
+    const candidates = await resolveProviderCandidatesForTool("codex", "selected");
+    assert.deepEqual(candidates.map((candidate) => candidate.provider.name), ["selected", "default"]);
+  });
+});
+
+test("level zero providers are excluded from automatic fallback but remain explicitly selectable", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "normal", baseUrl: "https://normal.test/v1", apiKey: "normal", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "expensive", baseUrl: "https://expensive.test/v1", apiKey: "expensive", mode: "auto", level: 0, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("normal", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("expensive", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+
+    const automatic = await resolveProviderCandidatesForTool("codex");
+    const explicit = await resolveProviderCandidatesForTool("codex", "expensive");
+    assert.deepEqual(automatic.map((candidate) => candidate.provider.name), ["normal"]);
+    assert.deepEqual(explicit.map((candidate) => candidate.provider.name), ["expensive"]);
+  });
+});
+
 test("explicit model requests drop providers whose catalog lacks that model", async () => {
   await withTempHome(async () => {
     await writeProviders([
@@ -758,6 +1314,51 @@ test("explicit model requests drop providers whose catalog lacks that model", as
     const candidates = await resolveProviderCandidatesForTool("codex", undefined, "gpt-5.6-sol");
     assert.deepEqual(candidates.map((candidate) => candidate.provider.name), ["codex"]);
     assert.equal(candidates.every((candidate) => candidate.model === "gpt-5.6-sol"), true);
+  });
+});
+
+test("automatic fallback keeps Claude and Codex providers in their compatible model families", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "codex-only", baseUrl: "https://codex.test/v1", apiKey: "codex", mode: "auto", level: 1, model: "gpt-5.6-sol" },
+      { name: "claude-only", baseUrl: "https://claude.test/v1", apiKey: "claude", mode: "auto", level: 2, model: "claude-opus-4-6" },
+      { name: "hybrid", baseUrl: "https://hybrid.test/v1", apiKey: "hybrid", mode: "auto", level: 3, model: "gpt-5.5" },
+      { name: "image-only", baseUrl: "https://image.test/v1", apiKey: "image", mode: "auto", level: 4, model: "gpt-image-2" },
+      { name: "unknown-codex", baseUrl: "https://unknown.test/v1", apiKey: "unknown", mode: "auto", level: 5, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("codex-only", { status: "ok", models: ["gpt-5.6-sol"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("claude-only", { status: "ok", models: ["claude-opus-4-6"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("hybrid", { status: "ok", models: ["gpt-5.5", "claude-sonnet-4-6"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("image-only", { status: "ok", models: ["gpt-image-2"], lastCheckedAt: "now", lastError: null });
+
+    const claudeCandidates = await resolveProviderCandidatesForTool("claude");
+    const codexCandidates = await resolveProviderCandidatesForTool("codex");
+
+    assert.deepEqual(
+      claudeCandidates.map((candidate) => [candidate.provider.name, candidate.model]),
+      [["claude-only", "claude-opus-4-6"], ["hybrid", "claude-sonnet-4-6"]]
+    );
+    assert.deepEqual(
+      codexCandidates.map((candidate) => [candidate.provider.name, candidate.model]),
+      [["codex-only", "gpt-5.6-sol"], ["hybrid", "gpt-5.5"], ["unknown-codex", "gpt-5.5"]]
+    );
+  });
+});
+
+test("explicit model requests cannot cross the selected CLI model family", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "hybrid", baseUrl: "https://hybrid.test/v1", apiKey: "hybrid", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("hybrid", {
+      status: "ok",
+      models: ["gpt-5.5", "claude-sonnet-4-6"],
+      lastCheckedAt: "now",
+      lastError: null
+    });
+
+    assert.deepEqual(await resolveProviderCandidatesForTool("claude", undefined, "gpt-5.5"), []);
+    assert.deepEqual(await resolveProviderCandidatesForTool("codex", undefined, "claude-sonnet-4-6"), []);
   });
 });
 

@@ -10,6 +10,7 @@ import {
 } from "../core/config/cache-store.js";
 import { readProviders } from "../core/config/providers-store.js";
 import { writeLog } from "../core/logs/log-service.js";
+import { getProviderAuthScheme } from "../core/providers/provider-request-profile.js";
 import { resolveProviderCandidatesForTool, type ResolvedRun } from "../core/runner/fallback.js";
 import {
   buildUpstreamHeaders,
@@ -166,7 +167,8 @@ async function handleRequest(input: {
     sendJson(res, 400, { error: { message: "Request body must include model.", request_id: requestId } });
     return;
   }
-  const candidates = await resolveProviderCandidatesForTool("codex", undefined, requestedModel);
+  // 解析阶段的跳过日志与后续每一跳共享 requestId，链路视图才能看到"熔断跳过"这些前置跳。
+  const candidates = await resolveProviderCandidatesForTool("codex", undefined, requestedModel, requestId);
   if (!candidates.length) {
     sendJson(res, 503, { error: { message: `No healthy provider offers model ${requestedModel}.`, request_id: requestId } });
     return;
@@ -304,7 +306,9 @@ async function proxyWithFallback(input: {
     try {
       const response = await fetch(upstreamUrl, {
         method: input.req.method,
-        headers: buildUpstreamHeaders(input.req.headers, candidate.provider.apiKey),
+        headers: buildUpstreamHeaders(input.req.headers, candidate.provider.apiKey, {
+          authScheme: getProviderAuthScheme(candidate.provider, "openai")
+        }),
         body: input.requestBody.length && methodMayHaveBody(input.req.method) ? input.requestBody : undefined,
         dispatcher: input.dispatcher
       });
@@ -320,6 +324,7 @@ async function proxyWithFallback(input: {
             upstreamBaseUrl,
             requestBody: input.requestBody,
             apiKey: candidate.provider.apiKey,
+            authScheme: getProviderAuthScheme(candidate.provider, "openai"),
             dispatcher: input.dispatcher
           });
           const fallbackResponse: BufferedUpstream = {
@@ -329,25 +334,27 @@ async function proxyWithFallback(input: {
             body: translated.body
           };
           if (isRetryableStatus(fallbackResponse.status) && index < input.candidates.length - 1) {
-            await recordCandidateFailure(candidate, fallbackResponse);
+            await recordCandidateFailure(candidate, fallbackResponse, input.requestId, index + 1, input.candidates.length);
             lastFailure = fallbackResponse;
             continue;
           }
           await sendBufferedResult(input.res, candidate, fallbackResponse, records, input.requestedModel);
+          await logRequestSettled(candidate, input.requestId, index + 1, input.candidates.length, fallbackResponse.status);
           return;
         }
         if (isRetryableStatus(nativeFailure.status) && index < input.candidates.length - 1) {
-          await recordCandidateFailure(candidate, nativeFailure);
+          await recordCandidateFailure(candidate, nativeFailure, input.requestId, index + 1, input.candidates.length);
           lastFailure = nativeFailure;
           continue;
         }
         await sendBufferedResult(input.res, candidate, nativeFailure, records, input.requestedModel);
+        await logRequestSettled(candidate, input.requestId, index + 1, input.candidates.length, nativeFailure.status);
         return;
       }
 
       if (isRetryableStatus(response.status) && index < input.candidates.length - 1) {
         const failure = await bufferUpstream(response);
-        await recordCandidateFailure(candidate, failure);
+        await recordCandidateFailure(candidate, failure, input.requestId, index + 1, input.candidates.length);
         lastFailure = failure;
         continue;
       }
@@ -366,14 +373,16 @@ async function proxyWithFallback(input: {
       if (response.ok) await recordProviderRuntimeSuccess(candidate.provider.name);
       else await recordProviderRuntimeFailure(candidate.provider.name, `HTTP ${response.status}`);
       input.res.end();
+      await logRequestSettled(candidate, input.requestId, index + 1, input.candidates.length, response.status);
       return;
     } catch (error) {
       await recordProviderRuntimeFailure(candidate.provider.name, error);
-      await logFallback(candidate, input.requestId, error);
+      await logFallback(candidate, input.requestId, error, index + 1, input.candidates.length);
       if (index === input.candidates.length - 1) {
         sendJson(input.res, 502, {
           error: { message: "All configured AI providers failed.", request_id: input.requestId }
         });
+        await logRequestExhausted(input.requestId, input.candidates, 502);
         return;
       }
     }
@@ -381,9 +390,60 @@ async function proxyWithFallback(input: {
 
   if (lastFailure) {
     sendBuffered(input.res, lastFailure);
+    await logRequestExhausted(input.requestId, input.candidates, lastFailure.status);
     return;
   }
   sendJson(input.res, 503, { error: { message: "No usable AI provider.", request_id: input.requestId } });
+  await logRequestExhausted(input.requestId, input.candidates, 503);
+}
+
+/** 记录链路的终止跳：哪个 provider 最终承接了请求、用掉了几次尝试。 */
+async function logRequestSettled(
+  candidate: ResolvedRun,
+  requestId: string,
+  attempt: number,
+  totalCandidates: number,
+  status: number
+): Promise<void> {
+  const failed = status < 200 || status >= 400;
+  await writeLog({
+    level: failed ? "warn" : "info",
+    category: "strategy",
+    action: "runtime_server_request_settled",
+    message: `Request served by ${candidate.provider.name} with HTTP ${status}.`,
+    traceId: requestId,
+    metadata: {
+      requestId,
+      attempt,
+      totalCandidates,
+      provider: candidate.provider.name,
+      level: candidate.provider.level,
+      model: candidate.model,
+      status,
+      fellBack: attempt > 1
+    }
+  });
+}
+
+/** 记录所有候选都用尽的链路终止跳。 */
+async function logRequestExhausted(
+  requestId: string,
+  candidates: ResolvedRun[],
+  status: number
+): Promise<void> {
+  await writeLog({
+    level: "error",
+    category: "strategy",
+    action: "runtime_server_candidates_exhausted",
+    message: `All ${candidates.length} provider candidate(s) failed.`,
+    traceId: requestId,
+    metadata: {
+      requestId,
+      status,
+      totalCandidates: candidates.length,
+      attempted: candidates.map((candidate) => candidate.provider.name)
+    }
+  });
 }
 
 async function sendModels(res: http.ServerResponse): Promise<void> {
@@ -444,20 +504,37 @@ function sendBuffered(res: http.ServerResponse, result: BufferedUpstream): void 
   res.end(result.body);
 }
 
-async function recordCandidateFailure(candidate: ResolvedRun, failure: BufferedUpstream): Promise<void> {
+async function recordCandidateFailure(
+  candidate: ResolvedRun,
+  failure: BufferedUpstream,
+  requestId: string,
+  attempt: number,
+  totalCandidates: number
+): Promise<void> {
   await recordProviderRuntimeFailure(candidate.provider.name, `HTTP ${failure.status}`);
-  await logFallback(candidate, crypto.randomUUID(), `HTTP ${failure.status}`);
+  await logFallback(candidate, requestId, `HTTP ${failure.status}`, attempt, totalCandidates);
 }
 
-async function logFallback(candidate: ResolvedRun, requestId: string, error: unknown): Promise<void> {
+async function logFallback(
+  candidate: ResolvedRun,
+  requestId: string,
+  error: unknown,
+  attempt: number,
+  totalCandidates: number
+): Promise<void> {
   await writeLog({
     level: "warn",
     category: "strategy",
     action: "runtime_server_provider_fallback",
     message: `Provider ${candidate.provider.name} failed; trying the next candidate.`,
+    // 复用请求自身的 id：同一次请求的每一跳共享它，调用链路视图才能聚合成一条链路。
+    traceId: requestId,
     metadata: {
       requestId,
+      attempt,
+      totalCandidates,
       provider: candidate.provider.name,
+      level: candidate.provider.level,
       model: candidate.model,
       error: error instanceof Error ? error.message : String(error)
     }

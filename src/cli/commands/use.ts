@@ -1,5 +1,5 @@
 import { readCache, recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../../core/config/cache-store.js";
-import { writeLog } from "../../core/logs/log-service.js";
+import { newTraceId, writeLog } from "../../core/logs/log-service.js";
 import { refreshAllProviders } from "../../core/providers/provider-service.js";
 import { resolveProviderCandidatesForTool, type ResolvedRun } from "../../core/runner/fallback.js";
 import { runTool } from "../../core/runner/tool-runner.js";
@@ -11,14 +11,23 @@ export async function runUseCommand(args: string[]): Promise<void> {
   const providerName = args[1];
   const modelName = args[2];
 
-  await refreshAllProviders();
-  const candidates = await resolveProviderCandidatesForTool(tool, providerName, modelName);
+  if (!providerName) {
+    await refreshAllProviders();
+  }
+  // 一次 `ai use` 是一条调用链路：解析跳过与后续每次切换共享同一个 traceId。
+  const traceId = newTraceId();
+  const candidates = await resolveProviderCandidatesForTool(tool, providerName, modelName, traceId);
   if (!candidates.length) {
     throw new Error("No usable provider/model found. Run `ai status` or `ai doctor`.");
   }
-  const code = await runResolvedProviderCandidates(tool, candidates, {
+  const [initial, ...fallbacks] = candidates;
+  const code = await runResolvedProviderCandidates(tool, [initial!], {
     confirm: promptConfirm,
-    runner: (candidate, fallbackFrom) => runTool(tool, candidate.provider, candidate.model, { fallbackFrom })
+    traceId,
+    runner: (candidate, fallbackFrom) => runTool(tool, candidate.provider, candidate.model, {
+      fallbackFrom,
+      fallbackRoutes: fallbacks.map(({ provider, model }) => ({ provider, model }))
+    })
   });
   process.exitCode = code;
 }
@@ -45,6 +54,8 @@ async function getTool(value?: string): Promise<CliToolType> {
 export type RunResolvedProviderCandidatesOptions = {
   confirm?: (message: string) => Promise<boolean>;
   runner?: (candidate: ResolvedRun, fallbackFrom: string | null) => Promise<number>;
+  /** 调用链路关联 id；省略时自行生成，保证同一次执行的多跳仍能聚合。 */
+  traceId?: string;
 };
 
 export async function runResolvedProviderCandidates(
@@ -53,6 +64,7 @@ export async function runResolvedProviderCandidates(
   options: RunResolvedProviderCandidatesOptions = {}
 ): Promise<number> {
   const confirm = options.confirm ?? promptConfirm;
+  const traceId = options.traceId ?? newTraceId();
   const runner = options.runner ?? ((candidate, fallbackFrom) =>
     runTool(tool, candidate.provider, candidate.model, { fallbackFrom }));
   let lastExitCode = 1;
@@ -66,7 +78,9 @@ export async function runResolvedProviderCandidates(
         from: fallbackFrom,
         to: candidate.provider.name,
         tool,
-        model: candidate.model
+        model: candidate.model,
+        traceId,
+        attempt: index + 1
       });
     }
 
@@ -75,7 +89,8 @@ export async function runResolvedProviderCandidates(
       category: "usage",
       action: "tool_start",
       message: `Starting ${tool}: ${candidate.provider.name} / ${candidate.model}`,
-      metadata: { tool, provider: candidate.provider.name, model: candidate.model, mode: candidate.provider.mode }
+      traceId,
+      metadata: { tool, provider: candidate.provider.name, level: candidate.provider.level, model: candidate.model, mode: candidate.provider.mode, attempt: index + 1 }
     });
     if (candidate.provider.mode === "ask") {
       const confirmed = await confirm("Start CLI?");
@@ -85,6 +100,20 @@ export async function runResolvedProviderCandidates(
     const code = await runner(candidate, fallbackFrom);
     if (code === 0) {
       await recordProviderRuntimeSuccess(candidate.provider.name);
+      await writeLog({
+        category: "strategy",
+        action: "tool_run_settled",
+        message: `${tool} run served by ${candidate.provider.name}.`,
+        traceId,
+        metadata: {
+          tool,
+          provider: candidate.provider.name,
+          level: candidate.provider.level,
+          model: candidate.model,
+          attempt: index + 1,
+          fellBack: index > 0 || Boolean(candidate.fallbackFrom)
+        }
+      });
       return 0;
     }
 
@@ -101,9 +130,25 @@ export async function runResolvedProviderCandidates(
         tool,
         model: candidate.model,
         nextModel: next.model,
-        error: `exit_code_${code}`
+        error: `exit_code_${code}`,
+        traceId,
+        attempt: index + 1
       });
       console.log(`Provider ${candidate.provider.name} failed with exit code ${code}, trying ${next.provider.name}.`);
+    } else {
+      await writeLog({
+        level: "error",
+        category: "strategy",
+        action: "tool_candidates_exhausted",
+        message: `All ${candidates.length} provider candidate(s) failed for ${tool}.`,
+        traceId,
+        metadata: {
+          tool,
+          totalCandidates: candidates.length,
+          attempted: candidates.map((item) => item.provider.name),
+          exitCode: code
+        }
+      });
     }
   }
   return lastExitCode;
@@ -118,19 +163,23 @@ async function writeProviderFallbackLog(input: {
   model: string;
   nextModel?: string;
   error?: string;
+  traceId?: string;
+  attempt?: number;
 }): Promise<void> {
   await writeLog({
     level: input.level,
     category: "strategy",
     action: input.action,
     message: `Provider fallback ${input.from} -> ${input.to} for ${input.tool}.`,
+    ...(input.traceId ? { traceId: input.traceId } : {}),
     metadata: {
       from: input.from,
       to: input.to,
       engine: input.tool,
       model: input.model,
       nextModel: input.nextModel ?? null,
-      error: input.error ?? null
+      error: input.error ?? null,
+      attempt: input.attempt ?? null
     }
   });
 }

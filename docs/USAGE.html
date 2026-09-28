@@ -449,7 +449,7 @@
         <a class="nav-link" href="#providers"><span>Provider</span><span class="nav-count">add / edit / delete</span></a>
         <a class="nav-link" href="#memory"><span>Memory</span><span class="nav-count">embedding</span></a>
         <a class="nav-link" href="#telegram"><span>Telegram</span><span class="nav-count">Bot</span></a>
-        <a class="nav-link" href="#status"><span>状态诊断</span><span class="nav-count">status / doctor</span></a>
+        <a class="nav-link" href="#status"><span>状态诊断</span><span class="nav-count">models / check / status</span></a>
         <a class="nav-link" href="#sessions"><span>会话报告</span><span class="nav-count">session / report</span></a>
         <a class="nav-link" href="#files"><span>配置文件</span><span class="nav-count">路径</span></a>
       </nav>
@@ -541,7 +541,13 @@ ai setup</pre>
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai use claude 51talk claude-opus-4-6</code><br /><code class="cmd">ai use codex 51talk gpt-5.5</code></td>
                 <td>指定 provider 和模型启动工具。</td>
-                <td>provider 不可用时按 level 降级。</td>
+                <td>有效输出前失败时在同一 CLI 会话内按 level 切换。</td>
+              </tr>
+              <tr data-search="proxy network host port runtime claude codex">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai proxy</code><br /><code class="cmd">ai proxy 127.0.0.1 8081</code><br /><code class="cmd">ai proxy --disable</code></td>
+                <td>为 Runtime 自身及通过 <code>ai</code> 启动的 Claude Code / Codex 设置 HTTP(S) 代理。</td>
+                <td>自动补全协议；不修改原生 CLI 永久配置。</td>
               </tr>
               <tr data-search="set codex chatgpt login oauth provider proxy config auth restart app">
                 <td><span class="group-label">使用</span></td>
@@ -557,9 +563,9 @@ ai setup</pre>
               </tr>
               <tr data-search="provider add create import key">
                 <td><span class="group-label">Provider</span></td>
-                <td><code class="cmd">ai provider add</code><br /><code class="cmd">ai provider add 51talk https://example.com sk-xxx</code></td>
-                <td>添加 provider，探测连通性和模型。</td>
-                <td>也可用旧入口 <code>ai add</code>。</td>
+                <td><code class="cmd">ai provider add</code><br /><code class="cmd">ai provider add 51talk https://example.com sk-xxx</code><br /><code class="cmd">ai provider add 51talk https://example.com sk-xxx gpt-5.5</code></td>
+                <td>添加 provider，先选择 <code>0..N</code> 优先级，再自动探测 Base URL、认证方式和模型，并在成功后写入配置；模型目录不可用时可显式提供模型。</td>
+                <td><code>level: 0</code> 不参与自动切换；也可用旧入口 <code>ai add</code>。</td>
               </tr>
               <tr data-search="provider list">
                 <td><span class="group-label">Provider</span></td>
@@ -570,7 +576,7 @@ ai setup</pre>
               <tr data-search="provider edit rename baseUrl apiKey level model mode">
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider edit</code><br /><code class="cmd">ai provider edit 51talk</code></td>
-                <td>修改 name、baseUrl、凭证、mode、level、model。</td>
+                <td>修改 name、baseUrl、凭证、mode、level、model；level 当前项会显示 Provider 名称；修改连接信息时先探测，失败保留原配置。</td>
                 <td>当前 apiKey 以明文保存在 providers.json，编辑时会回显当前值。SecretStore + apiKeyRef 是目标态，尚未实现。</td>
               </tr>
               <tr data-search="provider delete remove fallback">
@@ -594,8 +600,20 @@ ai setup</pre>
               <tr data-search="status health provider model token usage">
                 <td><span class="group-label">诊断</span></td>
                 <td><code class="cmd">ai status</code></td>
-                <td>轻量刷新 provider 健康度和模型缓存。</td>
-                <td>默认不发送真实对话请求。</td>
+                <td>刷新模型，并为每个 provider 最多用一个 Claude 与一个 Codex 代表模型做 1-token 真实可用性验证。</td>
+                <td>只验证代表模型；产生 Token 的请求不自动重试，30 秒超时显示 unknown。</td>
+              </tr>
+              <tr data-search="check provider health single model token usage">
+                <td><span class="group-label">诊断</span></td>
+                <td><code class="cmd">ai check</code><br /><code class="cmd">ai check 51talk</code></td>
+                <td>交互选择或按名称只检查一个 provider，验证规则与 <code>ai status</code> 相同。</td>
+                <td>不会刷新其他 provider，适合减少等待时间和验证 Token。</td>
+              </tr>
+              <tr data-search="models provider list catalog get zero token">
+                <td><span class="group-label">Provider</span></td>
+                <td><code class="cmd">ai models</code><br /><code class="cmd">ai models 51talk</code></td>
+                <td>交互选择或按名称通过 <code>GET /models</code> 刷新并列出一个 provider 的完整模型目录。</td>
+                <td>不调用模型推理端点，不产生推理 Token，也不覆盖真实健康状态。</td>
               </tr>
               <tr data-search="doctor deep local strict fix diagnose cli provider token">
                 <td><span class="group-label">诊断</span></td>
@@ -639,6 +657,22 @@ ai use codex 51talk gpt-5.5</pre>
                 <p>不指定 provider 时使用 <code>level: 1</code>；不指定模型时使用 provider 默认 <code>model</code>。</p>
               </div>
               <div class="note">
+                <h3>Runtime 出站代理</h3>
+                <pre>ai proxy
+ai proxy 127.0.0.1 8081
+ai proxy 127.0.0.1:8081
+ai proxy http://127.0.0.1:8081
+ai proxy --disable</pre>
+                <ul>
+                  <li>交互模式分别询问主机/IP与端口；缺少协议时自动补为 <code>http://</code>。</li>
+                  <li>已有代理时先显示当前地址，再提供编辑、关闭和取消选项；不通过输入 <code>off</code> 关闭。</li>
+                  <li>新增或编辑先进行零 Token 的代理端点 TCP 连通检查；失败时显示原因并保留原配置。</li>
+                  <li>配置保存在 <code>~/.ai-gateway/runtime.json</code>，作用于 Runtime 网络请求及其启动的 Claude/Codex。</li>
+                  <li>本地回环地址自动加入 <code>NO_PROXY</code>，避免 execution-scoped Transport Proxy 发生代理回环。</li>
+                  <li>不会修改 <code>~/.claude</code> 或 <code>~/.codex</code>；直接运行原生命令不受影响。</li>
+                </ul>
+              </div>
+              <div class="note">
                 <h3>生成图片</h3>
                 <pre>ai image
 ai image 51talk-image "一只戴墨镜的猫，数字插画"
@@ -655,8 +689,12 @@ ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
               <div class="note">
                 <h3>运行规则</h3>
                 <ul>
-                  <li>provider 不可用时按 <code>level</code> 自动降级。</li>
-                  <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings。</li>
+                  <li>正整数 <code>level</code> 组成自动切换链；<code>level: 0</code> 只允许显式使用，不进入自动候选。</li>
+                  <li>显式指定 Provider 时不会先刷新全部 Provider，而是直接使用该 Provider 的已缓存模型并实际尝试；健康缓存暂时为 <code>error</code> 不会在请求前静默跳过，失败后才进入同模型族的自动切换链。</li>
+                  <li>Claude Code 只在提供 Claude 模型的 Provider 间切换；Codex 只在提供 Codex/OpenAI 兼容模型的 Provider 间切换，不跨模型族。</li>
+                  <li>真正带请求体的模型 <code>POST</code> 在产生有效输出前遇到连接错误、认证错误、限流或上游故障时，会在同一 Claude Code/Codex 会话内切换 Provider、改写备用模型并显示提示；CLI 启动期的无请求体 <code>GET</code> 探测不会触发 Provider 轮转。</li>
+                  <li>已经产生文字、推理或工具参数后不会静默重放；用户在当前 CLI 中重新提交或使用原生重试动作即确认切换，下一次请求使用备用 Provider。</li>
+                  <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings；本次子进程会移除继承的 <code>ANTHROPIC_AUTH_TOKEN</code>，临时 settings 还会用空值遮蔽用户 settings 里的同名变量，避免与所选 Provider 的 <code>ANTHROPIC_API_KEY</code> 形成双认证。</li>
                   <li><code>ai use codex</code> 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
                   <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，非 root 执行 Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。root 下请求 <code>auto</code> 会被安全约束为默认权限，临时 settings 中继承的 bypass 配置也会被清除。</li>
                   <li>OpenAI 兼容地址用于 Codex 时会使用 <code>/v1</code>，用于 Claude 时会去掉 <code>/v1</code>。</li>
@@ -718,6 +756,7 @@ ai memory embedding clear</pre>
               <div class="detail-body">
                 <pre>ai provider add
 ai provider add 51talk https://example.com sk-xxx
+ai provider add 51talk https://example.com sk-xxx gpt-5.5
 ai provider edit
 ai provider edit 51talk
 ai provider delete
@@ -725,8 +764,8 @@ ai provider delete 51talk
 ai provider list</pre>
                 <ul>
                   <li><code>mode</code> 可选 <code>ask</code> 或 <code>auto</code>。</li>
-                  <li><code>level</code> 是优先级；如果目标等级已占用，会和对应 provider 交换。</li>
-                  <li><code>model</code> 从已探测模型中选择，不手动输入。</li>
+                  <li>交互添加会列出 <code>0..N</code>；编辑优先级时当前项会显示 Provider 名称；<code>level: 0</code> 不参与自动切换，正整数目标已占用时原 provider 会移到队尾。</li>
+                  <li>默认从模型目录选择 <code>model</code>；若 <code>GET /models</code> 不可用，交互流程会要求输入官网明确提供的模型名，也可作为第四个参数传入。Runtime 会通过 Responses/Messages 做一次最小真实验证，成功后才保存。</li>
                   <li>删除 provider 会清理模型缓存；后续执行会按 <code>level</code> 从剩余 provider 中重新选择。</li>
                 </ul>
               </div>
@@ -775,7 +814,7 @@ ai telegram status --all</pre>
                   <li><code>/provider</code> 以按钮列出全部 AI Provider，可编辑名称、Base URL、API Key、默认模型、模式和优先级，二次确认后删除，或从列表底部添加。操作复用 <code>ai provider</code> 的核心 CRUD 和检查逻辑。</li>
                   <li>Provider API Key 在详情中只显示“已配置”，不会写入 Bot 应用日志；输入后 Bot 会尽力立即删除该 Telegram 消息。未完成表单在 Bot 重启后需要重新开始。</li>
                   <li>Telegram Codex 执行会自动走本地 OpenAI 兼容代理记录 provider usage；<code>/usage</code> 有 provider cost 时直接展示，否则按 <code>model-pricing.json</code> 估算。</li>
-                  <li>如果本机不能直连 <code>api.telegram.org</code>，设置 <code>proxyUrl</code> 或环境变量 <code>HTTPS_PROXY</code> / <code>ALL_PROXY</code>。交互式新增或编辑 Bot 时，<code>proxyUrl</code> 输入提示会展示完整 URL 示例；地址请包含协议，例如 <code>http://127.0.0.1:7890</code>。</li>
+                  <li>如果本机不能直连 <code>api.telegram.org</code>，设置 <code>proxyUrl</code> 或环境变量 <code>HTTPS_PROXY</code> / <code>ALL_PROXY</code>。交互式新增或编辑 Bot 时分别输入主机/IP与端口；例如输入 <code>127.0.0.1</code> 和 <code>8081</code> 会自动保存为 <code>http://127.0.0.1:8081</code>。已有代理会显示当前地址并提供编辑、关闭和取消选项；新地址会先检查代理端点，再通过该代理调用 Telegram <code>getMe</code>，失败时新增 Bot 不保存代理、编辑已有 Bot 保留旧代理。旧的 <code>host:port</code> 与完整 URL 仍兼容。</li>
                 </ul>
               </div>
             </details>
@@ -816,12 +855,16 @@ ai telegram status --all</pre>
             <div class="section-grid">
               <div class="note">
                 <h3>轻量检查</h3>
-                <pre>ai status
+                <pre>ai models
+ai models 51talk
+ai check
+ai check 51talk
+ai status
 ai provider list
 ai log
 ai log --print
 ai context</pre>
-                <p><code>status</code> 会刷新 provider 健康度和模型缓存，展示 Claude/Codex 各自实际 baseUrl、兼容模型、token 使用量和使用占比。CLI 与 Telegram 的 Claude/Codex 新请求只要 provider 返回结构化 usage 都会计入；周统计按 provider 精确名称聚合，同一 provider 的不同模型合并，事件仍保留 model 明细。升级前未经过代理的旧历史不会估算补录。</p>
+                <p><code>models</code> 只对选中的 provider 调用 <code>GET /models</code>，刷新并列出完整模型目录，不调用推理端点、不产生推理 Token，也不覆盖已有真实健康状态。若 provider 不开放模型目录，<code>models</code> 会如实报告 <code>404</code>、<code>451</code> 等目录错误；这不代表缓存模型不可用，可改用 <code>check</code> 做最小真实验证。<code>check</code> 复用与 <code>status</code> 相同的真实验证规则，但只刷新一个 provider；省略名称时交互选择，提供名称时精确匹配，不会检查其他 provider。<code>status</code> 会刷新全部 provider 模型缓存，并从实际存在的 Claude/Codex 模型族中各选一个代表模型做真实调用验证；Codex 优先使用 Responses API。已通过手工模型验证但不开放模型目录的 provider 会使用缓存模型继续真实检查，不会因为 <code>GET /models</code> 返回 <code>451</code> 而直接判错。每次验证使用最短输入且输出上限为 1 token，不逐个验证全部模型，也不自动重试产生 Token 的请求。代表模型最多等待 30 秒；本地超时时上游仍可能已经处理成功，因此显示 <code>unknown</code>。验证返回的结构化 usage 会计入统一账本。</p>
               </div>
               <div class="note">
                 <h3>诊断与自动修复</h3>

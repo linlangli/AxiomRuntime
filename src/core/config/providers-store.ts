@@ -1,9 +1,10 @@
 import { getProvidersPath } from "./paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
-import { readNumber, readRecord, readString } from "./schema.js";
-import type { Provider, ProviderMode } from "../types.js";
+import { readNumber, readOptionalRecord, readRecord, readString } from "./schema.js";
+import type { Provider, ProviderAuthScheme, ProviderMode, ProviderRequestProfile } from "../types.js";
 
 const VALID_MODES = new Set<ProviderMode>(["ask", "auto"]);
+const VALID_AUTH_SCHEMES = new Set<ProviderAuthScheme>(["bearer", "x-api-key", "api-key"]);
 
 export async function readProviders(): Promise<Provider[]> {
   const raw = await readJsonFile<unknown>(getProvidersPath(), []);
@@ -27,14 +28,8 @@ export async function updateProviders(updater: (providers: Provider[]) => Provid
 }
 
 export function normalizeProviders(providers: Provider[]): Provider[] {
-  const sorted = [...providers].sort((a, b) => {
-    const aLevel = Number.isFinite(a.level) && a.level > 0 ? a.level : Number.MAX_SAFE_INTEGER;
-    const bLevel = Number.isFinite(b.level) && b.level > 0 ? b.level : Number.MAX_SAFE_INTEGER;
-    return aLevel - bLevel || a.name.localeCompare(b.name);
-  });
-
   const seenNames = new Set<string>();
-  return sorted.map((provider, index) => {
+  const validated = providers.map((provider) => {
     const name = provider.name.trim();
     if (!name) {
       throw new Error("Provider name cannot be empty.");
@@ -58,10 +53,20 @@ export function normalizeProviders(providers: Provider[]): Provider[] {
       baseUrl,
       apiKey,
       mode: VALID_MODES.has(provider.mode) ? provider.mode : "auto",
-      level: index + 1,
-      model: provider.model.trim()
+      level: Number.isInteger(provider.level) && provider.level > 0 ? provider.level : 0,
+      model: provider.model.trim(),
+      ...(provider.requestProfile ? { requestProfile: normalizeRequestProfile(provider.requestProfile) } : {})
     };
   });
+
+  const active = validated
+    .filter((provider) => provider.level > 0)
+    .sort((a, b) => a.level - b.level || a.name.localeCompare(b.name))
+    .map((provider, index) => ({ ...provider, level: index + 1 }));
+  const excluded = validated
+    .filter((provider) => provider.level === 0)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return [...active, ...excluded];
 }
 
 export function swapProviderLevel(providers: Provider[], providerName: string, targetLevel: number): Provider[] {
@@ -71,12 +76,28 @@ export function swapProviderLevel(providers: Provider[], providerName: string, t
     throw new Error(`Provider not found: ${providerName}`);
   }
 
-  const target = normalized.find((provider) => provider.level === targetLevel);
-  if (!target) {
+  if (!Number.isInteger(targetLevel) || targetLevel < 0) {
     throw new Error(`Invalid level: ${targetLevel}`);
   }
 
-  const sourceLevel = source.level;
+  if (targetLevel === 0) {
+    return normalizeProviders(normalized.map((provider) =>
+      provider.name === source.name ? { ...provider, level: 0 } : provider
+    ));
+  }
+
+  const activeCount = normalized.filter((provider) => provider.level > 0).length;
+  const maxTargetLevel = activeCount + (source.level === 0 ? 1 : 0);
+  if (targetLevel > maxTargetLevel) throw new Error(`Invalid level: ${targetLevel}`);
+
+  const target = normalized.find((provider) => provider.level === targetLevel);
+  if (!target) {
+    return normalizeProviders(normalized.map((provider) =>
+      provider.name === source.name ? { ...provider, level: targetLevel } : provider
+    ));
+  }
+
+  const sourceLevel = source.level > 0 ? source.level : activeCount + 1;
   return normalizeProviders(
     normalized.map((provider) => {
       if (provider.name === source.name) {
@@ -93,12 +114,39 @@ export function swapProviderLevel(providers: Provider[], providerName: string, t
 function normalizeProviderShape(value: unknown): Provider {
   const provider = readRecord(value, "provider");
   const mode = readString(provider, "mode");
+  const requestProfile = readOptionalRecord(provider.requestProfile, "provider.requestProfile");
   return {
     name: readString(provider, "name"),
     baseUrl: readString(provider, "baseUrl"),
     apiKey: readString(provider, "apiKey"),
     mode: mode === "ask" ? "ask" : "auto",
     level: readNumber(provider, "level", Number.MAX_SAFE_INTEGER),
-    model: readString(provider, "model")
+    model: readString(provider, "model"),
+    ...(requestProfile ? { requestProfile: normalizeRequestProfileShape(requestProfile) } : {})
   };
+}
+
+function normalizeRequestProfileShape(value: Record<string, unknown>): ProviderRequestProfile {
+  const verifiedProtocols = Array.isArray(value.verifiedProtocols)
+    ? value.verifiedProtocols.filter((item): item is "openai" | "anthropic" => item === "openai" || item === "anthropic")
+    : [];
+  return normalizeRequestProfile({
+    discoveryAuth: normalizeAuthScheme(value.discoveryAuth, "bearer"),
+    openaiAuth: normalizeAuthScheme(value.openaiAuth, "bearer"),
+    anthropicAuth: normalizeAuthScheme(value.anthropicAuth, "x-api-key"),
+    verifiedProtocols
+  });
+}
+
+function normalizeRequestProfile(value: ProviderRequestProfile): ProviderRequestProfile {
+  return {
+    discoveryAuth: normalizeAuthScheme(value.discoveryAuth, "bearer"),
+    openaiAuth: normalizeAuthScheme(value.openaiAuth, "bearer"),
+    anthropicAuth: normalizeAuthScheme(value.anthropicAuth, "x-api-key"),
+    verifiedProtocols: [...new Set(value.verifiedProtocols.filter((item) => item === "openai" || item === "anthropic"))]
+  };
+}
+
+function normalizeAuthScheme(value: unknown, fallback: ProviderAuthScheme): ProviderAuthScheme {
+  return VALID_AUTH_SCHEMES.has(value as ProviderAuthScheme) ? value as ProviderAuthScheme : fallback;
 }

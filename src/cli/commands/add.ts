@@ -1,20 +1,53 @@
 import { addProvider } from "../../core/providers/provider-service.js";
-import { getCachedModels, updateProvider } from "../../core/providers/provider-service.js";
+import { getCachedModels, getProviderPriorityOptions, listProviders, updateProvider } from "../../core/providers/provider-service.js";
 import { writeLog } from "../../core/logs/log-service.js";
+import { describeProviderRequestProfile } from "../../core/providers/provider-request-profile.js";
 import { promptSelect, promptText } from "../prompts/prompt.js";
 
-export async function runAddCommand(args: string[]): Promise<void> {
-  const [nameArg, baseUrlArg, apiKeyArg] = args;
-  const interactive = !nameArg || !baseUrlArg || !apiKeyArg;
-  const name = nameArg ?? await promptText("Provider name");
-  const baseUrl = baseUrlArg ?? await promptText("Base URL");
-  const apiKey = apiKeyArg ?? await promptText("API key");
+type AddCommandPrompts = {
+  text?: typeof promptText;
+  select?: typeof promptSelect;
+};
 
-  let provider = await addProvider({ name, baseUrl, apiKey });
-  if (interactive) {
+export async function runAddCommand(args: string[], prompts: AddCommandPrompts = {}): Promise<void> {
+  const askText = prompts.text ?? promptText;
+  const askSelect = prompts.select ?? promptSelect;
+  const [nameArg, baseUrlArg, apiKeyArg, modelArg] = args;
+  const interactive = !nameArg || !baseUrlArg || !apiKeyArg;
+  const name = nameArg ?? await askText("Provider name");
+  const baseUrl = baseUrlArg ?? await askText("Base URL");
+  const apiKey = apiKeyArg ?? await askText("API key");
+  let verifiedModel = modelArg?.trim() || "";
+  const existingProviders = interactive ? await listProviders() : [];
+  const level = interactive
+    ? await askSelect(
+        "Select priority (0 excludes automatic fallback)",
+        getProviderPriorityOptions(existingProviders).map(({ level: value, occupiedBy }) => ({
+          label: value === 0
+            ? "0 - excluded from automatic fallback"
+            : occupiedBy ? `${value} - replace ${occupiedBy}` : `${value} - lowest automatic priority`,
+          value
+        }))
+      )
+    : undefined;
+
+  let provider;
+  try {
+    provider = await addProvider({ name, baseUrl, apiKey, model: verifiedModel || undefined, level });
+  } catch (error) {
+    const isProbeFailure = error instanceof Error
+      && error.message.startsWith("Provider configuration probe failed:");
+    if (!interactive || verifiedModel || !isProbeFailure) throw error;
+    console.log(error instanceof Error ? error.message : String(error));
+    console.log("Automatic model discovery failed. Enter a known model for direct verification.");
+    verifiedModel = await askText("Model name");
+    if (!verifiedModel) throw error;
+    provider = await addProvider({ name, baseUrl, apiKey, model: verifiedModel, level });
+  }
+  if (interactive && !verifiedModel) {
     const models = await getCachedModels(provider.name);
     if (models.length) {
-      const model = await promptSelect(
+      const model = await askSelect(
         "Select default model",
         models.map((item) => ({ label: item, value: item }))
       );
@@ -26,6 +59,8 @@ export async function runAddCommand(args: string[]): Promise<void> {
   console.log(`Level: ${provider.level}`);
   console.log(`Mode: ${provider.mode}`);
   console.log(`Default model: ${provider.model || "(not detected)"}`);
+  console.log(`Detected request profile: ${describeProviderRequestProfile(provider)}`);
+  console.log(`Models: ${(await getCachedModels(provider.name)).join(", ")}`);
   await writeLog({
     category: "provider",
     action: "provider_add",

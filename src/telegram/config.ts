@@ -3,6 +3,7 @@ import os from "node:os";
 import { getTelegramBotConfigPath, getTelegramBotDbPath, getTelegramBotDir, getTelegramConfigPath, getTelegramDbPath } from "../core/config/paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../core/config/json-store.js";
 import { readBoolean, readNumber, readOptionalString, readString } from "../core/config/schema.js";
+import { normalizeProxyUrl } from "../core/network/proxy.js";
 import type { ClaudePermissionMode } from "../core/runner/claude-permission-policy.js";
 
 export type TelegramEngineName = "claude" | "codex";
@@ -64,7 +65,8 @@ export function normalizeTelegramConfig(value: unknown): TelegramConfig {
   const allowedUserIds = normalizeAllowedUserIds(input.allowedUserIds);
   const provider = readOptionalString(input, "provider");
   const model = readOptionalString(input, "model");
-  const proxyUrl = readOptionalString(input, "proxyUrl");
+  const rawProxyUrl = readOptionalString(input, "proxyUrl");
+  const proxyUrl = rawProxyUrl ? normalizeProxyUrl(rawProxyUrl) : null;
   const dbPath = readString(input, "dbPath", { fallback: defaults.dbPath }) || defaults.dbPath;
 
   return {
@@ -106,6 +108,9 @@ export function parseTelegramConfigValue(key: keyof TelegramConfig, rawValue: st
   }
   if (key === "defaultPermissionMode") {
     return normalizePermissionMode(value);
+  }
+  if (key === "proxyUrl") {
+    return normalizeProxyUrl(value) ?? undefined;
   }
   return value;
 }

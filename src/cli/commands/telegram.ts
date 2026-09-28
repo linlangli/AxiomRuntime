@@ -10,6 +10,7 @@ import {
   getTelegramLogPath,
   getTelegramPidPath
 } from "../../core/config/paths.js";
+import { checkProxyEndpoint, normalizeProxyUrl } from "../../core/network/proxy.js";
 import {
   describeTelegramConfig,
   loadBotConfig,
@@ -33,6 +34,7 @@ import {
 import { ensureTelegramLogFile, readRecentTelegramLogLines } from "../../telegram/log.js";
 import { checkTelegramApi, getTelegramProxyUrl } from "../../telegram/network.js";
 import { promptConfirm, promptSelect, promptText } from "../prompts/prompt.js";
+import { promptProxyUrl } from "../prompts/proxy.js";
 
 type TelegramSubcommand = "start" | "stop" | "status" | "config" | "logs" | "doctor"
   | "add" | "edit" | "remove" | "delete" | "list";
@@ -42,8 +44,6 @@ export type TelegramTargetArgs = {
   botName?: string;
   all: boolean;
 };
-
-export const TELEGRAM_PROXY_URL_PROMPT = "Proxy URL (include protocol, e.g. http://127.0.0.1:7890)";
 
 export async function runTelegramCommand(args: string[]): Promise<void> {
   const target = parseTelegramTargetArgs(args);
@@ -227,11 +227,15 @@ async function addBot(nameArg?: string): Promise<void> {
   const token = await promptText("Telegram bot token");
   if (!token.trim()) throw new Error("Token is required.");
   const allowedUserIds = await promptText("Allowed user IDs (comma-separated, empty for allowAll)");
-  const proxyUrl = await promptText(`${TELEGRAM_PROXY_URL_PROMPT} (empty to skip)`, { defaultValue: "" });
+  let proxyUrl = await promptProxyUrl({ optional: true });
+  if (proxyUrl && !await verifyTelegramProxy(token.trim(), proxyUrl)) {
+    console.log("Telegram proxy was not saved; continuing without a proxy.");
+    proxyUrl = undefined;
+  }
 
   const config: Partial<TelegramConfig> = {
     token: token.trim(),
-    ...(proxyUrl.trim() ? { proxyUrl: proxyUrl.trim() } : {})
+    ...(proxyUrl ? { proxyUrl } : {})
   };
   if (allowedUserIds.trim()) {
     config.allowedUserIds = allowedUserIds.split(/[,\s]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0);
@@ -444,9 +448,17 @@ async function runTelegramConfigCommand(args: string[], optionBotName?: string):
   if (nameOrAction === "set") {
     const [key, ...valueParts] = rest;
     if (!key || !valueParts.length) throw new Error("Usage: ai telegram config set <key> <value> [--bot <name>]");
+    const value = valueParts.join(" ");
+    if (key === "proxyUrl") {
+      const proxyUrl = normalizeProxyUrl(value);
+      const currentConfig = optionBotName ? await loadBotConfig(optionBotName) : await loadTelegramConfig();
+      if (proxyUrl && !await verifyTelegramProxy(currentConfig.token, proxyUrl)) {
+        throw new Error("Telegram proxy was not saved; the previous configuration was kept.");
+      }
+    }
     const config = optionBotName
-      ? await setNamedBotConfigValue(optionBotName, key, valueParts.join(" "))
-      : await setTelegramConfigValue(key, valueParts.join(" "));
+      ? await setNamedBotConfigValue(optionBotName, key, value)
+      : await setTelegramConfigValue(key, value);
     console.log(`Updated ${optionBotName ? `bot "${optionBotName}"` : "telegram"} config: ${key}`);
     printTelegramConfig(config, optionBotName);
     return;
@@ -512,10 +524,19 @@ async function editBotConfigInteractive(name: string): Promise<void> {
       config = await saveBotConfig(name, { ...config, defaultPermissionMode });
       continue;
     }
+    if (field === "proxyUrl") {
+      const proxyUrl = await promptProxyUrl({ currentUrl: config.proxyUrl, optional: true });
+      if (proxyUrl && !await verifyTelegramProxy(config.token, proxyUrl)) {
+        console.log("Previous Telegram proxy kept.");
+        continue;
+      }
+      if (proxyUrl !== undefined) config = await saveBotConfig(name, { ...config, proxyUrl: proxyUrl ?? undefined });
+      continue;
+    }
     const current = String(config[field as keyof TelegramConfig] ?? "");
     const value = field === "token"
       ? await promptText("token (leave empty to keep current)") || current
-      : await promptText(field === "proxyUrl" ? TELEGRAM_PROXY_URL_PROMPT : field, { defaultValue: current });
+      : await promptText(field, { defaultValue: current });
     config = await setBotConfigValue(name, field, value);
   }
 }
@@ -557,10 +578,19 @@ async function editTelegramConfigInteractive(): Promise<void> {
       config = await saveTelegramConfig({ ...config, defaultPermissionMode });
       continue;
     }
+    if (field === "proxyUrl") {
+      const proxyUrl = await promptProxyUrl({ currentUrl: config.proxyUrl, optional: true });
+      if (proxyUrl && !await verifyTelegramProxy(config.token, proxyUrl)) {
+        console.log("Previous Telegram proxy kept.");
+        continue;
+      }
+      if (proxyUrl !== undefined) config = await saveTelegramConfig({ ...config, proxyUrl: proxyUrl ?? undefined });
+      continue;
+    }
     const current = String(config[field as keyof TelegramConfig] ?? "");
     const value = field === "token"
       ? await promptText("token (leave empty to keep current)") || current
-      : await promptText(field === "proxyUrl" ? TELEGRAM_PROXY_URL_PROMPT : field, { defaultValue: current });
+      : await promptText(field, { defaultValue: current });
     config = await setTelegramConfigValue(field, value);
   }
 }
@@ -578,6 +608,24 @@ async function runTelegramDoctor(nameArg?: string): Promise<void> {
   }
   console.log(`Telegram API: failed${result.status ? ` (HTTP ${result.status})` : ""}`);
   console.log(result.error ?? "Unknown error");
+}
+
+async function verifyTelegramProxy(token: string, proxyUrl: string): Promise<boolean> {
+  console.log(`Checking proxy endpoint: ${proxyUrl}`);
+  const endpoint = await checkProxyEndpoint(proxyUrl);
+  if (!endpoint.ok) {
+    console.log(`Proxy check failed: ${endpoint.error ?? "connection failed"}`);
+    return false;
+  }
+  console.log(`Proxy endpoint reachable (${endpoint.durationMs}ms); checking Telegram API...`);
+  const telegram = await checkTelegramApi(token, proxyUrl);
+  if (telegram.ok) {
+    console.log(`Telegram API reachable through proxy${telegram.username ? ` (@${telegram.username})` : ""}.`);
+    return true;
+  }
+  console.log(`Proxy check failed: Telegram API unavailable${telegram.status ? ` (HTTP ${telegram.status})` : ""}.`);
+  if (telegram.error) console.log(telegram.error);
+  return false;
 }
 
 async function showTelegramLogs(args: string[], optionBotName?: string): Promise<void> {

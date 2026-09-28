@@ -2,6 +2,9 @@ import type { CliToolType } from "../types.js";
 
 export function isModelCompatible(tool: CliToolType, model: string): boolean {
   const value = model.toLowerCase();
+  if (value.includes("image") || value.includes("dall-e")) {
+    return false;
+  }
   if (tool === "claude") {
     return value.includes("claude");
   }

@@ -1,6 +1,6 @@
 import { getCachePath } from "./paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
-import type { CacheFile, CliToolType, HealthStatus, ProviderCache } from "../types.js";
+import type { CacheFile, CliToolType, HealthStatus, ProviderCache, ProviderToolCheck } from "../types.js";
 
 const EMPTY_CACHE: CacheFile = { providers: {} };
 const PROVIDER_CIRCUIT_FAILURE_THRESHOLD = 3;
@@ -132,6 +132,9 @@ function normalizeCache(cache: CacheFile): CacheFile {
 function applyProviderHealth(previous: ProviderCache | undefined, next: ProviderCache): ProviderCache {
   const normalizedPrevious = previous ? normalizeProviderCache(previous) : undefined;
   const normalizedNext = normalizeProviderCache(next);
+  if (!normalizedNext.toolChecks && normalizedPrevious?.toolChecks) {
+    normalizedNext.toolChecks = normalizedPrevious.toolChecks;
+  }
   const previousScore = normalizedPrevious?.healthScore ?? DEFAULT_HEALTH_SCORE;
 
   if (normalizedNext.status === "ok") {
@@ -168,6 +171,7 @@ function applyProviderHealth(previous: ProviderCache | undefined, next: Provider
 
 function normalizeProviderCache(value: ProviderCache): ProviderCache {
   const status = normalizeHealthStatus(value.status);
+  const toolChecks = normalizeToolChecks(value.toolChecks);
   return {
     status,
     models: Array.isArray(value.models) ? value.models.map(String).filter(Boolean) : [],
@@ -184,8 +188,29 @@ function normalizeProviderCache(value: ProviderCache): ProviderCache {
           : status === "error"
             ? 0
             : DEFAULT_HEALTH_SCORE
-    )
+    ),
+    ...(toolChecks ? { toolChecks } : {})
   };
+}
+
+function normalizeToolChecks(value: ProviderCache["toolChecks"]): ProviderCache["toolChecks"] | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const result: Partial<Record<CliToolType, ProviderToolCheck>> = {};
+  for (const tool of ["claude", "codex"] as const) {
+    const check = value[tool];
+    if (!check || typeof check !== "object") continue;
+    result[tool] = {
+      status: check.status === "ok" || check.status === "error" || check.status === "unknown" || check.status === "not_applicable"
+        ? check.status
+        : "error",
+      model: normalizeNullableString(check.model),
+      checkedAt: normalizeNullableString(check.checkedAt) ?? new Date(0).toISOString(),
+      error: normalizeNullableString(check.error),
+      attempts: normalizeNonNegativeInteger(check.attempts),
+      durationMs: normalizeNonNegativeInteger(check.durationMs)
+    };
+  }
+  return Object.keys(result).length ? result : undefined;
 }
 
 function normalizeHealthStatus(value: unknown): HealthStatus {

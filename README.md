@@ -43,10 +43,12 @@ README 需要区分“已经能用”和“只是规划”。下面的状态以�
 ai provider add main https://api.example.com sk-xxx
 ai provider add backup https://backup.example.com sk-yyy
 ai provider list
+ai models main
+ai check main
 ai status
 ```
 
-添加时会测试连通性、探测模型并建立缓存。`ai use` 会根据 Provider 健康状态、当前 CLI 可兼容的模型和 `level` 顺序选择候选；实际子进程非零退出时，还会继续尝试下一个 Provider。
+添加时会测试连通性、探测模型并建立缓存，同时让你选择 `0..N` 优先级；选择已占用等级时，原 Provider 会移到队尾，`level: 0` 只允许显式使用，不进入自动切换。`ai use` 会根据健康状态、CLI 模型兼容性和 `level` 建立候选链：Claude Code 只在 Claude 模型 Provider 间切换，Codex 只在 Codex/OpenAI 兼容模型 Provider 间切换。请求在产生有效输出前失败时，会在同一个 Claude Code/Codex 会话中切换 Provider、改写为备用模型并提示用户；已经产生文字、推理或工具参数后不会静默重放，用户在当前 CLI 中重新提交或重试即确认切换。
 
 ### 2. 多开窗口，每个窗口使用不同 Provider
 
@@ -69,7 +71,7 @@ ai use codex fenno gpt-5.5
 
 `ai use` 是临时注入，不是全局切换：
 
-- **Claude Code**：生成临时 `--settings` 文件，注入 `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY` 和模型，进程结束后清理；不修改 `~/.claude/settings.json`。
+- **Claude Code**：生成临时 `--settings` 文件，注入 `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY` 和模型，进程结束后清理；本次进程会移除继承的 `ANTHROPIC_AUTH_TOKEN`，并在附加 settings 中显式遮蔽用户 settings 里的同名变量，避免双认证警告，但不修改 `~/.claude/settings.json` 或当前 shell。
 - **Codex CLI**：通过本次进程的 `-c model_provider=...`、Provider 的 `base_url` 和 `env_key`，配合进程级 `OPENAI_API_KEY` 环境变量完成路由；不修改全局 `auth.json` 或 `config.toml`。Codex 本身也支持环境变量，AxiomRuntime 只是把它们限制在当前进程内。
 - **直接运行原生命令**：你仍然可以直接执行 `claude` 或 `codex`，它们继续使用自己的原生配置，不受 `ai use` 影响。
 
@@ -124,19 +126,23 @@ ai setup --skip-provider
 
 ```bash
 ai add                                             # 交互式添加 Provider
-ai provider add <name> <base-url> <api-key>
+ai provider add <name> <base-url> <api-key> [model] # /models 不可用时可显式指定模型验证
 ai provider list                                   # 只读配置，不联网
 ai provider edit
 ai provider delete <name>
 
-ai status                                          # 刷新健康度、模型缓存和用量
+ai models [provider]                              # GET /models 后列出完整模型；省略名称时交互选择
+ai check [provider]                               # 单独真实验证一个 Provider；省略名称时交互选择
+ai status                                          # 真实验证 Claude/Codex 可用性、刷新模型缓存和用量
 ai use claude [provider] [model]
 ai use codex [provider] [model]
 ai last                                            # 沿用上次选择
 ai doctor                                          # 检查并安全修复内部状态
 ```
 
-`ai status` 默认只做连通性和模型检查，不发真实对话请求。`ai doctor` 可以重建缺失或损坏的缓存、用量和会话文件，但 Provider 配置无效时只报告，不会覆盖凭证。
+`ai status` 会先执行不消耗 Token 的模型发现，再为每个 Provider 最多选择一个 Claude 和一个 Codex 代表模型做真实调用；请求使用最短输入、输出上限为 1 Token，且不会自动重试产生 Token 的请求。代表模型最多等待 30 秒；如果本地超时但上游可能已经完成，状态显示为 `unknown`，不会误判为 Provider 不可用。`ai doctor` 可以重建缺失或损坏的缓存、用量和会话文件，但 Provider 配置无效时只报告，不会覆盖凭证。
+
+如果 Provider 不开放 `GET /models`，交互式 `ai add` 会提示输入官网给出的模型名并直接验证对应协议；脚本可将模型作为第四个参数传入。只有真实模型请求成功才会保存配置，Runtime 不会自动猜测模型名。
 
 ### 会话、日志、上下文与图片
 
@@ -155,6 +161,17 @@ ai image <provider> <model> "数字插画"
 ```
 
 图片生成调用已配置 Provider 的 OpenAI-compatible `/v1/images/generations`。`b64_json` 会以 `0600` 权限保存到当前目录；远程 `https` 图片只输出 URL，不会自动下载不受信任的地址。图片请求最长等待 120 秒，失败后会尝试下一个兼容 Provider。
+
+### AI Runtime 代理
+
+```bash
+ai proxy                                      # 交互输入主机/IP与端口
+ai proxy 127.0.0.1 8081                       # 自动补为 http://127.0.0.1:8081
+ai proxy http://127.0.0.1:8081                # 也兼容完整 URL
+ai proxy --disable                            # 非交互清除
+```
+
+已有代理时，`ai proxy` 会先显示当前地址，再提供编辑、关闭和取消选项。新增或编辑会先做一次不消耗模型 Token 的代理端点连接检查；连接失败时显示原因并保留原配置。该代理保存在 `~/.ai-gateway/runtime.json`，用于 AxiomRuntime 自身请求，以及通过 `ai use` 启动的 Claude Code / Codex。它不会修改两个原生 CLI 的永久配置；本地 execution-scoped Transport Proxy 会自动加入 `NO_PROXY`，避免代理回环。
 
 ### Codex App 的持久配置
 
@@ -190,7 +207,7 @@ ai telegram stop --bot ops
 ai telegram delete --bot ops
 ```
 
-Bot 中可使用 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/provider`、`/usage`、`/remember`、`/forget`、`/memories`、`/pin`、`/unpin`、`/terminal`、`/restart` 和 `/help`。如果本机无法直连 Telegram API，可设置：
+Bot 中可使用 `/claude`、`/codex`、`/reset`、`/fresh`、`/cwd`、`/config`、`/provider`、`/usage`、`/remember`、`/forget`、`/memories`、`/pin`、`/unpin`、`/terminal`、`/restart` 和 `/help`。如果本机无法直连 Telegram API，可在新增或编辑 Bot 时按提示分别输入代理主机/IP与端口；已有代理会显示编辑、关闭和取消选项。新地址会依次检查代理端点和 Telegram `getMe`，失败时回退原配置，也兼容直接设置完整地址：
 
 ```bash
 ai telegram config set proxyUrl http://127.0.0.1:7890 --bot ops
@@ -252,6 +269,7 @@ AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 
 ```text
 ~/.ai-gateway/providers.json       Provider 配置
+~/.ai-gateway/runtime.json         Runtime 代理等运行配置
 ~/.ai-gateway/.ai-cache.json       模型缓存、健康状态和上次选择
 ~/.ai-gateway/usage.json           用量账本
 ~/.ai-gateway/model-pricing.json   本地成本估算价格

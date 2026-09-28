@@ -118,20 +118,35 @@ Provider 就是你的 API 服务商（官方 API 或中转站）。
 ```bash
 ai add                                              # 交互式，推荐
 ai provider add 我的站 https://example.com sk-xxx   # 一行搞定
+ai provider add 我的站 https://example.com sk-xxx gpt-5.5  # 显式模型回退
 ```
 
-添加时自动完成：写入配置 → 设 `mode: auto` → 分配下一个优先级 → 测连通性 → 探测模型 → 设默认模型。
+添加时自动完成：选择 `0..N` 优先级 → 探测 Base URL 与认证方式 → 获取模型列表 → 用每种实际存在的文本协议各一个代表模型做最多 1 token 的可用性验证 → 设 `mode: auto` → 写入配置和模型缓存 → 选择默认模型。已有 5 个自动 Provider 时会提供 `0, 1, 2, 3, 4, 5, 6`；选择已占用等级时，新 Provider 占据该等级，原 Provider 移到队尾。`level: 0` 表示只允许显式选择，不参与自动切换。全部候选均失败时不会写入 Provider。
+
+Runtime 会先尝试你输入的 Base URL，再按需增加或移除末尾 `/v1`；认证只在 `Bearer`、`x-api-key`、`api-key` 等可由当前 API Key 安全派生的已知方式中选择，不会暴力猜测任意私有 header。探测成功后终端会列出最终 URL、认证方式和模型。只有超时、`429`、`5xx` 会短暂重试，确定性的认证或路径错误不会重复请求。
+
+部分 Provider 不开放 `GET /models`，会返回 `404`、`451` 等状态。交互式添加会在自动发现失败后要求输入官网明确提供的模型名，并优先通过 Responses API（Claude 模型则通过 Messages API）做一次最小真实验证；脚本可把模型作为第四个参数传入。验证成功后只缓存该手工模型，失败则不保存配置。Runtime 不会自动猜测模型名。
 
 ### 查看
 
 ```bash
 ai provider list      # 只看配置，不联网
+ai models             # 交互选择并刷新一个 Provider 的完整模型列表
+ai models 我的站      # 只通过 GET /models 查询指定 Provider
+ai check              # 交互选择并检查一个 Provider
+ai check 我的站       # 只检查指定 Provider
 ai status             # 联网刷新健康度 + 看用量
 ```
 
 `ai provider list` 以卡片形式展示，`level: 1` 会标注为默认服务商。API Key 显示为掩码（`sk-d****0000`）。
 
-`ai status` 会做一次轻量检查：验证连通性、刷新模型缓存、确认 Claude/Codex 各自的有效 Base URL 和兼容模型。**不发真实对话请求，默认不消耗 token。**
+`ai models [provider]` 只调用选中 Provider 的 `GET /models`，更新该 Provider 的完整模型缓存并逐行列出模型名，不会调用任何模型做推理，因此不产生推理 Token。省略名称时进入交互选择；提供名称时精确匹配。模型发现失败时保留原缓存和真实健康状态。
+
+如果 Provider 本身不开放模型目录，`ai models [provider]` 会如实报告 `404`、`451` 等目录错误；这不代表已缓存模型不可用。请用 `ai check [provider]` 对缓存模型做最小真实验证。
+
+`ai check [provider]` 复用与 `ai status` 相同的真实验证规则，但只刷新并检查一个 Provider。省略名称时进入交互选择；提供名称时精确匹配，名称不存在会直接报错，不会退回检查其他 Provider。适合在 Provider 较多时降低等待时间和验证 Token 消耗。
+
+`ai status` 会先刷新模型列表，再为每个 Provider 分别选择最多一个 Claude 代表模型和一个 Codex 代表模型做真实调用验证。Codex 优先验证 Responses API，只有明确不支持时才回退 Chat Completions。对于已通过手工模型验证、但不开放 `GET /models` 的 Provider，会使用已验证缓存模型继续检查，不会因为目录返回 `451` 而误判不可用。不存在对应模型族时不会发起该协议请求；每次验证使用最短输入、把输出限制为 1 token，并且不自动重试产生 Token 的请求。代表模型验证最多等待 30 秒：明确成功显示 `ready`，明确失败显示 `provider-error`；如果本地等待超时，上游仍可能已经处理成功，因此显示 `unknown` 并保留该 Provider 的运行候选资格。
 
 ### 编辑与删除
 
@@ -146,7 +161,8 @@ ai provider delete 我的站
 
 - `mode` 只能选 `ask` 或 `auto`
 - `model` 从已探测到的模型里选，不用手输
-- 改 `level` 时如果目标等级被占用，两个 Provider 会**交换**等级
+- 修改 `baseUrl` 或 `apiKey` 时先验证新配置；失败会保留原 Provider 和模型缓存
+- 改 `level` 时，当前项会显示为 `current: Provider名称`；如果目标等级被占用，两个 Provider 会**交换**等级；改为 `0` 后退出自动候选链
 - 删除会同时清理配置和模型缓存
 
 > **安全提示：`apiKey` 目前以明文保存在 `providers.json`。** 请确认该文件权限受限，且绝不提交到仓库。加密存储是规划中的能力，见第 11 节。
@@ -169,14 +185,52 @@ ai last                                # 沿用上次的工具、服务商和模
 
 - 不指定服务商 → 用 `level: 1` 那个
 - 不指定模型 → 用该服务商的默认 `model`
+- 显式指定服务商 → 不先刷新全部 Provider，直接使用该 Provider 的已缓存模型并实际尝试；即使健康缓存暂时为 `error`，也不会在请求前静默跳过
 - 当前服务商不可用 → 按 `level` 顺序自动降级
+- `level: 0` → 不参与自动降级；显式指定该 Provider 时只使用它
+- Claude Code 只会选择提供 Claude 模型的 Provider；Codex 只会选择提供 Codex/OpenAI 兼容模型的 Provider，不会跨模型族切换
 - Codex 认 `gpt`、`codex`、`grok`、`o` 系列和 `openai` 开头的模型名
+
+### 请求级自动切换
+
+`ai use` 只启动一个 Claude Code 或 Codex 进程，候选 Provider 由同一个 execution-scoped Transport Proxy 管理。真正带请求体的模型 `POST` 遇到连接失败、认证失败、`404`、`408`、`409`、`425`、`429`、`5xx`，或流式响应在有效内容出现前中断时，Runtime 会丢弃失败尝试，按 `level` 切到下一个 Provider，并将请求中的 `model` 改为该 Provider 的候选模型。原生 CLI 进程没有重启，因此它发送的完整会话上下文仍在同一请求中。
+
+一旦已经向 Claude Code/Codex 返回文字、推理增量或工具参数，Runtime 不会自动重放，避免重复输出或重复工具调用。此时 Runtime 只记下候选 Provider，**下一个**经过代理的请求才真正切过去。`400`、`413`、`422` 等通常由请求本身导致的错误不会跨 Provider 重试。确认动作依赖你在当前 CLI 里重新提交或重试，不会抢占原生 TUI 弹出额外的 `y/n` 输入框。
+
+**两处与上述描述不符的实际行为**（已核实，修复前请按实际行为理解）：
+
+| 场景 | 实际行为 |
+|---|---|
+| 无请求体 `GET` 探测（如 `/v1/models`）**在连接层失败**——连不上、socket 断开、响应头超时 | **会**触发 Provider 轮转，并且**永久改变**后续请求的落点。只有基于 HTTP 错误状态码（`404`/`429`/`5xx` 等）的切换判定才受「必须是带请求体的 `POST`」约束 |
+| 处于「等待确认切换」状态时，CLI 自发的**无关请求**（包括无请求体 `GET`）先到达 | 该请求会**替你消耗掉**待确认状态并记为已确认切换，不需要你真的重新提交 |
+
+两者都不会造成重复输出或重复计费——切换本身仍然只对失败的尝试生效。影响是**落点可能比你预期的更早发生变化**：想确认这次请求最终由谁承接，用 `ai log --print --trace <traceId>` 看终止跳，而不是假设它还在启动时选定的 Provider 上。
+
+**提示显示在哪里**：原生 CLI 的 TUI 独占终端并整屏重绘，因此 Runtime **不会**在会话期间往终端插入提示行——那会打乱 TUI 的排版。切换提示按通道分两处呈现：
+
+- **会话期间**：已输出部分内容后中断时，提示作为协议内的错误事件写回当前响应流（Claude 用 `api_error`，Codex 用 `provider_failover_pending`），由原生 CLI 按自己的样式渲染，格式不会错乱。
+- **会话结束后**：`ai use` 退出、终端所有权回到 Runtime 时，统一打印本次执行的切换汇总，包含每次切换的来源、目标、原因，以及用 `ai log --print --trace <traceId>` 查看完整链路的入口。有效输出前的自动切换不打断当前请求，只计入这份汇总。
+
+### 怎么知道当前在用哪个 Provider
+
+因为上面那条限制，`ai use` **运行期间**终端里看不到当前落在哪个 Provider —— 原生 TUI 的画面归它自己，Runtime 不往里插字节。目前可用的查看方式都是**事后**的：
+
+```bash
+# 退出 ai use 后，终端会打印本次执行的切换汇总（发生过切换才打印）
+ai log --print --trace <traceId>   # 按链路回看这次请求试过的每个 Provider
+ai session list                    # 会话记录里的服务商和模型
+ai last                            # 上次选择的工具 / 服务商 / 模型
+```
+
+> 已知限制：`ai session list` 和 `ai last` 记的是**启动时选定**的 Provider。如果执行期间发生过请求级自动切换，实际承接请求的 Provider 要用 `ai log --trace` 确认。
+>
+> 实时查看是 Web 面板的职责，设计稿 `docs/AxiomRuntime.pen` 已确立两处落点：侧栏「当前 provider」卡（五屏共享，显示 provider / level / model / 切换来源 / traceId）和「使用与日志」页首项的「进行中」链路卡（逐跳展示已试过的 Provider，以及是否在等待你重新提交以确认切换）。**Web 面板本身仍是 🔴 未实现**，见第 13 节。
 
 ### 它对你的环境做了什么
 
 这部分值得了解，因为涉及到会不会污染你现有的配置：
 
-**Claude Code**：生成一个临时 `--settings` 文件，把 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 写进去再启动。**不碰 `~/.claude/settings.json`。**
+**Claude Code**：生成一个临时 `--settings` 文件，把 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 写进去再启动。为避免 Claude 同时看到两套认证，本次子进程会移除继承的 `ANTHROPIC_AUTH_TOKEN`，临时 settings 还会用空值遮蔽用户 settings 里的同名变量；**不碰 `~/.claude/settings.json`，也不修改当前 shell。**
 
 **Codex**：通过本次子进程的 `-c model_provider=...` 参数固定服务商，用 `env_key = "OPENAI_API_KEY"` 读注入的 Key。**不碰全局 `auth.json` 和 `config.toml`**，直接执行 `codex` 的行为不受影响。
 
@@ -187,6 +241,20 @@ ai last                                # 沿用上次的工具、服务商和模
 **用量记录**：两个引擎的模型请求都经过一个本次执行专属的本地代理转发，服务商返回的真实用量按服务商/模型写入 `usage.json`。终端交互方式完全不变。
 
 **日志**：记录服务商、Base URL、模型、启动参数和 API Key 指纹，**不记完整 Key**。
+
+### 为 Runtime 和 AI CLI 设置代理
+
+```bash
+ai proxy                              # 交互输入代理主机/IP与端口
+ai proxy 127.0.0.1 8081               # 自动补全为 http://127.0.0.1:8081
+ai proxy 127.0.0.1:8081               # 兼容 host:port
+ai proxy http://127.0.0.1:8081        # 兼容完整 URL
+ai proxy --disable                    # 非交互清除
+```
+
+已有代理时，交互命令会先显示当前地址，再提供 `Edit proxy`、`Disable proxy`、`Cancel` 三个选项，不再通过输入 `off` 关闭。新增或编辑会先做一次零 Token 的代理 host/port TCP 连通检查；失败时显示原因并保留原配置。配置成功后写入 `~/.ai-gateway/runtime.json`。之后 AxiomRuntime 的 Provider 探测、状态检查等网络请求，以及通过 `ai use` 启动的 Claude Code / Codex 都使用该代理。子 CLI 仍先连接本次执行的本地 Transport Proxy，Runtime 会自动把 `127.0.0.1`、`localhost` 和 `::1` 加入 `NO_PROXY`，避免代理回环。
+
+`ai proxy` 不修改 `~/.claude`、`~/.codex` 或原生命令的永久配置；直接运行 `claude` / `codex` 不受影响。需要持久修改 Codex App 时，继续使用后文的 `ai set codex proxy`。
 
 ## 6. 生成图片
 
@@ -332,7 +400,7 @@ ai telegram config set defaultCwd /workspace/ops --bot ops
 | 执行命令 | `/terminal <命令>` 在工作目录执行，最长 60 秒，高风险命令仍需确认 |
 | 费用 | `/usage` 优先用服务商返回的 cost，只有 token 时按 `model-pricing.json` 估算 |
 
-**代理**：本机连不上 `api.telegram.org` 时，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。地址要带协议，例如 `http://127.0.0.1:7890`。
+**代理**：本机连不上 `api.telegram.org` 时，设置 `proxyUrl` 或环境变量 `HTTPS_PROXY` / `ALL_PROXY`。交互新增或编辑 Bot 时会分别询问主机/IP与端口；输入 `127.0.0.1` 和 `8081` 会自动保存为 `http://127.0.0.1:8081`。已有代理会先显示当前地址并提供编辑、关闭和取消选项；新地址会先做零 Token 端点连通检查，再通过该代理调用 Telegram `getMe`。失败时提示并回退：新增 Bot 不保存代理，编辑已有 Bot 则保留旧代理。旧的 `host:port` 和完整 URL 仍兼容。
 
 **多 Bot 隔离**：每个 Bot 的配置、PID、日志、会话分别存在 `~/.ai-gateway/telegram/bots/<name>.json|.pid|.log|.sqlite`。在某个 Bot 里改服务商只影响它自己。
 
@@ -388,11 +456,22 @@ ai doctor --deep --tool codex # 深度检查，会真实调用模型
 ```bash
 ai log                  # 打开日志文件
 ai log --print 100      # 打印最近 100 条
+ai log --print --trace trc_70d90ad64d1846bf   # 只看这一条调用链路
 ai context              # 生成项目上下文到 .ai-gateway/context.md
 ai context --print
 ```
 
 日志包含使用痕迹、报错、健康检查、降级策略执行和诊断记录，文件在 `~/.ai-gateway/.ai-gateway.log`。
+
+**按调用链路查看**：一次请求、一条 Telegram 消息、一次 `ai use` 会在入口生成一个 `traceId`，该次执行涉及的所有日志都带上它——包括熔断跳过、每次 provider 自动切换，以及标明最终由谁承接的终止跳。`--print` 输出里每条日志会打印 `trace:` 行，拿这个值配合 `--trace` 就能把一次请求试过的服务商按顺序完整看一遍：
+
+```
+1. [WARN ] strategy / fallback_skip_provider          legacy-gw 熔断中跳过
+2. [WARN ] strategy / runtime_server_provider_fallback openrouter HTTP 429
+3. [INFO ] strategy / runtime_server_request_settled   由 zhipu 承接（第 2 跳，fellBack=true）
+```
+
+内网 API 服务的 `x-request-id` 响应头即该请求的 `traceId`，可直接用它反查链路。
 
 `ai context` 汇总项目路径、Git 分支和最近提交、`git status`、`git diff --stat`、`package.json` scripts、文件树摘要、关键文档摘要和最近日志。自动排除 `node_modules`、`dist`、`.git`、`providers.json`、`usage.json`、`.env`、`*.key`、`*.pem` 等。
 
@@ -445,6 +524,8 @@ ai memory embedding clear
 ai help          # 打开 HTML 命令手册
 ai --version
 ```
+
+> `ai help` 当前用系统默认程序打开独立的 `USAGE.html`。设计稿 `docs/AxiomRuntime.pen` 已补充「帮助中心」屏（`Screen Help`），把这份手册并入 Web 管理页的侧边栏导航；Web 面板本身仍是 🔴 未实现。
 
 ---
 
@@ -549,3 +630,5 @@ Node.js 版本低于 22.19.0。升级后重新安装，别忽略警告。
 
 - `ai provider list` 和 `ai status` 显示掩码 API Key（保留首末 4 位）。目标是只显示「已配置 / 缺失」状态，录屏分享前请注意
 - 编辑 `apiKey` 时当前值会作为输入默认值显示
+- `ai use` 运行期间无法实时查看当前 Provider（原生 TUI 独占终端），只能退出后看切换汇总或 `ai log --trace`；实时视图依赖未实现的 Web 面板
+- `ai session list` / `ai last` 记的是**启动时**选定的 Provider，执行期间发生的请求级自动切换不回写，实际承接者用 `ai log --trace` 确认

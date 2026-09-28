@@ -93,10 +93,11 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | 增删改查 | 🟢 | `ai provider add/list/edit/delete`，交互与一行式两种 |
-| 连通性检查 | 🟢 | 添加时自动测试，`ai status` 刷新 |
-| 模型发现 | 🟢 | 自动探测并缓存可用模型 |
-| 优先级 | 🟢 | `level` 字段；改 level 时占用则交换 |
-| 引擎兼容性过滤 | 🟢 | Codex 识别 `gpt`/`codex`/`grok`/`o`/`openai` 前缀 |
+| 连通性检查 | 🟢 | 添加时自动测试；`ai check [provider]` 单独检查一个 Provider，`ai status` 检查全部 Provider；每个 Provider 最多验证一个 Claude 和一个 Codex 代表模型，以不自动重试的 1-token 调用展示协议可用性；30 秒超时记为 `unknown` 而非误报失败 |
+| 模型发现 | 🟢 | 自动探测并缓存模型目录；`ai models [provider]` 只通过 `GET /models` 刷新并列出指定 Provider 的完整模型，不产生推理 Token |
+| 自适应连接配置 | 🟢 | 输入 Base URL 和 API Key 后，以零 Token 模型发现 + 每协议最多一次 1-token 成功验证，自动选择 `/v1` 与已知认证 header；目录不可用时可显式提供模型并直接验证 Responses/Messages，禁止猜测模型；全部失败则拒绝保存 |
+| 优先级 | 🟢 | 添加时选择 `0..N`；正整数按顺序自动切换，占用则交换到队尾；`level: 0` 只允许显式使用 |
+| 引擎兼容性过滤 | 🟢 | Claude Code 只选择 Claude 模型；Codex 只选择 `gpt`/`codex`/`grok`/`o`/`openai` 兼容模型；自动切换不跨模型族 |
 | Base URL 自适配 | 🟢 | Claude 去 `/v1`，Codex 保留 |
 | 健康状态缓存 | 🟢 | 写入 `.ai-cache.json` |
 | API Key 加密 | 🔴 | **明文存 `providers.json`** |
@@ -106,9 +107,11 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
-| 启动 Claude Code | 🟢 | 临时 `--settings`，不碰 `~/.claude/settings.json` |
+| 启动 Claude Code | 🟢 | 临时 `--settings`，不碰 `~/.claude/settings.json`；execution scope 删除进程继承的 `ANTHROPIC_AUTH_TOKEN`，并以空值遮蔽用户 settings 中的同名变量，避免与 Provider API Key 冲突 |
 | 启动 Codex | 🟢 | `-c model_provider=` + `env_key`，不碰全局 `auth.json`/`config.toml` |
-| 运行时降级 | 🟢 | 子进程非 0 退出后自动试下一候选 |
+| 运行时降级 | 🟡 | `ai use` 在同一原生 CLI 会话内对模型 POST 做请求级切换；有效输出前失败自动重试，已有输出则等待用户重新提交/重试确认。**两处偏差**：`canFailover` 守卫只覆盖 HTTP 状态码判定，无请求体 GET 探测在连接层失败（socket 断开 / 响应头超时）时仍会轮转并永久改变落点；待确认状态在读请求体之前消费，不区分方法，CLI 自发的无关请求会替用户确认切换 |
+| 切换提示不破坏 TUI | 🟢 | 会话期间提示走协议内错误事件由原生 CLI 渲染，退出后再打印切换汇总；父进程不在 TUI 重绘期间写终端 |
+| Runtime 出站代理 | 🟢 | `ai proxy` 显示当前状态并提供编辑/关闭选项；分离输入 host/port、自动补协议，零 Token 连通检查成功后才保存并作用于 Runtime 请求及其启动的 Claude/Codex；不修改原生配置 |
 | root 权限约束 | 🟢 | UID 0 下 `bypassPermissions` 强制降级为 `default` |
 | 会话记录 | 🟢 | 工具、服务商、模型、路径、起止、退出状态 |
 | 会话续用 | 🟡 | **复用启动参数**，不恢复 Claude/Codex 原生聊天上下文 |
@@ -157,7 +160,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 命令执行 | 🟢 | `/terminal`，60 秒上限，高风险需确认 |
 | 显式记忆 | 🟢 | `/remember` `/forget` `/memories` |
 | 自动记忆 | 🔴 | **普通聊天不自动记录** |
-| 代理支持 | 🟢 | `proxyUrl` 或 `HTTPS_PROXY`/`ALL_PROXY` |
+| 代理支持 | 🟢 | `proxyUrl` 或 `HTTPS_PROXY`/`ALL_PROXY`；交互显示当前状态和编辑/关闭选项，分离输入 host/port，并在保存前验证端点与 Telegram `getMe`，失败回退旧配置 |
 
 ### 3.6 记忆 🟡
 
@@ -425,6 +428,48 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 
 每个页面必须有 `empty` / `loading` / `degraded` / `permission-denied` / `partial-failure` 状态。危险操作必须展示影响范围、二次确认和 operation progress。
 
+### 8.1 调用链路可视化（R0 设计基线）🔴
+
+设计稿位于 `docs/AxiomRuntime.pen`，含运行时纵览、服务商、使用与日志、命令中心、帮助中心五屏。其中"使用与日志"页确立了 **调用链路（trace）视图** 作为 Execution & Audit 的默认形态：日志不以扁平事件流呈现，而按 `requestId` 聚合成一次请求的完整 provider 调用链路。
+
+链路卡片的每一跳（hop）必须展示：provider 的 `level`、provider 名称、触发的日志 `action`、该跳结果（成功 / 失败 / 跳过）、耗时，以及来自日志 `metadata` 的原因说明。四类典型链路必须可区分：直连成功、自动切换后成功、熔断跳过后降级、全部候选失败。
+
+数据来源均为已落库的 `writeLog` 事件，Web 只做聚合与呈现，不重算路由。
+
+链路聚合键是 `LogEvent.traceId` 🟢：一次请求 / 一条消息 / 一次 `ai use` 在入口处生成一个 traceId，之后候选解析、每次切换、终止跳全部复用它。HTTP 入口直接复用 `requestId` 作为 traceId，`x-request-id` 响应头因此可直接反查链路。历史日志没有该字段，读取方必须容忍缺失。
+
+| 链路语义 | 日志 action | 关键 metadata |
+|---|---|---|
+| 候选解析 | `provider_resolved` / `provider_resolved_exact` | `provider`、`tool`、`model`、`requestedProvider` |
+| 熔断 / 健康 / 无模型跳过 | `fallback_skip_provider` | `reason`（`circuit_open` / `health_error` / `no_compatible_model`）、`level`、`circuitOpenUntil` |
+| 请求级切换 | `runtime_server_provider_fallback` | `requestId`、`attempt`、`totalCandidates`、`level`、`error` |
+| 会话级切换 | `fallback_applied` / `runtime_fallback_retry` / `runtime_provider_fallback_retry` | `from`、`to`、`nextModel`、`attempt`、`error` |
+| 终止跳（成功） | `runtime_server_request_settled` / `tool_run_settled` / `runtime_provider_settled` | `provider`、`attempt`、`fellBack`、`status` |
+| 终止跳（全败） | `runtime_server_candidates_exhausted` / `tool_candidates_exhausted` / `runtime_provider_candidates_exhausted` | `attempted`、`totalCandidates`、`status` |
+
+每条链路都以一个终止跳收尾，`fellBack` 直接回答"这次请求是否发生过自动切换"，`attempt` / `totalCandidates` 给出第几跳落地。
+
+CLI 侧已可读同一条链路 🟢：
+
+```bash
+ai log --print --trace trc_70d90ad64d1846bf   # 只打印该链路的各跳，按时间先后排列
+```
+
+侧栏的"自动切换路由"卡展示 level 阶梯上各 provider 的切入 / 切出次数与熔断状态，对应 `Provider.level` 与 `ProviderCache` 的 `consecutiveFailures` / `circuitOpenUntil` / `healthScore`。
+
+#### 实时 provider 可见性 🔴
+
+原生 CLI 的 TUI 独占终端，Runtime 不能在会话期间往终端写提示（见 §3.2「切换提示不破坏 TUI」）。因此**"当前正在用哪个 provider"在 `ai use` 运行期间于终端内不可见**，只能在退出后从切换汇总或 `ai log --trace` 回看。Web 面板补齐这个缺口，设计稿确立两处落点：
+
+| 位置 | 内容 | 数据来源 |
+|---|---|---|
+| 侧栏"当前 provider"卡（`Sidebar` 可复用组件，五屏共享） | 正在承接的 provider 名、`level`、model、是否已发生切换及第几跳、当前 traceId | 最近一条同 traceId 的 `provider_resolved*` / `runtime_server_provider_fallback` 事件 |
+| "使用与日志"页列表首项"进行中"链路卡 | 已经过的每一跳（level / provider / action / 结果 / 耗时 / 原因），以及是否处于「等待用户重新提交以确认切换」状态与继续方式 | 该 traceId 下尚无终止跳的日志序列 |
+
+判定"进行中"的依据是该 traceId 还没有出现终止跳（`*_settled` / `*_candidates_exhausted`）。链路过滤器因此增加「进行中」一档。等待确认状态对应请求级 failover 的 `confirmation_required`：Runtime 已选好候选但不自动重放，Web 需说明"重新提交或重试即确认切换"，而不是显示为失败。
+
+侧栏卡是可复用组件，任何 Web 页面都能看到当前 provider，不需要先进入日志页。**secret 仍只显示 ref/status，不回显 API Key。**
+
 ---
 
 ## 9. 命令路线图 🔴
@@ -479,6 +524,10 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 | **无自动记忆** | 必须显式 `/remember` | Phase 2 |
 | **向量检索未接入** | `ai memory embedding` 只是前置配置 | Phase 6 |
 | **会话续用不恢复原生上下文** | 只复用启动参数 | 依赖上游 CLI 能力 |
+| **运行期间看不到当前 Provider** | 原生 TUI 独占终端，只能退出后看切换汇总或 `ai log --trace` | Web 实时视图（§8.1） |
+| **`ai last` / 会话记录只存启动时 Provider** | 请求级自动切换不回写，实际承接者需查 trace | 代理切换回调写回会话存储 |
+| **GET 探测在连接层失败会轮转** | `canFailover` 只守住 HTTP 状态码判定，连接失败 / 响应头超时未受约束，落点被永久改变 | 把守卫下沉到连接失败与超时短路分支 |
+| **无关请求会替用户确认切换** | 待确认状态在读请求体前消费且不区分方法，CLI 自发探测即可消耗掉 | 消费待确认状态前先判定是带请求体的模型 POST |
 | **用量不补录历史** | 装代理版本前的请求不计入 | 刻意设计，避免归错账 |
 | **单机单用户** | 无组织/项目用量归属 | R3 |
 | **掩码 API Key 会显示** | 录屏分享需注意 | 收敛为只显示「已配置/缺失」 |

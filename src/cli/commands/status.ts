@@ -2,6 +2,7 @@ import { getProviderStatuses } from "../../core/status/status-service.js";
 import { writeLog } from "../../core/logs/log-service.js";
 import type { ProviderStatus, ToolProviderStatus } from "../../core/types.js";
 import { maskSecret } from "../output/table.js";
+import { describeProviderRequestProfile } from "../../core/providers/provider-request-profile.js";
 
 export async function runStatusCommand(): Promise<void> {
   const statuses = await getProviderStatuses({ refresh: true });
@@ -11,16 +12,19 @@ export async function runStatusCommand(): Promise<void> {
     message: `Refreshed ${statuses.length} provider(s) for status.`,
     metadata: { providers: statuses.map((status) => ({ name: status.name, health: status.health, models: status.models.length })) }
   });
-  printStatusCards(statuses);
+  printProviderStatuses(statuses);
 }
 
-function printStatusCards(statuses: ProviderStatus[]): void {
+export function printProviderStatuses(
+  statuses: ProviderStatus[],
+  title = `AI Gateway Status (${statuses.length})`
+): void {
   if (!statuses.length) {
     console.log("No providers configured. Run `ai add` first.");
     return;
   }
 
-  console.log(`AI Gateway Status (${statuses.length})`);
+  console.log(title);
   console.log("=".repeat(72));
 
   statuses.forEach((status, index) => {
@@ -35,10 +39,11 @@ function printStatusCards(statuses: ProviderStatus[]): void {
     console.log(`  Config   ${status.baseUrl}`);
     console.log(`  API Key  ${maskSecret(status.apiKey)}`);
     console.log(`  Models   ${status.models.length}`);
+    console.log(`  Probe    ${describeProviderRequestProfile(status)}`);
     console.log(`  Usage    ${status.weeklyTokens} weekly token(s), ${status.usageShare}% share`);
     console.log(`  Checked  ${status.lastCheckedAt ?? "(never)"}`);
     if (status.lastError) {
-      console.log(`  Error    ${status.lastError}`);
+      console.log(`  Detail   ${status.lastError}`);
     }
 
     if (index < statuses.length - 1) {
@@ -48,11 +53,10 @@ function printStatusCards(statuses: ProviderStatus[]): void {
 }
 
 function printToolStatus(label: string, status: ToolProviderStatus): void {
-  const state = status.state === "ready" ? "ready" : status.state;
+  const state = status.state;
   const model = status.model ?? "(none)";
-  console.log(`  ${label}  ${state}  ${model}`);
+  const timing = status.checkedAt ? `  ${status.durationMs}ms / ${status.attempts} attempt(s)` : "";
+  console.log(`  ${label}  ${state}  ${model}${timing}`);
   console.log(`          ${status.baseUrl}`);
-  if (status.state !== "ready") {
-    console.log(`          ${status.note}`);
-  }
+  console.log(`          ${status.note}`);
 }

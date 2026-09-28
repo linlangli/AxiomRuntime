@@ -4,18 +4,20 @@ import {
   addProvider,
   deleteProvider,
   getCachedModels,
+  getProviderPriorityOptions,
   listProviders,
   updateProvider
 } from "../../core/providers/provider-service.js";
 import type { AddProviderInput } from "../../core/providers/provider-service.js";
 import type { Provider, ProviderMode } from "../../core/types.js";
+import { describeProviderRequestProfile } from "../../core/providers/provider-request-profile.js";
 import { escapeHtml, truncateText } from "../interaction/formatter.js";
 
 type EditableProviderField = "name" | "baseUrl" | "apiKey" | "model";
 
 type AddProviderDraft = {
   kind: "add";
-  step: "name" | "baseUrl" | "apiKey";
+  step: "name" | "baseUrl" | "apiKey" | "level";
   values: Partial<AddProviderInput>;
 };
 
@@ -84,6 +86,42 @@ export async function handleProviderAdminCallback(
       return true;
     }
 
+    if (action === "add_level") {
+      const draft = providerDrafts.get(draftKey);
+      const level = Number(indexValue);
+      const providers = await service.listProviders();
+      const maxLevel = getProviderPriorityOptions(providers).at(-1)?.level ?? 0;
+      if (draft?.kind !== "add" || draft.step !== "level"
+        || !Number.isInteger(level) || level < 0 || level > maxLevel
+        || !draft.values.name || !draft.values.baseUrl || !draft.values.apiKey) {
+        await showProviderAdminPanel(ctx, { edit: true }, service);
+        return true;
+      }
+      await renderPanel(ctx, "<b>添加 Provider</b>\n\n正在验证连接并获取模型列表...", buildCancelKeyboard(), true);
+      const submittedSecret = draft.values.apiKey;
+      try {
+        const added = await service.addProvider({
+          name: draft.values.name,
+          baseUrl: draft.values.baseUrl,
+          apiKey: draft.values.apiKey,
+          mode: "auto",
+          level
+        });
+        providerDrafts.delete(draftKey);
+        await showUpdatedProvider(ctx, added, service, true, "Provider 已添加。");
+      } catch (error) {
+        draft.step = "apiKey";
+        draft.values.apiKey = undefined;
+        await renderPanel(
+          ctx,
+          `<b>添加失败</b>\n\n${escapeHtml(safeErrorMessage(error, submittedSecret))}\n\n请重新输入 API Key。`,
+          buildCancelKeyboard(),
+          true
+        );
+      }
+      return true;
+    }
+
     const resolved = await resolveProvider(service, indexValue, fingerprint);
     if (!resolved) {
       await showProviderAdminPanel(ctx, { edit: true }, service);
@@ -116,7 +154,8 @@ export async function handleProviderAdminCallback(
 
     if (action === "level") {
       const level = Number(value);
-      if (!Number.isInteger(level) || level < 1 || level > providers.length) {
+      const maxLevel = getProviderPriorityOptions(providers, provider.name).at(-1)?.level ?? 0;
+      if (!Number.isInteger(level) || level < 0 || level > maxLevel) {
         await showProviderDetails(ctx, provider, providers, index, true, service);
         return true;
       }
@@ -210,23 +249,13 @@ export async function handleProviderAdminInput(
       return true;
     }
 
-    await deleteSecretMessage(ctx);
-    const input = {
-      name: draft.values.name!,
-      baseUrl: draft.values.baseUrl!,
-      apiKey: value,
-      mode: "auto" as const
-    };
-    await ctx.reply("正在验证 Provider 连接并获取模型列表...");
-    try {
-      const added = await service.addProvider(input);
-      providerDrafts.delete(draftKey);
-      await showUpdatedProvider(ctx, added, service, false, "Provider 已添加。");
-    } catch (error) {
-      draft.values.apiKey = undefined;
-      await ctx.reply(`添加失败：${escapeHtml(safeErrorMessage(error, value))}\n\n请重新输入 API Key。`, {
-        parse_mode: "HTML",
-        reply_markup: buildCancelKeyboard()
+    if (draft.step === "apiKey") {
+      await deleteSecretMessage(ctx);
+      draft.values.apiKey = value;
+      draft.step = "level";
+      const providers = await service.listProviders();
+      await ctx.reply("请选择优先级。0 表示不参与自动切换。", {
+        reply_markup: buildAddLevelKeyboard(providers)
       });
     }
     return true;
@@ -293,7 +322,9 @@ async function showProviderDetails(
   prefix = ""
 ): Promise<void> {
   const models = await service.getCachedModels(provider.name).catch(() => []);
-  const modelCount = models.length ? `\n可用模型：<code>${models.length}</code>` : "";
+  const modelCount = models.length
+    ? `\n可用模型：<code>${models.length}</code>\n${escapeHtml(models.slice(0, 20).join(", "))}${models.length > 20 ? " …" : ""}`
+    : "";
   const text = [
     prefix,
     `<b>${escapeHtml(truncateText(provider.name, 200))}</b>`,
@@ -301,6 +332,7 @@ async function showProviderDetails(
     `Base URL：<code>${escapeHtml(truncateText(provider.baseUrl, 500))}</code>`,
     "API Key：<code>已配置</code>",
     `默认模型：<code>${escapeHtml(truncateText(provider.model || "未设置", 200))}</code>`,
+    `探测配置：<code>${escapeHtml(describeProviderRequestProfile(provider))}</code>`,
     `模式：<code>${provider.mode}</code>`,
     `优先级：<code>${provider.level}</code>${modelCount}`
   ].join("\n");
@@ -358,14 +390,26 @@ function buildModeKeyboard(index: number, provider: Provider): InlineKeyboard {
 
 function buildLevelKeyboard(index: number, provider: Provider, providers: Provider[]): InlineKeyboard {
   const keyboard = new InlineKeyboard();
-  for (const item of providers) {
+  for (const { level } of getProviderPriorityOptions(providers, provider.name)) {
     keyboard.text(
-      item.level === provider.level ? `${item.level}（当前）` : String(item.level),
-      providerCallback("level", index, provider, String(item.level))
+      level === provider.level ? `${level}（当前）` : String(level),
+      providerCallback("level", index, provider, String(level))
     );
-    if (item.level % 4 === 0) keyboard.row();
+    if ((level + 1) % 4 === 0) keyboard.row();
   }
   return keyboard.row().text("返回", providerCallback("view", index, provider));
+}
+
+function buildAddLevelKeyboard(providers: Provider[]): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  for (const { level, occupiedBy } of getProviderPriorityOptions(providers)) {
+    const label = level === 0
+      ? "0（不自动切换）"
+      : occupiedBy ? `${level}（替换 ${truncateText(occupiedBy, 18)}）` : `${level}（最低）`;
+    keyboard.text(label, `pa:add_level:${level}`);
+    if ((level + 1) % 3 === 0) keyboard.row();
+  }
+  return keyboard.row().text("取消", "pa:cancel");
 }
 
 function buildDeleteConfirmKeyboard(index: number, provider: Provider): InlineKeyboard {

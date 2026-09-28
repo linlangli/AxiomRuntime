@@ -1,10 +1,11 @@
-import { ProxyAgent, setGlobalDispatcher } from "undici";
+import { getGlobalDispatcher, ProxyAgent, setGlobalDispatcher } from "undici";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import type { ApiClientOptions } from "grammy";
+import { normalizeProxyUrl } from "../core/network/proxy.js";
 import type { TelegramConfig } from "./config.js";
 
 export function getTelegramProxyUrl(config: Pick<TelegramConfig, "proxyUrl">): string | null {
-  return config.proxyUrl
+  const value = config.proxyUrl
     ?? process.env.AI_GATEWAY_TELEGRAM_PROXY
     ?? process.env.HTTPS_PROXY
     ?? process.env.https_proxy
@@ -13,6 +14,7 @@ export function getTelegramProxyUrl(config: Pick<TelegramConfig, "proxyUrl">): s
     ?? process.env.HTTP_PROXY
     ?? process.env.http_proxy
     ?? null;
+  return value ? normalizeProxyUrl(value) : null;
 }
 
 export function configureTelegramNetwork(config: Pick<TelegramConfig, "proxyUrl">): string | null {
@@ -37,6 +39,7 @@ export async function checkTelegramApi(token: string, proxyUrl?: string): Promis
   username?: string;
   error?: string;
 }> {
+  const previousDispatcher = getGlobalDispatcher();
   if (proxyUrl) {
     setGlobalDispatcher(new ProxyAgent(proxyUrl));
   }
@@ -61,5 +64,7 @@ export async function checkTelegramApi(token: string, proxyUrl?: string): Promis
       ok: false,
       error: error instanceof Error ? `${error.name}: ${error.message}` : String(error)
     };
+  } finally {
+    if (proxyUrl) setGlobalDispatcher(previousDispatcher);
   }
 }
