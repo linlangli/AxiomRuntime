@@ -109,7 +109,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 |---|---|---|
 | 启动 Claude Code | 🟢 | 临时 `--settings`，不碰 `~/.claude/settings.json`；execution scope 删除进程继承的 `ANTHROPIC_AUTH_TOKEN`，并以空值遮蔽用户 settings 中的同名变量，避免与 Provider API Key 冲突 |
 | 启动 Codex | 🟢 | `-c model_provider=` + `env_key`，不碰全局 `auth.json`/`config.toml` |
-| 运行时降级 | 🟢 | `ai use` 在同一原生 CLI 会话内请求级切换；有效输出前失败自动重试并提示，已有输出则等待用户重新提交/重试确认，避免重复工具副作用 |
+| 运行时降级 | 🟢 | `ai use` 在同一原生 CLI 会话内对模型 POST 做请求级切换；有效输出前失败自动重试并提示，已有输出则等待用户重新提交/重试确认；无请求体 GET 探测不触发轮转 |
 | Runtime 出站代理 | 🟢 | `ai proxy` 显示当前状态并提供编辑/关闭选项；分离输入 host/port、自动补协议，零 Token 连通检查成功后才保存并作用于 Runtime 请求及其启动的 Claude/Codex；不修改原生配置 |
 | root 权限约束 | 🟢 | UID 0 下 `bypassPermissions` 强制降级为 `default` |
 | 会话记录 | 🟢 | 工具、服务商、模型、路径、起止、退出状态 |

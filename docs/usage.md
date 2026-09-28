@@ -185,7 +185,7 @@ ai last                                # 沿用上次的工具、服务商和模
 
 - 不指定服务商 → 用 `level: 1` 那个
 - 不指定模型 → 用该服务商的默认 `model`
-- 显式指定服务商 → 先实际尝试该 Provider；即使健康缓存暂时为 `error`，也不会在请求前静默跳过
+- 显式指定服务商 → 不先刷新全部 Provider，直接使用该 Provider 的已缓存模型并实际尝试；即使健康缓存暂时为 `error`，也不会在请求前静默跳过
 - 当前服务商不可用 → 按 `level` 顺序自动降级
 - `level: 0` → 不参与自动降级；显式指定该 Provider 时只使用它
 - Claude Code 只会选择提供 Claude 模型的 Provider；Codex 只会选择提供 Codex/OpenAI 兼容模型的 Provider，不会跨模型族切换
@@ -193,7 +193,7 @@ ai last                                # 沿用上次的工具、服务商和模
 
 ### 请求级自动切换
 
-`ai use` 只启动一个 Claude Code 或 Codex 进程，候选 Provider 由同一个 execution-scoped Transport Proxy 管理。连接失败、认证失败、`404`、`408`、`409`、`425`、`429`、`5xx`，或流式响应在有效内容出现前中断时，Runtime 会丢弃失败尝试，按 `level` 切到下一个 Provider，将请求中的 `model` 改为该 Provider 的候选模型，并在终端显示切换提示。原生 CLI 进程没有重启，因此它发送的完整会话上下文仍在同一请求中。
+`ai use` 只启动一个 Claude Code 或 Codex 进程，候选 Provider 由同一个 execution-scoped Transport Proxy 管理。真正带请求体的模型 `POST` 遇到连接失败、认证失败、`404`、`408`、`409`、`425`、`429`、`5xx`，或流式响应在有效内容出现前中断时，Runtime 会丢弃失败尝试，按 `level` 切到下一个 Provider，将请求中的 `model` 改为该 Provider 的候选模型，并在终端显示切换提示。CLI 启动期间的无请求体 `GET` 探测不会触发 Provider 轮转。原生 CLI 进程没有重启，因此它发送的完整会话上下文仍在同一请求中。
 
 一旦已经向 Claude Code/Codex 返回文字、推理增量或工具参数，Runtime 不会自动重放，避免重复输出或重复工具调用。终端会提示候选 Provider；用户在当前 CLI 中重新提交或使用原生重试动作，即表示确认切换，下一次请求才使用候选 Provider。`400`、`413`、`422` 等通常由请求本身导致的错误不会跨 Provider 重试。当前确认方式依赖“重新提交/重试”动作，不会抢占原生 TUI 弹出额外的 `y/n` 输入框。
 

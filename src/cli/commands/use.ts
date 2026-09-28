@@ -11,7 +11,9 @@ export async function runUseCommand(args: string[]): Promise<void> {
   const providerName = args[1];
   const modelName = args[2];
 
-  await refreshAllProviders();
+  if (!providerName) {
+    await refreshAllProviders();
+  }
   // 一次 `ai use` 是一条调用链路：解析跳过与后续每次切换共享同一个 traceId。
   const traceId = newTraceId();
   const candidates = await resolveProviderCandidatesForTool(tool, providerName, modelName, traceId);

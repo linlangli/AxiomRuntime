@@ -774,6 +774,41 @@ test("usage proxy switches providers before effective output and rewrites the mo
   });
 });
 
+test("usage proxy does not rotate providers for non-model GET probes", async () => {
+  await withTempHome(async () => {
+    const failovers = [];
+    const primary = await startTestServer(async (_req, res) => {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+    const backup = await startTestServer(async (_req, res) => {
+      res.statusCode = 200;
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "primary", baseUrl: primary.url, apiKey: "a", mode: "auto", level: 1, model: "claude-primary" },
+      model: "claude-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "claude-backup" },
+        model: "claude-backup"
+      }],
+      tool: "claude",
+      engine: "claude",
+      onFailover: (event) => failovers.push(event)
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/api/hello`);
+      assert.equal(response.status, 404);
+      assert.deepEqual(failovers, []);
+    } finally {
+      await proxy.close();
+      await primary.close();
+      await backup.close();
+    }
+  });
+});
+
 test("usage proxy requires a new request before switching after partial output", async () => {
   await withTempHome(async () => {
     const failovers = [];

@@ -68,6 +68,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
       const originalRequestBody = await readRequestBody(req);
       requestBytes = originalRequestBody.length;
       requestShape = summarizeRequestShape(originalRequestBody);
+      const canFailover = req.method === "POST" && requestBytes > 0;
 
       for (let routeIndex = activeRouteIndex; routeIndex < routes.length; routeIndex += 1) {
         const route = routes[routeIndex]!;
@@ -147,7 +148,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
               dispatcher: upstreamDispatcher
             });
             const chatText = chatResponse.body.toString("utf8");
-            if (shouldFailoverResponse(chatResponse.status, chatText) && nextRoute) {
+            if (shouldFailoverResponse(chatResponse.status, chatText) && nextRoute && canFailover) {
               const reason = `http_${effectiveResponseStatus(chatResponse.status, chatText)}`;
               await input.onRouteResult?.(route, false, reason);
               await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
@@ -161,7 +162,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
             return;
           }
 
-          if (shouldFailoverResponse(outcome.status, nativeBody) && nextRoute) {
+          if (shouldFailoverResponse(outcome.status, nativeBody) && nextRoute && canFailover) {
             const reason = `http_${effectiveResponseStatus(outcome.status, nativeBody)}`;
             await input.onRouteResult?.(route, false, reason);
             await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
@@ -192,11 +193,11 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
             const diagnostic = summarizeUpstreamError(streamed.error);
             const reason = diagnostic.code ?? "stream_error";
             await input.onRouteResult?.(route, false, reason);
-            if (!streamed.outputStarted && nextRoute) {
+            if (!streamed.outputStarted && nextRoute && canFailover) {
               await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
               continue;
             }
-            if (streamed.outputStarted && nextRoute) {
+            if (streamed.outputStarted && nextRoute && canFailover) {
               pendingRouteIndex = routeIndex + 1;
               await emitFailover(input, { type: "confirmation_required", from: route, to: nextRoute, reason });
             }
@@ -223,7 +224,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
 
         const responseBody = Buffer.from(await upstreamResponse.arrayBuffer());
         const responseText = responseBody.toString("utf8");
-        if (shouldFailoverResponse(upstreamResponse.status, responseText) && nextRoute) {
+        if (shouldFailoverResponse(upstreamResponse.status, responseText) && nextRoute && canFailover) {
           const reason = `http_${effectiveResponseStatus(upstreamResponse.status, responseText)}`;
           await input.onRouteResult?.(route, false, reason);
           await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
