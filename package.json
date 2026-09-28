@@ -1,6 +1,6 @@
 {
   "name": "@offerpilot/axiomruntime",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "CLI-first local AI Runtime for isolated multi-provider Claude Code and Codex execution with Telegram remote control.",
   "homepage": "https://gitlab.com/linlangli/agent-router",
   "repository": {
