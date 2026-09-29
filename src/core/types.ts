@@ -22,6 +22,8 @@ export type Provider = {
   mode: ProviderMode;
   level: number;
   model: string;
+  /** 出站代理 origin；未设置时回退 runtime.json 的全局默认。 */
+  proxyUrl?: string;
   requestProfile?: ProviderRequestProfile;
 };
 

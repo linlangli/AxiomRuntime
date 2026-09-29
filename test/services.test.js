@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { addProvider, deleteProvider, getProviderPriorityOptions, refreshAllProviders, updateProvider } from "../dist/core/providers/provider-service.js";
-import { readCache, recordProviderRuntimeFailure, upsertProviderCache } from "../dist/core/config/cache-store.js";
-import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
+import { readCache, recordProviderRuntimeFailure, recordProviderRuntimeSuccess, upsertProviderCache } from "../dist/core/config/cache-store.js";
+import { readProviders, writeProviders, normalizeProviders } from "../dist/core/config/providers-store.js";
+import { resolveProviderProxy } from "../dist/core/network/proxy.js";
+import { checkProvider } from "../dist/core/models/model-discovery.js";
 import { getProviderStatus, getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runCheckCommand } from "../dist/cli/commands/check.js";
 import { runModelsCommand } from "../dist/cli/commands/models.js";
@@ -565,9 +568,9 @@ test("provider edit priority choices identify the current provider by name", () 
   ];
 
   assert.deepEqual(buildProviderLevelChoices(providers, "86-codex"), [
-    { label: "0 - excluded from automatic fallback", value: 0 },
-    { label: "1 - swap with first", value: 1 },
-    { label: "2 - current: 86-codex", value: 2 }
+    { label: "excluded from automatic fallback", value: 0, key: "0" },
+    { label: "swap with first", value: 1, key: "1" },
+    { label: "current: 86-codex", value: 2, key: "2" }
   ]);
 });
 
@@ -593,7 +596,7 @@ test("ai proxy persists a normalized Runtime proxy and supports clearing", async
         check: async () => ({ ok: true, durationMs: 1, error: null })
       });
       assert.equal((await loadRuntimeConfig()).proxyUrl, "http://127.0.0.1:8081");
-      assert.equal(output.some((line) => line.includes("AI Runtime proxy set")), true);
+      assert.equal(output.some((line) => line.includes("AI Runtime default proxy set")), true);
 
       await assert.rejects(
         runProxyCommand(["127.0.0.1", "9090"], {
@@ -605,11 +608,122 @@ test("ai proxy persists a normalized Runtime proxy and supports clearing", async
 
       await runProxyCommand(["--disable"]);
       assert.equal((await loadRuntimeConfig()).proxyUrl, undefined);
-      assert.equal(output.some((line) => line.includes("AI Runtime proxy cleared")), true);
+      assert.equal(output.some((line) => line.includes("AI Runtime default proxy cleared")), true);
     } finally {
       configureGlobalProxy(null);
       console.log = originalLog;
     }
+  });
+});
+
+test("ai proxy scopes a proxy to a single provider", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "alpha", baseUrl: "https://alpha.test/v1", apiKey: "k1", mode: "auto", level: 1, model: "" },
+      { name: "beta", baseUrl: "https://beta.test/v1", apiKey: "k2", mode: "auto", level: 2, model: "" }
+    ]);
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    const ok = async () => ({ ok: true, durationMs: 1, error: null });
+    try {
+      await runProxyCommand(["alpha", "127.0.0.1", "8082"], { check: ok });
+      let providers = await readProviders();
+      assert.equal(providers.find((p) => p.name === "alpha").proxyUrl, "http://127.0.0.1:8082");
+      assert.equal("proxyUrl" in providers.find((p) => p.name === "beta"), false);
+      assert.equal((await loadRuntimeConfig()).proxyUrl, undefined);
+      assert.equal(output.some((line) => line.includes("Provider proxy set to: http://127.0.0.1:8082")), true);
+
+      await assert.rejects(
+        runProxyCommand(["alpha", "127.0.0.1", "9999"], {
+          check: async () => ({ ok: false, durationMs: 1, error: "connection refused" })
+        }),
+        /Previous proxy kept/
+      );
+      providers = await readProviders();
+      assert.equal(providers.find((p) => p.name === "alpha").proxyUrl, "http://127.0.0.1:8082");
+
+      await runProxyCommand(["alpha", "--disable"]);
+      providers = await readProviders();
+      assert.equal("proxyUrl" in providers.find((p) => p.name === "alpha"), false);
+      assert.equal(output.some((line) => line.includes("Provider proxy cleared for alpha.")), true);
+
+      await assert.rejects(runProxyCommand(["nosuch", "notaport"], {}), /Provider not found: nosuch/);
+    } finally {
+      configureGlobalProxy(null);
+      console.log = originalLog;
+    }
+  });
+});
+
+test("provider edit rejects an unreachable proxy without changing its configuration", async () => {
+  await withTempHome(async () => {
+    const unavailable = net.createServer();
+    await new Promise((resolve) => unavailable.listen(0, "127.0.0.1", resolve));
+    const port = unavailable.address().port;
+    await new Promise((resolve) => unavailable.close(resolve));
+    const provider = { name: "alpha", baseUrl: "https://alpha.test/v1", apiKey: "k", mode: "auto", level: 1, model: "gpt-5" };
+    await writeProviders([provider]);
+
+    await assert.rejects(updateProvider("alpha", { proxyUrl: `http://127.0.0.1:${port}` }), /Proxy check failed:.*Previous proxy kept/);
+    assert.deepEqual(await readProviders(), [provider]);
+  });
+});
+
+test("provider normalization keeps valid proxyUrl and silently drops invalid values", () => {
+  const normalized = normalizeProviders([
+    { name: "good", baseUrl: "https://good.test/v1", apiKey: "k", mode: "auto", level: 1, model: "", proxyUrl: "http://proxy.test:8080" },
+    { name: "blank", baseUrl: "https://blank.test/v1", apiKey: "k", mode: "auto", level: 2, model: "", proxyUrl: "" },
+    { name: "garbage", baseUrl: "https://garbage.test/v1", apiKey: "k", mode: "auto", level: 3, model: "", proxyUrl: "not a proxy" }
+  ]);
+  assert.equal(normalized.find((p) => p.name === "good").proxyUrl, "http://proxy.test:8080");
+  assert.equal("proxyUrl" in normalized.find((p) => p.name === "blank"), false);
+  // 垃圾串在手编 providers.json 读取时静默丢弃（normalizeProviderShape），normalizeProviders 只剥空串——
+  // 这里验证空串哨兵；无效值路径经 readProviders 覆盖。
+  assert.equal(normalized.find((p) => p.name === "garbage").proxyUrl, "not a proxy");
+});
+
+test("readProviders drops an invalid hand-edited proxyUrl without failing", async () => {
+  await withTempHome(async () => {
+    const { getProvidersPath } = await import("../dist/core/config/paths.js");
+    await fs.writeFile(
+      getProvidersPath(),
+      JSON.stringify([
+        { name: "hand", baseUrl: "https://hand.test/v1", apiKey: "k", mode: "auto", level: 1, model: "", proxyUrl: "not a proxy" }
+      ]),
+      "utf8"
+    );
+    const providers = await readProviders();
+    assert.equal(providers.length, 1);
+    assert.equal("proxyUrl" in providers[0], false);
+  });
+});
+
+test("resolveProviderProxy prefers the provider proxy over the runtime default", () => {
+  assert.equal(resolveProviderProxy({ proxyUrl: "http://p.test:1" }, "http://g.test:2"), "http://p.test:1");
+  assert.equal(resolveProviderProxy({ proxyUrl: "   " }, "http://g.test:2"), "http://g.test:2");
+  assert.equal(resolveProviderProxy(undefined, "http://g.test:2"), "http://g.test:2");
+  assert.equal(resolveProviderProxy({ proxyUrl: "http://p.test:1" }, null), "http://p.test:1");
+  assert.equal(resolveProviderProxy({}, undefined), null);
+  assert.equal(resolveProviderProxy(undefined, null), null);
+});
+
+test("model discovery passes a dispatcher only when the provider has a proxy", async () => {
+  await withTempHome(async () => {
+    let capturedInit;
+    mockFetch((url, init) => {
+      capturedInit = init;
+      return jsonResponse({ data: [{ id: "gpt-5.5" }] });
+    });
+    const proxied = { name: "proxied", baseUrl: "https://proxied.test/v1", apiKey: "k", mode: "auto", level: 1, model: "" };
+    proxied.proxyUrl = "http://127.0.0.1:9999";
+    await checkProvider(proxied);
+    assert.notEqual(capturedInit?.dispatcher, undefined);
+
+    capturedInit = undefined;
+    const direct = { name: "direct", baseUrl: "https://direct.test/v1", apiKey: "k", mode: "auto", level: 2, model: "" };
+    await checkProvider(direct);
+    assert.equal(capturedInit?.dispatcher, undefined);
   });
 });
 
@@ -636,7 +750,7 @@ test("interactive add accepts a manually verified model when GET models is unava
       await runAddCommand([], {
         text: async (message) => answers.get(message) ?? "",
         select: async (message) => {
-          if (message === "Select priority (0 excludes automatic fallback)") return 1;
+          if (message === "Select priority level (0 excludes automatic fallback)") return 1;
           throw new Error("model selector should not run after manual verification");
         }
       });
@@ -1423,6 +1537,26 @@ test("runtime provider failures open a circuit breaker after repeated errors", a
     assert.equal(typeof cache.providers.flaky.circuitOpenUntil, "string");
     assert.equal(cache.providers.flaky.healthScore < 100, true);
     assert.equal(resolved.provider.name, "good");
+  });
+});
+
+test("a successful probe restores the health score to full", async () => {
+  await withTempHome(async () => {
+    await upsertProviderCache("recovered", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+
+    // 两次失败把分数打到 30（100 - 35 - 35），单纯 +25 的恢复步长永远填不平这个坑。
+    await recordProviderRuntimeFailure("recovered", "http_404");
+    await recordProviderRuntimeFailure("recovered", "http_404");
+    const damaged = await readCache();
+    assert.equal(damaged.providers.recovered.healthScore, 30);
+
+    await recordProviderRuntimeSuccess("recovered");
+    const healed = await readCache();
+
+    assert.equal(healed.providers.recovered.healthScore, 100);
+    assert.equal(healed.providers.recovered.consecutiveFailures, 0);
+    assert.equal(healed.providers.recovered.circuitOpenUntil, null);
+    assert.equal(healed.providers.recovered.lastError, null);
   });
 });
 

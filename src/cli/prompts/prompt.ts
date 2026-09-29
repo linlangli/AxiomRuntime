@@ -21,19 +21,29 @@ export async function promptConfirm(message: string, defaultValue = false): Prom
 
 export async function promptSelect<T extends string | number>(
   message: string,
-  choices: Array<{ label: string; value: T }>
+  choices: Array<{ label: string; value: T; key?: string }>
 ): Promise<T> {
   if (!choices.length) {
     throw new Error(`No choices available for: ${message}`);
   }
 
+  // 选项自带 key 时用 key 作为输入标识，避免“行号 + 取值”两套数字并列造成误选。
+  const keyed = choices.every((choice) => choice.key !== undefined)
+    && new Set(choices.map((choice) => choice.key)).size === choices.length;
+
   console.log(`\n${message}`);
   choices.forEach((choice, index) => {
-    console.log(`  ${index + 1}. ${choice.label}`);
+    console.log(`  ${keyed ? choice.key : index + 1}. ${choice.label}`);
   });
 
   while (true) {
     const raw = await promptText("Select");
+    if (keyed) {
+      const matched = choices.find((choice) => choice.key === raw);
+      if (matched) return matched.value;
+      console.log(`Please enter one of: ${choices.map((choice) => choice.key).join(", ")}.`);
+      continue;
+    }
     const index = Number(raw);
     if (Number.isInteger(index) && index >= 1 && index <= choices.length) {
       return choices[index - 1]!.value;

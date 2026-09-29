@@ -1,5 +1,8 @@
 import { isModelCompatible } from "./model-filter.js";
 import { buildProviderAuthHeaders, getProviderAuthScheme } from "../providers/provider-request-profile.js";
+import { loadRuntimeConfig } from "../config/runtime-config.js";
+import { getProxyDispatcher, resolveProviderProxy } from "../network/proxy.js";
+import type { Dispatcher } from "undici";
 import type {
   ConnectivityResult,
   Provider,
@@ -27,6 +30,21 @@ const RETRY_DELAYS_MS = [0, 200, 600];
 const RETRYABLE_STATUS_CODES = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 const AUTH_SCHEMES: ProviderAuthScheme[] = ["bearer", "x-api-key", "api-key"];
 
+// 控制面代理解析：Provider 配了代理才显式传 dispatcher；否则省略该选项，
+// 让进程全局 dispatcher（cli/index.ts 的 configureGlobalProxy）继续生效。
+async function resolveProbeDispatcher(
+  provider: Provider,
+  globalProxyUrl?: string | null
+): Promise<Dispatcher | undefined> {
+  const effective = resolveProviderProxy(provider, globalProxyUrl ?? null);
+  if (!effective) return undefined;
+  return getProxyDispatcher(effective);
+}
+
+async function loadProbeDispatcher(provider: Provider): Promise<Dispatcher | undefined> {
+  return resolveProbeDispatcher(provider, (await loadRuntimeConfig()).proxyUrl ?? null);
+}
+
 export type ProviderProbeResult = ConnectivityResult & {
   provider: Provider;
   modelChecks: CallableModelCheck[];
@@ -38,6 +56,7 @@ export async function probeProviderConfiguration(provider: Provider): Promise<Pr
   const errors: string[] = [];
   const retryErrors: string[] = [];
   let attempts = 0;
+  const dispatcher = await loadProbeDispatcher(provider);
 
   for (const baseUrl of buildBaseUrlCandidates(provider.baseUrl)) {
     for (const discoveryAuth of AUTH_SCHEMES) {
@@ -48,7 +67,7 @@ export async function probeProviderConfiguration(provider: Provider): Promise<Pr
           ...buildProviderAuthHeaders(provider.apiKey, discoveryAuth),
           Accept: "application/json"
         }
-      });
+      }, undefined, undefined, dispatcher);
       attempts += result.attempts;
       retryErrors.push(...result.retryErrors);
       if (result.error || !result.response) {
@@ -86,7 +105,7 @@ export async function probeProviderConfiguration(provider: Provider): Promise<Pr
       const openaiModel = requestedOpenAiModel
         ?? discoveredModels.find((model) => isModelCompatible("codex", model));
       if (openaiModel) {
-        const verified = await probeModelAuth(configuredProvider, openaiModel, "openai");
+        const verified = await probeModelAuth(configuredProvider, openaiModel, "openai", dispatcher);
         attempts += verified.attempts;
         retryErrors.push(...verified.retryErrors);
         modelChecks.push(...verified.checks);
@@ -102,7 +121,7 @@ export async function probeProviderConfiguration(provider: Provider): Promise<Pr
       const anthropicModel = requestedAnthropicModel
         ?? discoveredModels.find((model) => isModelCompatible("claude", model));
       if (anthropicModel) {
-        const verified = await probeModelAuth(configuredProvider, anthropicModel, "anthropic");
+        const verified = await probeModelAuth(configuredProvider, anthropicModel, "anthropic", dispatcher);
         attempts += verified.attempts;
         retryErrors.push(...verified.retryErrors);
         modelChecks.push(...verified.checks);
@@ -161,7 +180,7 @@ export async function probeProviderConfiguration(provider: Provider): Promise<Pr
           verifiedProtocols: []
         };
         const candidate: Provider = { ...provider, baseUrl, requestProfile: profile };
-        const verified = await probeModelAuth(candidate, provider.model, protocol);
+        const verified = await probeModelAuth(candidate, provider.model, protocol, dispatcher);
         attempts += verified.attempts;
         retryErrors.push(...verified.retryErrors);
         if (verified.authScheme) {
@@ -205,6 +224,7 @@ export async function checkProvider(provider: Provider): Promise<ConnectivityRes
   const errors: string[] = [];
   const retryErrors: string[] = [];
   let attempts = 0;
+  const dispatcher = await loadProbeDispatcher(provider);
   try {
     for (const url of buildModelUrlCandidates(provider.baseUrl)) {
       const result = await fetchTextWithRetry(url, {
@@ -213,7 +233,7 @@ export async function checkProvider(provider: Provider): Promise<ConnectivityRes
           ...buildProviderAuthHeaders(provider.apiKey, getProviderAuthScheme(provider, "discovery")),
           Accept: "application/json"
         }
-      });
+      }, undefined, undefined, dispatcher);
       attempts += result.attempts;
       retryErrors.push(...result.retryErrors);
       if (result.error || !result.response) {
@@ -271,6 +291,7 @@ export async function checkProvider(provider: Provider): Promise<ConnectivityRes
 export async function runDeepCheck(provider: Provider, model: string): Promise<ConnectivityResult> {
   const checkedAt = new Date().toISOString();
   const startedAt = Date.now();
+  const dispatcher = await loadProbeDispatcher(provider);
   try {
     const url = buildChatCompletionsUrl(provider.baseUrl);
     const result = await fetchTextWithRetry(url, {
@@ -286,7 +307,7 @@ export async function runDeepCheck(provider: Provider, model: string): Promise<C
         max_tokens: 1,
         temperature: 0
       })
-    });
+    }, undefined, undefined, dispatcher);
     if (result.error || !result.response) {
       return {
         status: "error",
@@ -342,24 +363,27 @@ export async function checkCallableModels(
   options: CallableModelCheckOptions = {}
 ): Promise<CallableModelCheck[]> {
   const uniqueModels = [...new Set(models.filter(Boolean))];
-  return mapWithConcurrency(uniqueModels, 3, (model) => checkCallableModel(provider, model, options));
+  const dispatcher = await loadProbeDispatcher(provider);
+  return mapWithConcurrency(uniqueModels, 3, (model) => checkCallableModel(provider, model, options, dispatcher));
 }
 
 async function checkCallableModel(
   provider: Provider,
   model: string,
-  options: CallableModelCheckOptions
+  options: CallableModelCheckOptions,
+  dispatcher?: Dispatcher
 ): Promise<CallableModelCheck> {
   const lower = model.toLowerCase();
   return lower.includes("claude")
-    ? checkAnthropicMessagesModel(provider, model, options)
-    : checkOpenAiModel(provider, model, options);
+    ? checkAnthropicMessagesModel(provider, model, options, dispatcher)
+    : checkOpenAiModel(provider, model, options, dispatcher);
 }
 
 async function checkAnthropicMessagesModel(
   provider: Provider,
   model: string,
-  options: CallableModelCheckOptions = {}
+  options: CallableModelCheckOptions = {},
+  dispatcher?: Dispatcher
 ): Promise<CallableModelCheck> {
   const baseUrl = provider.baseUrl.replace(/\/+$/, "").replace(/\/v1$/i, "");
   const url = `${baseUrl}/v1/messages`;
@@ -374,13 +398,14 @@ async function checkAnthropicMessagesModel(
     "Content-Type": "application/json",
     Accept: "application/json"
   };
-  return postModelProbe(url, headers, payload, model, options);
+  return postModelProbe(url, headers, payload, model, options, dispatcher);
 }
 
 async function checkChatCompletionsModel(
   provider: Provider,
   model: string,
-  options: CallableModelCheckOptions = {}
+  options: CallableModelCheckOptions = {},
+  dispatcher?: Dispatcher
 ): Promise<CallableModelCheck> {
   const payload = {
     model,
@@ -396,7 +421,7 @@ async function checkChatCompletionsModel(
 
   let lastResult: CallableModelCheck | null = null;
   for (const url of buildChatCompletionsUrlCandidates(provider.baseUrl)) {
-    const result = await postModelProbe(url, headers, payload, model, options);
+    const result = await postModelProbe(url, headers, payload, model, options, dispatcher);
     if (result.status === "ok" || result.status === "unknown") return result;
     lastResult = result;
   }
@@ -406,7 +431,8 @@ async function checkChatCompletionsModel(
 async function probeModelAuth(
   provider: Provider,
   model: string,
-  protocol: "openai" | "anthropic"
+  protocol: "openai" | "anthropic",
+  dispatcher?: Dispatcher
 ): Promise<{
   authScheme: ProviderAuthScheme | null;
   checks: CallableModelCheck[];
@@ -423,8 +449,8 @@ async function probeModelAuth(
     };
     const candidate = { ...provider, requestProfile };
     const check = protocol === "openai"
-      ? await checkOpenAiModel(candidate, model)
-      : await checkAnthropicMessagesModel(candidate, model);
+      ? await checkOpenAiModel(candidate, model, undefined, dispatcher)
+      : await checkAnthropicMessagesModel(candidate, model, undefined, dispatcher);
     checks.push(check);
     if (check.status === "ok") {
       return {
@@ -451,7 +477,8 @@ function isAuthenticationFailure(error: string | null): boolean {
 async function checkOpenAiModel(
   provider: Provider,
   model: string,
-  options: CallableModelCheckOptions = {}
+  options: CallableModelCheckOptions | undefined = {},
+  dispatcher?: Dispatcher
 ): Promise<CallableModelCheck> {
   const headers = {
     ...buildProviderAuthHeaders(provider.apiKey, getProviderAuthScheme(provider, "openai")),
@@ -463,11 +490,12 @@ async function checkOpenAiModel(
     headers,
     { model, input: ".", max_output_tokens: 1, stream: false },
     model,
-    options
+    options,
+    dispatcher
   );
   if (responsesResult.status === "ok" || responsesResult.status === "unknown") return responsesResult;
   if (!shouldFallbackFromResponses(responsesResult.error)) return responsesResult;
-  const chatResult = await checkChatCompletionsModel(provider, model, options);
+  const chatResult = await checkChatCompletionsModel(provider, model, options, dispatcher);
   return chatResult.status === "ok"
     ? chatResult
     : {
@@ -488,14 +516,15 @@ async function postModelProbe(
   headers: Record<string, string>,
   payload: Record<string, unknown>,
   model: string,
-  options: CallableModelCheckOptions = {}
+  options: CallableModelCheckOptions = {},
+  dispatcher?: Dispatcher
 ): Promise<CallableModelCheck> {
   try {
     const result = await fetchTextWithRetry(url, {
       method: "POST",
       headers,
       body: JSON.stringify(payload)
-    }, options.maxAttempts, options.timeoutMs);
+    }, options.maxAttempts, options.timeoutMs, dispatcher);
     if (result.error || !result.response) {
       return {
         model,
@@ -692,7 +721,8 @@ async function fetchTextWithRetry(
   url: string,
   init: RequestInit,
   maxAttempts = RETRY_DELAYS_MS.length,
-  timeoutMs = 12000
+  timeoutMs = 12000,
+  dispatcher?: Dispatcher
 ): Promise<FetchTextResult> {
   const startedAt = Date.now();
   const retryErrors: string[] = [];
@@ -705,7 +735,7 @@ async function fetchTextWithRetry(
 
     const attempt = index + 1;
     try {
-      const response = await fetchWithTimeout(url, init, timeoutMs);
+      const response = await fetchWithTimeout(url, init, timeoutMs, dispatcher);
       const text = await response.text();
       if (!shouldRetryResponse(response) || attempt >= retryDelays.length) {
         return {
@@ -757,11 +787,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 12000): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = 12000,
+  dispatcher?: Dispatcher
+): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    // init.dispatcher 是 undici fetch 的原生选项；无代理时省略，让进程全局 dispatcher 生效。
+    const probeInit = { ...init, ...(dispatcher ? { dispatcher } : {}) } as RequestInit;
+    return await fetch(url, { ...probeInit, signal: controller.signal });
   } finally {
     clearTimeout(timeout);
   }

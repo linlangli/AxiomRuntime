@@ -96,7 +96,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 连通性检查 | 🟢 | 添加时自动测试；`ai check [provider]` 单独检查一个 Provider，`ai status` 检查全部 Provider；每个 Provider 最多验证一个 Claude 和一个 Codex 代表模型，以不自动重试的 1-token 调用展示协议可用性；30 秒超时记为 `unknown` 而非误报失败 |
 | 模型发现 | 🟢 | 自动探测并缓存模型目录；`ai models [provider]` 只通过 `GET /models` 刷新并列出指定 Provider 的完整模型，不产生推理 Token |
 | 自适应连接配置 | 🟢 | 输入 Base URL 和 API Key 后，以零 Token 模型发现 + 每协议最多一次 1-token 成功验证，自动选择 `/v1` 与已知认证 header；目录不可用时可显式提供模型并直接验证 Responses/Messages，禁止猜测模型；全部失败则拒绝保存 |
-| 优先级 | 🟢 | 添加时选择 `0..N`；正整数按顺序自动切换，占用则交换到队尾；`level: 0` 只允许显式使用 |
+| 优先级 | 🟢 | 添加时选择 `0..N`；正整数按顺序自动切换，占用则交换到队尾；`level: 0` 只允许显式使用。选择列表行首数字即 level 本身，不再与行号并列。纯图片 Provider 强制为 `level: 0`，不进入自动降级链 |
 | 引擎兼容性过滤 | 🟢 | Claude Code 只选择 Claude 模型；Codex 只选择 `gpt`/`codex`/`grok`/`o`/`openai` 兼容模型；自动切换不跨模型族 |
 | Base URL 自适配 | 🟢 | Claude 去 `/v1`，Codex 保留 |
 | 健康状态缓存 | 🟢 | 写入 `.ai-cache.json` |
@@ -109,9 +109,10 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 |---|---|---|
 | 启动 Claude Code | 🟢 | 临时 `--settings`，不碰 `~/.claude/settings.json`；execution scope 删除进程继承的 `ANTHROPIC_AUTH_TOKEN`，并以空值遮蔽用户 settings 中的同名变量，避免与 Provider API Key 冲突 |
 | 启动 Codex | 🟢 | `-c model_provider=` + `env_key`，不碰全局 `auth.json`/`config.toml` |
-| 运行时降级 | 🟡 | `ai use` 在同一原生 CLI 会话内对模型 POST 做请求级切换；有效输出前失败自动重试，已有输出则等待用户重新提交/重试确认。**两处偏差**：`canFailover` 守卫只覆盖 HTTP 状态码判定，无请求体 GET 探测在连接层失败（socket 断开 / 响应头超时）时仍会轮转并永久改变落点；待确认状态在读请求体之前消费，不区分方法，CLI 自发的无关请求会替用户确认切换 |
+| 运行时降级 | 🟡 | `ai use` 在同一原生 CLI 会话内对**会产生补全的模型端点**做请求级切换；失败先在当前 Provider 原地重试（限流/`5xx`/连接层错误可重试，`401`/`403`/`404` 直接换），重试耗尽才轮转，已有输出则等待用户重新提交/重试确认。辅助端点（`/v1/messages/count_tokens` 等中转站常未实现的路径）的 `404` 不触发轮转，也不计入健康分。**一处偏差**：待确认状态在读请求体之前消费，不区分方法，CLI 自发的无关请求会替用户确认切换 |
+| 健康分恢复 | 🟢 | 一次真实成功探测把 `healthScore` 直接置满，不靠固定步长累加填坑，避免误判造成的低分长期滞留 |
 | 切换提示不破坏 TUI | 🟢 | 会话期间提示走协议内错误事件由原生 CLI 渲染，退出后再打印切换汇总；父进程不在 TUI 重绘期间写终端 |
-| Runtime 出站代理 | 🟢 | `ai proxy` 显示当前状态并提供编辑/关闭选项；分离输入 host/port、自动补协议，零 Token 连通检查成功后才保存并作用于 Runtime 请求及其启动的 Claude/Codex；不修改原生配置 |
+| Runtime 出站代理 | 🟢 | `ai proxy` 可选择 Provider 或 Runtime 默认值；Provider 的 `proxyUrl` 优先、缺省时回退默认值，清除覆盖后恢复回退；新增或编辑先做零 Token 连通检查。探测和 Transport Proxy 上游按实际 Provider 路由；不修改原生 CLI 配置 |
 | root 权限约束 | 🟢 | UID 0 下 `bypassPermissions` 强制降级为 `default` |
 | 会话记录 | 🟢 | 工具、服务商、模型、路径、起止、退出状态 |
 | 会话续用 | 🟡 | **复用启动参数**，不恢复 Claude/Codex 原生聊天上下文 |
@@ -526,7 +527,6 @@ ai log --print --trace trc_70d90ad64d1846bf   # 只打印该链路的各跳，�
 | **会话续用不恢复原生上下文** | 只复用启动参数 | 依赖上游 CLI 能力 |
 | **运行期间看不到当前 Provider** | 原生 TUI 独占终端，只能退出后看切换汇总或 `ai log --trace` | Web 实时视图（§8.1） |
 | **`ai last` / 会话记录只存启动时 Provider** | 请求级自动切换不回写，实际承接者需查 trace | 代理切换回调写回会话存储 |
-| **GET 探测在连接层失败会轮转** | `canFailover` 只守住 HTTP 状态码判定，连接失败 / 响应头超时未受约束，落点被永久改变 | 把守卫下沉到连接失败与超时短路分支 |
 | **无关请求会替用户确认切换** | 待确认状态在读请求体前消费且不区分方法，CLI 自发探测即可消耗掉 | 消费待确认状态前先判定是带请求体的模型 POST |
 | **用量不补录历史** | 装代理版本前的请求不计入 | 刻意设计，避免归错账 |
 | **单机单用户** | 无组织/项目用量归属 | R3 |

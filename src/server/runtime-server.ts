@@ -2,14 +2,19 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { Agent, fetch, type Response } from "undici";
+import { fetch, type Dispatcher, type Response } from "undici";
 import {
   readCache,
   recordProviderRuntimeFailure,
   recordProviderRuntimeSuccess
 } from "../core/config/cache-store.js";
+import { loadRuntimeConfig } from "../core/config/runtime-config.js";
 import { readProviders } from "../core/config/providers-store.js";
 import { writeLog } from "../core/logs/log-service.js";
+import {
+  createUpstreamDispatcher,
+  resolveProviderProxy
+} from "../core/network/proxy.js";
 import { getProviderAuthScheme } from "../core/providers/provider-request-profile.js";
 import { resolveProviderCandidatesForTool, type ResolvedRun } from "../core/runner/fallback.js";
 import {
@@ -60,12 +65,22 @@ export async function startRuntimeServer(options: RuntimeServerOptions): Promise
   const token = options.token.trim();
   if (!token) throw new Error("AI Gateway server token cannot be empty.");
 
-  const dispatcher = new Agent({
-    connections: 32,
-    pipelining: 0,
-    headersTimeout: normalizePositiveInteger(options.upstreamHeadersTimeoutMs, DEFAULT_HEADERS_TIMEOUT_MS),
-    bodyTimeout: 0
-  });
+  const headersTimeoutMs = normalizePositiveInteger(options.upstreamHeadersTimeoutMs, DEFAULT_HEADERS_TIMEOUT_MS);
+  // 按代理 URL 分派：Provider 级 proxyUrl 覆盖 runtime.json 全局默认（启动时读一次），
+  // 逐候选用同一 URL 的共享连接池，close() 统一关闭。
+  const globalProxyUrl = (await loadRuntimeConfig()).proxyUrl ?? null;
+  const dispatchersByUrl = new Map<string, Dispatcher>();
+  const dispatcherFor = (proxyUrl: string | null): Dispatcher => {
+    const key = proxyUrl ?? "";
+    let dispatcher = dispatchersByUrl.get(key);
+    if (!dispatcher) {
+      dispatcher = createUpstreamDispatcher(proxyUrl, { connections: 32, headersTimeout: headersTimeoutMs });
+      dispatchersByUrl.set(key, dispatcher);
+    }
+    return dispatcher;
+  };
+  const closeDispatchers = (): Promise<void[]> =>
+    Promise.all([...dispatchersByUrl.values()].map((dispatcher) => dispatcher.close().catch(() => undefined)));
   const maxRequestBytes = normalizePositiveInteger(options.maxRequestBytes, DEFAULT_MAX_REQUEST_BYTES);
   const agentRuntime = {
     workspaceRoot: path.resolve(options.agentWorkspaceRoot ?? path.join(process.cwd(), ".ai-gateway-workspaces")),
@@ -78,7 +93,7 @@ export async function startRuntimeServer(options: RuntimeServerOptions): Promise
     const requestId = normalizeRequestId(req.headers["x-request-id"]);
     res.setHeader("x-request-id", requestId);
     try {
-      await handleRequest({ req, res, requestId, token, maxRequestBytes, dispatcher, agentRuntime });
+      await handleRequest({ req, res, requestId, token, maxRequestBytes, globalProxyUrl, dispatcherFor, agentRuntime });
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError && !res.headersSent) {
         sendJson(res, 413, { error: { message: error.message, request_id: requestId } });
@@ -114,7 +129,7 @@ export async function startRuntimeServer(options: RuntimeServerOptions): Promise
       const closeServer = server.listening
         ? new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
         : Promise.resolve();
-      await Promise.all([closeServer, dispatcher.close()]);
+      await Promise.all([closeServer, closeDispatchers()]);
     }
   };
 }
@@ -125,7 +140,8 @@ async function handleRequest(input: {
   requestId: string;
   token: string;
   maxRequestBytes: number;
-  dispatcher: Agent;
+  globalProxyUrl: string | null;
+  dispatcherFor: (proxyUrl: string | null) => Dispatcher;
   agentRuntime: AgentRuntimeState;
 }): Promise<void> {
   const { req, res, requestId } = input;
@@ -173,7 +189,16 @@ async function handleRequest(input: {
     sendJson(res, 503, { error: { message: `No healthy provider offers model ${requestedModel}.`, request_id: requestId } });
     return;
   }
-  await proxyWithFallback({ ...input, requestBody, requestedModel, candidates });
+  await proxyWithFallback({
+    req: input.req,
+    res: input.res,
+    requestId,
+    requestBody,
+    requestedModel,
+    candidates,
+    globalProxyUrl: input.globalProxyUrl,
+    dispatcherFor: input.dispatcherFor
+  });
 }
 
 type AgentRuntimeState = {
@@ -295,7 +320,8 @@ async function proxyWithFallback(input: {
   requestBody: Buffer;
   requestedModel: string;
   candidates: ResolvedRun[];
-  dispatcher: Agent;
+  globalProxyUrl: string | null;
+  dispatcherFor: (proxyUrl: string | null) => Dispatcher;
 }): Promise<void> {
   const records: OpenAiUsageProxyRecord[] = [];
   let lastFailure: BufferedUpstream | null = null;
@@ -303,6 +329,7 @@ async function proxyWithFallback(input: {
   for (const [index, candidate] of input.candidates.entries()) {
     const upstreamBaseUrl = getToolBaseUrl("codex", candidate.provider);
     const upstreamUrl = buildUpstreamUrl(upstreamBaseUrl, input.req.url ?? "/");
+    const dispatcher = input.dispatcherFor(resolveProviderProxy(candidate.provider, input.globalProxyUrl));
     try {
       const response = await fetch(upstreamUrl, {
         method: input.req.method,
@@ -310,7 +337,7 @@ async function proxyWithFallback(input: {
           authScheme: getProviderAuthScheme(candidate.provider, "openai")
         }),
         body: input.requestBody.length && methodMayHaveBody(input.req.method) ? input.requestBody : undefined,
-        dispatcher: input.dispatcher
+        dispatcher
       });
       const responsesStream = isResponsesStreamRequest(input.req.url ?? "/", input.requestBody);
       if (responsesStream && !isUsableEventStream(response)) {
@@ -325,7 +352,7 @@ async function proxyWithFallback(input: {
             requestBody: input.requestBody,
             apiKey: candidate.provider.apiKey,
             authScheme: getProviderAuthScheme(candidate.provider, "openai"),
-            dispatcher: input.dispatcher
+            dispatcher
           });
           const fallbackResponse: BufferedUpstream = {
             status: translated.status,

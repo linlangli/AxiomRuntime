@@ -4,7 +4,8 @@ import { recordProviderChange } from "../integrations/integration-state.js";
 import { writeLog } from "../logs/log-service.js";
 import { readProviders, swapProviderLevel, updateProviders } from "../config/providers-store.js";
 import { checkCallableModels, checkProvider, probeProviderConfiguration } from "../models/model-discovery.js";
-import { isModelCompatible } from "../models/model-filter.js";
+import { isImageOnlyModelSet, isModelCompatible } from "../models/model-filter.js";
+import { checkProxyEndpoint, normalizeProxyUrl } from "../network/proxy.js";
 import { buildUsageEvent } from "../usage/usage-service.js";
 import type { CliToolType, Provider, ProviderMode, ProviderToolCheck, TokenUsage } from "../types.js";
 
@@ -122,15 +123,18 @@ export async function addProvider(input: AddProviderInput): Promise<Provider> {
   }
   const configuredDraft = result.provider;
   const model = draft.model || result.models[0]!;
+  // 纯图片 Provider 强制 level 0：它没有 Claude/Codex 兼容模型，进入自动降级链只会浪费一跳。
+  const imageOnly = isImageOnlyModelSet(model, result.models);
+  const effectiveLevel = imageOnly ? 0 : requestedLevel;
   const normalizedProviders = await updateProviders((current) => {
     if (current.some((provider) => provider.name === draft.name)) {
       throw new Error(`Provider already exists: ${draft.name}`);
     }
     const appendLevel = current.filter((provider) => provider.level > 0).length + 1;
-    const added = { ...configuredDraft, level: requestedLevel === 0 ? 0 : appendLevel, model };
+    const added = { ...configuredDraft, level: effectiveLevel === 0 ? 0 : appendLevel, model };
     const next = [...current, added];
-    return requestedLevel > 0 && requestedLevel !== appendLevel
-      ? swapProviderLevel(next, draft.name, requestedLevel)
+    return effectiveLevel > 0 && effectiveLevel !== appendLevel
+      ? swapProviderLevel(next, draft.name, effectiveLevel)
       : next;
   });
   const provider = normalizedProviders.find((item) => item.name === draft.name);
@@ -157,11 +161,21 @@ export async function updateProvider(providerName: string, patch: Partial<Provid
     throw new Error(`Provider already exists: ${targetName}`);
   }
   let validatedPatch = patch;
+  if (patch.proxyUrl) {
+    const proxyUrl = normalizeProxyUrl(patch.proxyUrl);
+    if (proxyUrl) {
+      const checked = await checkProxyEndpoint(proxyUrl);
+      if (!checked.ok) {
+        throw new Error(`Proxy check failed: ${checked.error ?? "connection failed"} Previous proxy kept.`);
+      }
+      validatedPatch = { ...patch, proxyUrl };
+    }
+  }
   let probeResult: Awaited<ReturnType<typeof probeProviderConfiguration>> | null = null;
   if (patch.baseUrl || patch.apiKey) {
     const candidate: Provider = {
       ...existing,
-      ...patch,
+      ...validatedPatch,
       name: targetName,
       baseUrl: patch.baseUrl?.trim().replace(/\/+$/, "") || existing.baseUrl,
       apiKey: patch.apiKey?.trim() || existing.apiKey,
@@ -172,7 +186,7 @@ export async function updateProvider(providerName: string, patch: Partial<Provid
       throw new Error(`Provider configuration probe failed: ${probeResult.error ?? "no usable models found"}`);
     }
     validatedPatch = {
-      ...patch,
+      ...validatedPatch,
       baseUrl: probeResult.provider.baseUrl,
       apiKey: probeResult.provider.apiKey,
       requestProfile: probeResult.provider.requestProfile,
@@ -234,6 +248,31 @@ export async function updateProvider(providerName: string, patch: Partial<Provid
     previousProvider: updated.name !== providerName ? providerName : undefined
   });
   return updated;
+}
+
+export async function setProviderProxy(providerName: string, proxyUrl: string | null): Promise<Provider> {
+  // 独立于 updateProvider：代理变化不触发探测（探测只在 baseUrl/apiKey 变化时进行），
+  // proxyUrl 传 null 时用空串作显式清除哨兵，normalizeProviders 会剥离空串。
+  const updated: { value?: Provider } = {};
+  await updateProviders((providers) => {
+    const current = providers.find((provider) => provider.name === providerName);
+    if (!current) {
+      throw new Error(`Provider not found: ${providerName}`);
+    }
+    updated.value = current;
+    return providers.map((provider) =>
+      provider.name === providerName
+        ? { ...provider, ...(proxyUrl ? { proxyUrl } : { proxyUrl: "" }) }
+        : provider
+    );
+  });
+  if (!updated.value) {
+    throw new Error(`Provider not found: ${providerName}`);
+  }
+  const { proxyUrl: _dropped, ...rest } = updated.value;
+  const result = (proxyUrl ? { ...rest, proxyUrl } : rest) as Provider;
+  await recordProviderChange({ type: "updated", provider: providerName });
+  return result;
 }
 
 export async function deleteProvider(providerName: string): Promise<Provider> {

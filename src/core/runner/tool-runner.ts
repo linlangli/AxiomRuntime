@@ -5,7 +5,7 @@ import path from "node:path";
 import { recordProviderRuntimeFailure, recordProviderRuntimeSuccess, saveLastSelection } from "../config/cache-store.js";
 import { loadRuntimeConfig } from "../config/runtime-config.js";
 import { writeLog } from "../logs/log-service.js";
-import { applyProxyToEnv } from "../network/proxy.js";
+import { applyProxyToEnv, resolveProviderProxy } from "../network/proxy.js";
 import type { CliToolType, Provider } from "../types.js";
 import { isRecord } from "../utils/is-record.js";
 import { resolveToolCommand } from "./command-resolver.js";
@@ -58,9 +58,11 @@ export async function runTool(
     try {
       const routedProvider = { ...effectiveProvider, baseUrl: usageProxy.baseUrl };
       const runtimeConfig = await loadRuntimeConfig();
+      // 子 env 用所选 Provider 的代理（Provider 级优先、全局默认兜底）。模型流量本身走本地
+      // Transport Proxy，其上游按路由各自分派代理；这里的 env 只影响子 CLI 自身的其他出站。
       const env = applyProxyToEnv(
         buildRunnerEnv(tool, routedProvider, model),
-        runtimeConfig.proxyUrl ?? null
+        resolveProviderProxy(effectiveProvider, runtimeConfig.proxyUrl)
       );
       const claudeSettingsPath = engine.requiresSettingsFile
         ? writeTemporaryClaudeSettings(routedProvider, { permissionMode: launchPolicy.claudeSettingsPermissionMode })

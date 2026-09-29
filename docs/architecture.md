@@ -209,6 +209,8 @@ flowchart LR
 
 候选排序规则在 `src/core/runner/fallback.ts`：**健康状态 → 引擎兼容性 → level 优先级 + 显式覆盖**。正整数 `level` 组成自动候选链；`level: 0` 可重复存在，只在显式指定时返回，而且不追加其他候选。新增 Provider 的正整数等级范围为 `1..activeCount+1`；占用已有等级时，新 Provider 与队尾位置交换，原 Provider 移到队尾。
 
+纯图片 Provider（目录中只有 `image` / `dall-e` 类模型，没有任何 Claude 或 Codex 兼容模型）在添加时**强制落到 `level: 0`**，无论交互选择了哪个等级。它没有可用于对话的模型，留在自动链上只会在轮转到它时返回 `403`/`404` 白占一跳；`ai image` 仍然可以显式使用它。判定在 `models/model-filter.ts` 的 `isImageOnlyModelSet()`。
+
 CLI `ai use` 的 fallback 由唯一 Transport Proxy 在请求级完成，不重启原生 CLI。每个候选携带自己的 `Provider`、`model`、认证 profile 和规范化 Base URL；切换时必须改写 JSON 请求中的 `model`，用实际候选凭证构造上游 header，并把 usage 归属到实际成功的 Provider。连接错误以及 `401`、`403`、`404`、`408`、`409`、`425`、`429`、`5xx` 可在尚未产生有效输出时安全重试；`400`、`413`、`422` 不跨 Provider 重试。
 
 Streaming 响应在首个文字、推理或工具参数增量前由代理暂存协议前导事件；此前中断可丢弃并无感切换。首个有效增量写给客户端后即越过不可自动重放边界：中断时只记录待切换候选并显示提示，不重放请求；当前 CLI 发起下一次请求视为用户通过“重新提交/重试”确认，随后激活候选 Provider。父进程禁止与原生 TUI 争抢 stdin 弹出并行 `y/n` 提示。
@@ -260,7 +262,27 @@ flowchart TD
 
 `openai-usage-*` 这一组是当前的请求级路由与用量代理实现，**目标态按职责剥离到 ⑤ Transport Proxy**，拆成 `transport-core` / `TransformCoordinator` / `UsageObserver` / `MemoryExtension` + 兼容 facade。`startOpenAiUsageProxy()` 作为兼容 facade 保留，行为由 parity 测试锁定。
 
-请求级 failover 只适用于带请求体的模型 `POST`。Claude Code/Codex 启动或能力探测产生的无请求体 `GET` 必须原样返回当前 Provider 的响应，不能把探测端点的 `404` 解释为模型失败并轮转整条 Provider 链。
+请求级 failover 只适用于**会真正产生补全的模型端点**：`/v1/messages`、`/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/embeddings`、`/v1/images/generations` 的带请求体 `POST`。其余请求不重试、不轮转、不写健康失败；收到 HTTP 响应时原样返回，连接失败或响应头超时时返回本地代理错误。这类请求包括：
+
+- Claude Code/Codex 启动或能力探测产生的无请求体 `GET`；
+- 辅助端点的 `POST`，典型是 Anthropic 的 `/v1/messages/count_tokens`。多数第三方中转站没有实现它，会返回 `Invalid URL (POST /v1/messages/count_tokens)` 形式的 `404`。这是**端点缺失**，不是 Provider 故障。
+
+把辅助端点的 `404` 当成模型失败会造成双重损害：一次请求就轮转并烧穿整条候选链，并且每一跳都被 `recordProviderRuntimeFailure` 计入 `consecutiveFailures` 和 `healthScore`，让本来健康的 Provider 被误判为 `error`。因此这类请求既不触发轮转，也不写入健康缓存的失败计数。
+
+失败处理是**两级**的：先在当前 Provider 上原地重试，重试额度耗尽后才轮转到下一跳。分级依据是失败的确定性：
+
+| 失败类别 | 原地重试 | 理由 |
+|---|---|---|
+| `408` / `409` / `425` / `429` / `5xx` | 是 | 限流与上游抖动，同一个 Provider 下一次就可能成功 |
+| 连接层错误（`ECONNRESET`、`ECONNREFUSED`、socket 挂断） | 是 | 瞬时传输故障，与 Provider 可用性无关 |
+| 有效输出前的流中断 | 是 | 同上，且此时重放不会产生重复输出 |
+| `401` / `403` / `404` | 否 | 鉴权、分组权限、端点或模型不存在都是确定性拒绝，重试只会拿到同一个错误 |
+| 响应头超时 | 否 | 已经白等了一个完整超时窗口，重试等于让用户再等一遍；连续超时另有 `MAX_CONSECUTIVE_HEADERS_TIMEOUTS` 短路兜底 |
+| 已产生有效输出后的中断 | 否 | 违反"输出开始后不静默重放"不变量，只能等用户重发 |
+
+尝试次数由 `maxAttemptsPerRoute` 控制（默认 2，即一次重试），退避为 `retryBackoffMs * 2^(attempt-1)`（默认基数 300ms）。重试成功时**不写失败记账**，健康分不受影响；重试耗尽后整段只写一次 `recordProviderRuntimeFailure`，不会因为重试次数放大熔断计数。
+
+`recordProviderRuntimeSuccess` 与所有 `status: "ok"` 的健康写入把 `healthScore` **直接置满**，而不是按固定步长累加。失败扣 35、成功加 25 的不对称步长意味着被误判扣出来的坑永远填不平，`healthScore` 会长期停在低位而失去诊断价值；一次真实成功比历史累计更有说服力。
 
 `resolveProviderCandidatesForTool()` 必须先按当前 CLI 的模型族过滤候选：Claude Code 只能得到 Claude 模型，Codex 只能得到 Codex/OpenAI 兼容模型。Provider 默认模型不兼容时，可从已发现目录选择同族模型；目录为空且默认模型不兼容时不得乐观加入候选链。显式指定的 Provider 即使健康缓存为 `error` 也必须先实际尝试一次；请求级自动切换只在过滤后的候选链内发生。
 
@@ -294,7 +316,7 @@ Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`eng
 | 决策 | 方案 | 理由 |
 |---|---|---|
 | 配置存储 | JSON (`~/.ai-gateway/`) + `proper-lockfile` | 可手编 + 文件锁/原子重命名防 CLI/Telegram 并发覆盖 |
-| Runtime 出站代理 | `core/network` 统一规范化，`runtime.json` 持久化 | CLI/Provider 探测与子进程共享语义，Surface 不重复拼 URL |
+| Runtime 出站代理 | `core/network` 统一规范化，`providers.json` 的 `proxyUrl` 优先于 `runtime.json` 默认值 | 按实际 Provider 路由上游流量，Surface 不重复拼 URL |
 | Telegram 会话 | SQLite (`better-sqlite3`) | 需要查询、索引和并发安全 |
 | 工具执行 | `child_process.spawn` | 完整 TTY 继承（CLI）或 JSON stream 捕获（headless） |
 | 用量追踪 | execution-scoped 本地 HTTP 代理 | 透明拦截，不改原生 TUI / JSON stream 交互 |
@@ -303,7 +325,7 @@ Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`eng
 | **目标传输代理** | Usage Proxy **原位演进**为单一 Transport Proxy；UsageObserver 与 MemoryExtension 共用 listener | 保留 usage/compat 能力，避免双代理、环境变量回环、重复解析 |
 | **成熟能力复用** | 自研 Runtime/Evidence/Policy/Capability 控制面；抽取/检索/向量/图/队列/策略求值走可替换 adapter | 保留产品差异化，避免重建通用问题 |
 
-🟢 `ai proxy` 的控制面配置保存在 `runtime.json`。`core/network` 负责把分离的 host/port、裸 `host:port` 或完整 URL 规范成同一 HTTP(S) origin，并在提交前用零 Token TCP 检查验证代理端点；失败不得覆盖旧配置。配置应用于 Runtime 的全局出站 dispatcher。CLI 子进程继承大小写 HTTP(S)/ALL proxy 变量，同时强制保留本地回环地址于 `NO_PROXY`，因此 execution-scoped Transport Proxy 仍是每次执行唯一的数据面入口。Telegram 可拥有独立 `proxyUrl`，复用同一规范化与端点检查，并额外通过候选代理调用 `getMe` 完成端到端验证；Surface 负责显示当前状态、采集编辑/关闭决策与渲染检查结果。
+🟢 `ai proxy <provider> <host> [port]` 将 `proxyUrl` 写入 `providers.json`；旧式 `ai proxy <host> [port]` 将默认值写入 `runtime.json`。`core/network` 规范化为 HTTP(S) origin；新增或编辑前用零 Token TCP 检查端点，失败不得覆盖旧配置。Provider 级代理优先，缺省时回退 Runtime 默认值；清除 Provider 覆盖后恢复该回退。控制面探测和 execution-scoped Transport Proxy 上游都按实际 Provider 选择 dispatcher，同一执行中的 fallback 不共用错误的代理路由。CLI 子进程使用启动 Provider 的代理环境，并强制保留本地回环地址于 `NO_PROXY`；模型请求仍经唯一 Transport Proxy。Telegram 可拥有独立 `proxyUrl`，复用规范化与端点检查，并额外通过候选代理调用 `getMe` 完成端到端验证。
 
 ### 自研 vs 复用的边界
 
@@ -443,7 +465,7 @@ Streaming Responses 请求先尝试原生 Responses，只有当上游**明确**�
 
 - 拥有 execution-scoped 上游 dispatcher，**禁用**上游 keep-alive 复用
 - 丢弃调用方提供的 `content-length`，从最终转发 body 重算
-- **Codex 是唯一的请求重试所有者**：每次重试获得新的上游连接；代理记录并暴露底层脱敏后的网络失败，但**自己不发重复请求**
+- Transport Proxy 对有效输出前、可安全重放的模型请求可在当前 Provider 原地重试，再按候选链轮转；辅助请求不参与重试或轮转。有效输出后不自动重放
 - 强制 45 秒上游响应头截止。连续两次 header 超时会打开 execution-local 短路：后续 Codex 重连立即得到超时结果，让 Telegram 执行适配器轮转到下一个 provider。**该熔断只作用于一次 execution，不能单独改变全局 provider 健康状态**
 
 ### 模式独立性

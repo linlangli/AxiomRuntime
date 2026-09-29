@@ -1,7 +1,12 @@
 import http from "node:http";
-import { Agent, fetch, type Response } from "undici";
+import { fetch, type Dispatcher, type Response } from "undici";
+import { loadRuntimeConfig } from "../config/runtime-config.js";
 import { writeLog } from "../logs/log-service.js";
 import { getProviderAuthScheme } from "../providers/provider-request-profile.js";
+import {
+  createUpstreamDispatcher,
+  resolveProviderProxy
+} from "../network/proxy.js";
 import {
   buildUpstreamHeaders,
   buildUpstreamUrl,
@@ -30,12 +35,32 @@ import { getToolBaseUrl } from "./tool-runner.js";
 
 const DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS = 45_000;
 const MAX_CONSECUTIVE_HEADERS_TIMEOUTS = 2;
+const DEFAULT_MAX_ATTEMPTS_PER_ROUTE = 2;
+const DEFAULT_RETRY_BACKOFF_MS = 300;
 
 export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): Promise<OpenAiUsageProxy> {
   const engine = input.engine ?? (input.tool === "claude" ? "claude" : "codex");
   const routes = dedupeRoutes([{ provider: input.provider, model: input.model }, ...(input.fallbackRoutes ?? [])]);
   const upstreamHeadersTimeoutMs = normalizePositiveTimeout(input.upstreamHeadersTimeoutMs, DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS);
-  const upstreamDispatcher = new Agent({ connections: 4, pipelining: 0, headersTimeout: upstreamHeadersTimeoutMs, bodyTimeout: 0 });
+  const maxAttemptsPerRoute = normalizePositiveTimeout(input.maxAttemptsPerRoute, DEFAULT_MAX_ATTEMPTS_PER_ROUTE);
+  const retryBackoffMs = normalizeNonNegativeTimeout(input.retryBackoffMs, DEFAULT_RETRY_BACKOFF_MS);
+  // 按代理 URL 分派：Provider 级 proxyUrl 覆盖 runtime.json 全局默认。dedupeRoutes 可能重复
+  // Provider，按 URL 键共享连接池；实例随 proxy.close() 统一关闭。
+  const globalProxyUrl = input.globalProxyUrl !== undefined
+    ? input.globalProxyUrl
+    : (await loadRuntimeConfig()).proxyUrl ?? null;
+  const dispatchersByUrl = new Map<string, Dispatcher>();
+  const dispatcherFor = (route: OpenAiUsageProxyRoute): Dispatcher => {
+    const key = resolveProviderProxy(route.provider, globalProxyUrl) ?? "";
+    let dispatcher = dispatchersByUrl.get(key);
+    if (!dispatcher) {
+      dispatcher = createUpstreamDispatcher(key || null, { headersTimeout: upstreamHeadersTimeoutMs });
+      dispatchersByUrl.set(key, dispatcher);
+    }
+    return dispatcher;
+  };
+  const closeDispatchers = (): Promise<void[]> =>
+    Promise.all([...dispatchersByUrl.values()].map((dispatcher) => dispatcher.close().catch(() => undefined)));
   const records: OpenAiUsageProxyRecord[] = [];
   const metrics = createEmptyMetrics();
   const consecutiveHeadersTimeouts = new Map<string, number>();
@@ -69,33 +94,67 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
       const originalRequestBody = await readRequestBody(req);
       requestBytes = originalRequestBody.length;
       requestShape = summarizeRequestShape(originalRequestBody);
-      const canFailover = req.method === "POST" && requestBytes > 0;
+      // 只有真正会产生补全的模型端点才允许轮转。count_tokens 这类辅助端点在很多中转站上
+      // 并不存在，它的 404 不代表 Provider 不可用，不能据此烧掉整条候选链。
+      const modelInvocation = isModelInvocationRequest(req.method, req.url ?? "/");
+      const canFailover = req.method === "POST" && requestBytes > 0 && modelInvocation;
 
-      for (let routeIndex = activeRouteIndex; routeIndex < routes.length; routeIndex += 1) {
+      let routeIndex = activeRouteIndex;
+      let attempt = 1;
+      while (routeIndex < routes.length) {
         const route = routes[routeIndex]!;
         const nextRoute = routes[routeIndex + 1];
+        // 记账已由 handleFailure 写过，避免落地分支再补一次健康失败。
+        let failureRecorded = false;
+        // 瞬时失败先在同一个 Provider 上原地重试，重试额度耗尽（或失败本身不可重试）才换 Provider。
+        const handleFailure = async (
+          reason: string,
+          retryable: boolean,
+          failoverAllowed: boolean
+        ): Promise<"retry" | "failover" | "exhausted"> => {
+          if (retryable && attempt < maxAttemptsPerRoute) {
+            const delayMs = retryBackoffMs * 2 ** (attempt - 1);
+            await writeLog({
+              level: "warn",
+              category: "strategy",
+              action: "provider_retry",
+              message: `Retrying ${route.provider.name} / ${route.model} after ${reason} (attempt ${attempt + 1}/${maxAttemptsPerRoute}).`,
+              metadata: { tool: input.tool, provider: route.provider.name, model: route.model, reason, attempt: attempt + 1, maxAttempts: maxAttemptsPerRoute, delayMs }
+            });
+            if (delayMs > 0) await delay(delayMs);
+            attempt += 1;
+            return "retry";
+          }
+          failureRecorded = true;
+          await input.onRouteResult?.(route, false, reason);
+          if (nextRoute && failoverAllowed) {
+            await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
+            routeIndex += 1;
+            attempt = 1;
+            return "failover";
+          }
+          return "exhausted";
+        };
         const requestBody = rewriteRequestModel(originalRequestBody, route.model);
         const requestModel = extractRequestModel(requestBody) ?? route.model;
         const responsesStream = engine === "codex" && isResponsesStreamRequest(req.url ?? "/", requestBody);
         const upstreamBaseUrl = getToolBaseUrl(engine, route.provider);
         const upstreamUrl = buildUpstreamUrl(upstreamBaseUrl, req.url ?? "/", { stripV1Prefix: engine === "codex" });
         const upstreamPath = new URL(upstreamUrl).pathname;
+        const upstreamDispatcher = dispatcherFor(route);
         const timeoutCount = consecutiveHeadersTimeouts.get(route.provider.name) ?? 0;
 
         await writeLog({
           category: "usage",
           action: "openai_usage_proxy_request",
           message: `Proxying ${input.tool} request for ${route.provider.name} / ${requestModel}`,
-          metadata: { tool: input.tool, provider: route.provider.name, model: requestModel, path: upstreamPath, attempt: routeIndex - activeRouteIndex + 1 }
+          metadata: { tool: input.tool, provider: route.provider.name, model: requestModel, path: upstreamPath, route: routeIndex - activeRouteIndex + 1, attempt }
         });
 
         if (timeoutCount >= MAX_CONSECUTIVE_HEADERS_TIMEOUTS) {
+          // 该 Provider 已经连续超时到熔断阈值，原地重试只会再赔一个超时窗口。
           const reason = "headers_timeout_short_circuit";
-          await input.onRouteResult?.(route, false, reason);
-          if (nextRoute) {
-            await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
-            continue;
-          }
+          if (canFailover && await handleFailure(reason, false, true) === "failover") continue;
           sendProxyError(res, 504, "AxiomRuntime timed out waiting for provider response headers.");
           finalizeMetrics(false, reason);
           return;
@@ -119,10 +178,12 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
           consecutiveHeadersTimeouts.set(route.provider.name, headersTimedOut ? timeoutCount + 1 : 0);
           const reason = headersTimedOut ? "headers_timeout" : diagnostic.code ?? "proxy_error";
           await logUpstreamError(input, route, requestModel, upstreamPath, requestBytes, requestShape, diagnostic, upstreamHeadersTimeoutMs);
-          await input.onRouteResult?.(route, false, reason);
-          if (nextRoute) {
-            await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
-            continue;
+          // 连接层错误（RST、拒绝连接、socket 挂断）几乎都是瞬时的，值得原地重试；
+          // 但 headers 超时不重试——它已经白等了一个完整的超时窗口，重试只会让用户再等一遍，
+          // 连续超时另有 MAX_CONSECUTIVE_HEADERS_TIMEOUTS 短路兜底。
+          if (canFailover) {
+            const outcome = await handleFailure(reason, !headersTimedOut, true);
+            if (outcome === "retry" || outcome === "failover") continue;
           }
           const code = diagnostic.code ? ` (${diagnostic.code})` : "";
           sendProxyError(res, headersTimedOut ? 504 : 502, `AxiomRuntime proxy failed: ${diagnostic.message}${code}`);
@@ -149,25 +210,23 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
               dispatcher: upstreamDispatcher
             });
             const chatText = chatResponse.body.toString("utf8");
-            if (shouldFailoverResponse(chatResponse.status, chatText) && nextRoute && canFailover) {
-              const reason = `http_${effectiveResponseStatus(chatResponse.status, chatText)}`;
-              await input.onRouteResult?.(route, false, reason);
-              await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
-              continue;
+            const chatStatus = effectiveResponseStatus(chatResponse.status, chatText);
+            if (shouldFailoverResponse(chatResponse.status, chatText) && canFailover) {
+              const decision = await handleFailure(`http_${chatStatus}`, isRetryableStatus(chatStatus), true);
+              if (decision === "retry" || decision === "failover") continue;
             }
             await sendBufferedUsageResponse(res, chatResponse, chatText, route, requestModel, input, records, metrics);
             activeRouteIndex = routeIndex;
             const success = chatResponse.status >= 200 && chatResponse.status < 400;
-            await input.onRouteResult?.(route, success, `http_${chatResponse.status}`);
+            if (success || !failureRecorded) await input.onRouteResult?.(route, success, `http_${chatResponse.status}`);
             finalizeMetrics(success, chatResponse.status);
             return;
           }
 
-          if (shouldFailoverResponse(outcome.status, nativeBody) && nextRoute && canFailover) {
-            const reason = `http_${effectiveResponseStatus(outcome.status, nativeBody)}`;
-            await input.onRouteResult?.(route, false, reason);
-            await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
-            continue;
+          const nativeStatus = effectiveResponseStatus(outcome.status, nativeBody);
+          if (shouldFailoverResponse(outcome.status, nativeBody) && canFailover) {
+            const decision = await handleFailure(`http_${nativeStatus}`, isRetryableStatus(nativeStatus), true);
+            if (decision === "retry" || decision === "failover") continue;
           }
           await sendBufferedUsageResponse(res, {
             status: outcome.status,
@@ -177,7 +236,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
           }, nativeBody, route, requestModel, input, records, metrics);
           activeRouteIndex = routeIndex;
           const success = outcome.status >= 200 && outcome.status < 400;
-          await input.onRouteResult?.(route, success, `http_${outcome.status}`);
+          if (success || !failureRecorded) await input.onRouteResult?.(route, success, `http_${outcome.status}`);
           finalizeMetrics(success, outcome.status);
           return;
         }
@@ -193,11 +252,13 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
           if (streamed.error) {
             const diagnostic = summarizeUpstreamError(streamed.error);
             const reason = diagnostic.code ?? "stream_error";
-            await input.onRouteResult?.(route, false, reason);
-            if (!streamed.outputStarted && nextRoute && canFailover) {
-              await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
-              continue;
+            // 还没产生有效输出时流中断是瞬时故障，可以原地重试；一旦已经输出过就不能静默重放，
+            // 只能请用户重发，因此这里明确禁止重试。
+            if (!streamed.outputStarted && canFailover) {
+              const decision = await handleFailure(reason, true, true);
+              if (decision === "retry" || decision === "failover") continue;
             }
+            if (canFailover && !failureRecorded) await input.onRouteResult?.(route, false, reason);
             if (streamed.outputStarted && nextRoute && canFailover) {
               pendingRouteIndex = routeIndex + 1;
               const event: OpenAiUsageProxyFailoverEvent = { type: "confirmation_required", from: route, to: nextRoute, reason };
@@ -228,11 +289,10 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
 
         const responseBody = Buffer.from(await upstreamResponse.arrayBuffer());
         const responseText = responseBody.toString("utf8");
-        if (shouldFailoverResponse(upstreamResponse.status, responseText) && nextRoute && canFailover) {
-          const reason = `http_${effectiveResponseStatus(upstreamResponse.status, responseText)}`;
-          await input.onRouteResult?.(route, false, reason);
-          await emitFailover(input, { type: "automatic", from: route, to: nextRoute, reason });
-          continue;
+        const effectiveStatus = effectiveResponseStatus(upstreamResponse.status, responseText);
+        if (shouldFailoverResponse(upstreamResponse.status, responseText) && canFailover) {
+          const decision = await handleFailure(`http_${effectiveStatus}`, isRetryableStatus(effectiveStatus), true);
+          if (decision === "retry" || decision === "failover") continue;
         }
         writeResponseHead(res, upstreamResponse);
         const recordedUsage = await recordUsageFromResponse({
@@ -247,7 +307,10 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
         recordUsageMetric(metrics, recordedUsage);
         res.end(responseBody);
         activeRouteIndex = routeIndex;
-        await input.onRouteResult?.(route, upstreamResponse.ok, `http_${upstreamResponse.status}`);
+        // 辅助端点缺失不代表 Provider 不健康，不能把它的 404 计入连续失败与健康分。
+        if ((modelInvocation || upstreamResponse.ok) && (upstreamResponse.ok || !failureRecorded)) {
+          await input.onRouteResult?.(route, upstreamResponse.ok, `http_${upstreamResponse.status}`);
+        }
         finalizeMetrics(upstreamResponse.ok, upstreamResponse.status);
         return;
       }
@@ -268,7 +331,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
 
   await new Promise<void>((resolve, reject) => {
     const onListenError = (error: Error): void => {
-      void upstreamDispatcher.close();
+      void closeDispatchers();
       reject(error);
     };
     server.once("error", onListenError);
@@ -286,7 +349,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
       const closeServer = server.listening
         ? new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
         : Promise.resolve();
-      await Promise.all([closeServer, upstreamDispatcher.close()]);
+      await Promise.all([closeServer, closeDispatchers()]);
     },
     getRecords: () => [...records],
     getMetrics: () => snapshotMetrics(metrics)
@@ -382,6 +445,34 @@ function rewriteRequestModel(requestBody: Buffer, model: string): Buffer {
   }
 }
 
+// 会真正产生补全的模型端点。除此之外的辅助端点（Anthropic 的 count_tokens、各类能力探测）
+// 在中转站上常常未实现，其 404 属于端点缺失而非 Provider 故障。
+const MODEL_INVOCATION_PATHS = new Set([
+  "/messages",
+  "/chat/completions",
+  "/completions",
+  "/responses",
+  "/embeddings",
+  "/images/generations"
+]);
+
+export function isModelInvocationRequest(method: string | undefined, incomingUrl: string): boolean {
+  if (method !== "POST") return false;
+  const pathname = new URL(incomingUrl, "http://127.0.0.1").pathname.replace(/\/+$/, "");
+  const withoutVersion = pathname.replace(/^\/v\d+(?=\/|$)/i, "");
+  return MODEL_INVOCATION_PATHS.has(withoutVersion.toLowerCase());
+}
+
+// 值得在同一个 Provider 上原地重试的状态：限流与上游抖动。401/403/404 是确定性拒绝
+// （鉴权、分组权限、端点/模型不存在），重试只会把同一个错误再拿一遍，直接换 Provider 更快。
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function shouldFailoverResponse(status: number, bodyText: string): boolean {
   const effective = effectiveResponseStatus(status, bodyText);
   return effective === 401 || effective === 403 || effective === 404
@@ -414,6 +505,10 @@ function isUsableEventStream(response: Response): boolean {
 
 function normalizePositiveTimeout(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+function normalizeNonNegativeTimeout(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
 }
 
 function sendProxyError(res: http.ServerResponse, status: number, message: string): void {

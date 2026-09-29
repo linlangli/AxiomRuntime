@@ -2,9 +2,10 @@ import { readCache } from "../../core/config/cache-store.js";
 import { writeLog } from "../../core/logs/log-service.js";
 import { deleteProvider, getProviderPriorityOptions, listProviders, updateProvider } from "../../core/providers/provider-service.js";
 import type { Provider, ProviderMode } from "../../core/types.js";
+import { promptProxyUrl } from "../prompts/proxy.js";
 import { promptConfirm, promptSelect, promptText } from "../prompts/prompt.js";
 
-type EditableField = "name" | "baseUrl" | "apiKey" | "mode" | "level" | "model";
+type EditableField = "name" | "baseUrl" | "apiKey" | "mode" | "level" | "model" | "proxyUrl";
 
 export async function runProviderEditCommand(name?: string): Promise<void> {
   const providers = await listProviders();
@@ -25,10 +26,15 @@ export async function runProviderEditCommand(name?: string): Promise<void> {
     { label: "apiKey", value: "apiKey" },
     { label: "mode", value: "mode" },
     { label: "level", value: "level" },
-    { label: "model", value: "model" }
+    { label: "model", value: "model" },
+    { label: "proxyUrl", value: "proxyUrl" }
   ]);
 
   const patch = await buildPatch(provider, providers, field);
+  if (!patch) {
+    console.log("Edit cancelled.");
+    return;
+  }
   const updated = await updateProvider(provider.name, patch);
   console.log(`Updated provider: ${updated.name}`);
   await writeLog({
@@ -75,7 +81,11 @@ async function selectProviderName(providers: Provider[]): Promise<string> {
   );
 }
 
-async function buildPatch(provider: Provider, providers: Provider[], field: EditableField): Promise<Partial<Provider>> {
+async function buildPatch(
+  provider: Provider,
+  providers: Provider[],
+  field: EditableField
+): Promise<Partial<Provider> | null> {
   if (field === "mode") {
     const mode = await promptSelect<ProviderMode>("Select mode", [
       { label: "auto", value: "auto" },
@@ -105,6 +115,13 @@ async function buildPatch(provider: Provider, providers: Provider[], field: Edit
     return { model };
   }
 
+  if (field === "proxyUrl") {
+    // 复用代理提示的 Edit/Disable/Cancel 流；空串是显式清除哨兵，normalizeProviders 会剥离。
+    const proxyUrl = await promptProxyUrl({ currentUrl: provider.proxyUrl });
+    if (proxyUrl === undefined) return null;
+    return proxyUrl ? { proxyUrl } : { proxyUrl: "" };
+  }
+
   const value = await promptText(`New ${field}`, { defaultValue: provider[field] });
   return { [field]: value };
 }
@@ -112,15 +129,17 @@ async function buildPatch(provider: Provider, providers: Provider[], field: Edit
 export function buildProviderLevelChoices(
   providers: Provider[],
   providerName: string
-): Array<{ label: string; value: number }> {
+): Array<{ label: string; value: number; key: string }> {
   return getProviderPriorityOptions(providers, providerName).map(({ level, occupiedBy }) => ({
+    // label 不再重复 level 数字：行首的输入标识就是 level 本身。
     label: level === 0
-      ? "0 - excluded from automatic fallback"
+      ? "excluded from automatic fallback"
       : occupiedBy === providerName
-        ? `${level} - current: ${providerName}`
+        ? `current: ${providerName}`
         : occupiedBy
-          ? `${level} - swap with ${occupiedBy}`
-          : `${level} - lowest automatic priority`,
-    value: level
+          ? `swap with ${occupiedBy}`
+          : "lowest automatic priority",
+    value: level,
+    key: String(level)
   }));
 }

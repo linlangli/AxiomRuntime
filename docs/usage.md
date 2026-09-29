@@ -123,6 +123,10 @@ ai provider add 我的站 https://example.com sk-xxx gpt-5.5  # 显式模型回�
 
 添加时自动完成：选择 `0..N` 优先级 → 探测 Base URL 与认证方式 → 获取模型列表 → 用每种实际存在的文本协议各一个代表模型做最多 1 token 的可用性验证 → 设 `mode: auto` → 写入配置和模型缓存 → 选择默认模型。已有 5 个自动 Provider 时会提供 `0, 1, 2, 3, 4, 5, 6`；选择已占用等级时，新 Provider 占据该等级，原 Provider 移到队尾。`level: 0` 表示只允许显式选择，不参与自动切换。全部候选均失败时不会写入 Provider。
 
+选择优先级时，列表行首的数字**就是 level 本身**，直接输入它即可，不存在另一套行号。
+
+纯图片 Provider（模型目录里只有 `gpt-image-*`、`dall-e-*` 这类图片模型）会被**强制存为 `level: 0`**，忽略你在列表里选的等级。原因是它没有任何可用于对话的模型：留在自动降级链上，Claude Code 或 Codex 轮转到它时只会拿到 `403 无权访问 image 分组` 或 `404`，白白浪费一跳。`ai image` 显式指定它照常可用。
+
 Runtime 会先尝试你输入的 Base URL，再按需增加或移除末尾 `/v1`；认证只在 `Bearer`、`x-api-key`、`api-key` 等可由当前 API Key 安全派生的已知方式中选择，不会暴力猜测任意私有 header。探测成功后终端会列出最终 URL、认证方式和模型。只有超时、`429`、`5xx` 会短暂重试，确定性的认证或路径错误不会重复请求。
 
 部分 Provider 不开放 `GET /models`，会返回 `404`、`451` 等状态。交互式添加会在自动发现失败后要求输入官网明确提供的模型名，并优先通过 Responses API（Claude 模型则通过 Messages API）做一次最小真实验证；脚本可把模型作为第四个参数传入。验证成功后只缓存该手工模型，失败则不保存配置。Runtime 不会自动猜测模型名。
@@ -145,6 +149,8 @@ ai status             # 联网刷新健康度 + 看用量
 如果 Provider 本身不开放模型目录，`ai models [provider]` 会如实报告 `404`、`451` 等目录错误；这不代表已缓存模型不可用。请用 `ai check [provider]` 对缓存模型做最小真实验证。
 
 `ai check [provider]` 复用与 `ai status` 相同的真实验证规则，但只刷新并检查一个 Provider。省略名称时进入交互选择；提供名称时精确匹配，名称不存在会直接报错，不会退回检查其他 Provider。适合在 Provider 较多时降低等待时间和验证 Token 消耗。
+
+验证通过的 Provider 会把健康分**直接恢复到满分**，而不是每次成功只加一点。历史上被误判扣掉的分数不会拖着不放：只要它现在真的能用，`ai status` 跑完就是干净的。
 
 `ai status` 会先刷新模型列表，再为每个 Provider 分别选择最多一个 Claude 代表模型和一个 Codex 代表模型做真实调用验证。Codex 优先验证 Responses API，只有明确不支持时才回退 Chat Completions。对于已通过手工模型验证、但不开放 `GET /models` 的 Provider，会使用已验证缓存模型继续检查，不会因为目录返回 `451` 而误判不可用。不存在对应模型族时不会发起该协议请求；每次验证使用最短输入、把输出限制为 1 token，并且不自动重试产生 Token 的请求。代表模型验证最多等待 30 秒：明确成功显示 `ready`，明确失败显示 `provider-error`；如果本地等待超时，上游仍可能已经处理成功，因此显示 `unknown` 并保留该 Provider 的运行候选资格。
 
@@ -195,16 +201,40 @@ ai last                                # 沿用上次的工具、服务商和模
 
 `ai use` 只启动一个 Claude Code 或 Codex 进程，候选 Provider 由同一个 execution-scoped Transport Proxy 管理。真正带请求体的模型 `POST` 遇到连接失败、认证失败、`404`、`408`、`409`、`425`、`429`、`5xx`，或流式响应在有效内容出现前中断时，Runtime 会丢弃失败尝试，按 `level` 切到下一个 Provider，并将请求中的 `model` 改为该 Provider 的候选模型。原生 CLI 进程没有重启，因此它发送的完整会话上下文仍在同一请求中。
 
+**一次失败不会立刻换 Provider。** Runtime 先在当前 Provider 上原地重试，只有重试额度用尽才轮转：
+
+| 失败 | 是否原地重试 |
+|---|---|
+| `429` 限流、`5xx`、`408`/`409`/`425` | 重试 |
+| 连接被重置 / 拒绝 / socket 挂断 | 重试 |
+| 流式响应在有效内容出现前中断 | 重试 |
+| `401` / `403` / `404` | 不重试，直接换下一个 Provider |
+| 响应头超时 | 不重试（已经等满了一个超时窗口，重试等于再等一遍） |
+| 已经输出过内容后中断 | 不重试（见下一段） |
+
+默认每个 Provider 最多尝试 2 次（首次 + 1 次重试），两次之间退避 300ms，之后按次数翻倍。重试成功的请求**不计入**该 Provider 的失败次数、不扣健康分；重试全部失败时整段只记一次失败，不会因为重试而加速熔断。所以偶发的 429 或上游抖动现在大多在原地就消化掉了，你在 `ai log` 里会看到 `provider_retry` 而不是一串切换。
+
 一旦已经向 Claude Code/Codex 返回文字、推理增量或工具参数，Runtime 不会自动重放，避免重复输出或重复工具调用。此时 Runtime 只记下候选 Provider，**下一个**经过代理的请求才真正切过去。`400`、`413`、`422` 等通常由请求本身导致的错误不会跨 Provider 重试。确认动作依赖你在当前 CLI 里重新提交或重试，不会抢占原生 TUI 弹出额外的 `y/n` 输入框。
 
-**两处与上述描述不符的实际行为**（已核实，修复前请按实际行为理解）：
+### 哪些请求不会触发切换
+
+只有**会真正产生补全的模型端点**参与降级：`/v1/messages`、`/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/embeddings`、`/v1/images/generations`。其余请求收到的 HTTP 错误原样返回给 CLI；连接失败或响应头超时则返回本地代理错误。它们都不重试、不轮转，也不计入 Provider 健康分。
+
+最常见的一类是 Anthropic 的 `/v1/messages/count_tokens`。Claude Code 会主动调用它来估算上下文长度，而多数第三方中转站没有实现这个端点，会返回：
+
+```json
+{"error":{"message":"Invalid URL (POST /v1/messages/count_tokens)","type":"invalid_request_error"}}
+```
+
+这是**端点缺失**，不是 Provider 坏了。如果把它当成模型调用失败，一次 `count_tokens` 就会连续轮转并烧穿整条候选链，同时给每个被轮到的 Provider 记一次失败、扣一次健康分——本来完全可用的 Provider 会被误标成 `error`。现在这类请求被排除在降级之外。
+
+**一处与上述描述不符的实际行为**（已核实，修复前请按实际行为理解）：
 
 | 场景 | 实际行为 |
 |---|---|
-| 无请求体 `GET` 探测（如 `/v1/models`）**在连接层失败**——连不上、socket 断开、响应头超时 | **会**触发 Provider 轮转，并且**永久改变**后续请求的落点。只有基于 HTTP 错误状态码（`404`/`429`/`5xx` 等）的切换判定才受「必须是带请求体的 `POST`」约束 |
 | 处于「等待确认切换」状态时，CLI 自发的**无关请求**（包括无请求体 `GET`）先到达 | 该请求会**替你消耗掉**待确认状态并记为已确认切换，不需要你真的重新提交 |
 
-两者都不会造成重复输出或重复计费——切换本身仍然只对失败的尝试生效。影响是**落点可能比你预期的更早发生变化**：想确认这次请求最终由谁承接，用 `ai log --print --trace <traceId>` 看终止跳，而不是假设它还在启动时选定的 Provider 上。
+它不会造成重复输出或重复计费——切换本身仍然只对失败的尝试生效。影响是**落点可能比你预期的更早发生变化**：想确认这次请求最终由谁承接，用 `ai log --print --trace <traceId>` 看终止跳，而不是假设它还在启动时选定的 Provider 上。
 
 **提示显示在哪里**：原生 CLI 的 TUI 独占终端并整屏重绘，因此 Runtime **不会**在会话期间往终端插入提示行——那会打乱 TUI 的排版。切换提示按通道分两处呈现：
 
@@ -242,17 +272,20 @@ ai last                            # 上次选择的工具 / 服务商 / 模型
 
 **日志**：记录服务商、Base URL、模型、启动参数和 API Key 指纹，**不记完整 Key**。
 
-### 为 Runtime 和 AI CLI 设置代理
+### 为 Runtime 和 Provider 设置代理
 
 ```bash
-ai proxy                              # 交互输入代理主机/IP与端口
-ai proxy 127.0.0.1 8081               # 自动补全为 http://127.0.0.1:8081
-ai proxy 127.0.0.1:8081               # 兼容 host:port
-ai proxy http://127.0.0.1:8081        # 兼容完整 URL
-ai proxy --disable                    # 非交互清除
+ai proxy                              # 交互选择 Provider 或 Runtime 默认值
+ai proxy 我的站 127.0.0.1 8081        # 只为“我的站”设置代理
+ai proxy 我的站 --disable             # 清除该 Provider 的覆盖，回退 Runtime 默认值
+ai proxy 127.0.0.1 8081               # 设置 Runtime 默认代理
+ai proxy http://127.0.0.1:8081        # 完整 URL 仍可用
+ai proxy --disable                    # 清除 Runtime 默认代理
 ```
 
-已有代理时，交互命令会先显示当前地址，再提供 `Edit proxy`、`Disable proxy`、`Cancel` 三个选项，不再通过输入 `off` 关闭。新增或编辑会先做一次零 Token 的代理 host/port TCP 连通检查；失败时显示原因并保留原配置。配置成功后写入 `~/.ai-gateway/runtime.json`。之后 AxiomRuntime 的 Provider 探测、状态检查等网络请求，以及通过 `ai use` 启动的 Claude Code / Codex 都使用该代理。子 CLI 仍先连接本次执行的本地 Transport Proxy，Runtime 会自动把 `127.0.0.1`、`localhost` 和 `::1` 加入 `NO_PROXY`，避免代理回环。
+首个参数与已有 Provider 名精确匹配时，设置该 Provider 的 `proxyUrl`，保存在 `~/.ai-gateway/providers.json`；否则沿用 `host [port]` 形式设置 `~/.ai-gateway/runtime.json` 中的默认代理。无参数时先选目标，再显示当前地址及 `Edit proxy`、`Disable proxy`、`Cancel` 操作。`ai provider edit` 的 `proxyUrl` 字段也可编辑。新增或编辑都会先做零 Token 的代理端点 TCP 连通检查；失败时保留原配置。清除 Provider 代理只删除它的覆盖值；若 Runtime 默认代理仍存在，请求会回退到该默认值。
+
+Provider 代理优先作用于该 Provider 的模型发现、健康探测和模型请求，包括同一会话内降级轮转到该 Provider 的请求。未配置 Provider 代理时使用 Runtime 默认代理。通过 `ai use` 启动的 Claude Code / Codex 子进程采用启动时所选 Provider 的代理环境；模型流量仍先进入本次执行的 Transport Proxy，再按实际承接请求的 Provider 选择上游代理。Runtime 自动把 `127.0.0.1`、`localhost` 和 `::1` 加入 `NO_PROXY`，避免本地代理回环。
 
 `ai proxy` 不修改 `~/.claude`、`~/.codex` 或原生命令的永久配置；直接运行 `claude` / `codex` 不受影响。需要持久修改 Codex App 时，继续使用后文的 `ai set codex proxy`。
 

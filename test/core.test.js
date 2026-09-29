@@ -11,7 +11,8 @@ import { newTraceId, readRecentLogs } from "../dist/core/logs/log-service.js";
 import { normalizeProviders, swapProviderLevel, writeProviders } from "../dist/core/config/providers-store.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { checkProvider, extractTokenUsage, probeProviderConfiguration } from "../dist/core/models/model-discovery.js";
-import { isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
+import { isImageOnlyModelSet, isModelCompatible, pickCompatibleModel } from "../dist/core/models/model-filter.js";
+import { isModelInvocationRequest } from "../dist/core/runner/openai-usage-server.js";
 import { resolveToolCommandWithOptions } from "../dist/core/runner/command-resolver.js";
 import { isPrivilegedProcess, resolveClaudePermissionMode } from "../dist/core/runner/claude-permission-policy.js";
 import { getRunnerEngine, listRunnerEngines } from "../dist/core/runner/engine-registry.js";
@@ -396,6 +397,101 @@ test("proxy command normalizes split input and redacts command logs", async () =
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtimeHome, "runtime.json"), "utf8")), {});
   await new Promise((resolve) => server.close(resolve));
   await fs.rm(tempDir, { recursive: true, force: true });
+});
+
+test("proxy command scopes a provider proxy without touching the runtime default", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-provider-proxy-test-"));
+  const runtimeHome = path.join(tempDir, "runtime-home");
+  const host = "127.0.0.1";
+  const server = net.createServer();
+  await new Promise((resolve) => server.listen(0, host, resolve));
+  const port = String(server.address().port);
+  await fs.mkdir(runtimeHome, { recursive: true });
+  await fs.writeFile(path.join(runtimeHome, "providers.json"), JSON.stringify([
+    { name: "scoped", baseUrl: "https://scoped.test/v1", apiKey: "k", mode: "auto", level: 1, model: "" }
+  ]));
+
+  const result = spawnSync(process.execPath, [
+    path.resolve("dist/cli/index.js"),
+    "proxy",
+    "scoped",
+    host,
+    port
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, AI_GATEWAY_HOME: runtimeHome }
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const providers = JSON.parse(await fs.readFile(path.join(runtimeHome, "providers.json"), "utf8"));
+  assert.equal(providers[0].proxyUrl, `http://${host}:${port}`);
+  // runtime.json 不被 provider scope 创建或写入默认代理。
+  await assert.rejects(fs.access(path.join(runtimeHome, "runtime.json")));
+  const logs = await fs.readFile(path.join(runtimeHome, ".ai-gateway.log"), "utf8");
+  assert.equal(logs.includes(host), false);
+  assert.match(logs, /provider_proxy_set/);
+
+  await new Promise((resolve) => server.close(resolve));
+  await fs.rm(tempDir, { recursive: true, force: true });
+});
+
+test("usage proxy resolves dispatchers per route so provider proxies fail over to a direct route", async () => {
+  await withTempHome(async () => {
+    // 找一个必然拒绝连接的端口：bind 后立刻 close，端口大概率未被其他监听者占用。
+    const deadPort = await new Promise((resolve) => {
+      const probe = net.createServer();
+      probe.once("error", () => resolve(0));
+      probe.listen(0, "127.0.0.1", () => {
+        const { port } = probe.address();
+        probe.close(() => resolve(port));
+      });
+    });
+    assert.ok(deadPort > 0);
+
+    const backup = await startTestServer(async (req, res) => {
+      await readRequestBody(req);
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ id: "probe", choices: [{ message: { content: "recovered" } }], usage: { total_tokens: 2 } }));
+    });
+
+    const proxy = await startOpenAiUsageProxy({
+      provider: {
+        name: "proxied",
+        baseUrl: "https://upstream-a.test/v1",
+        apiKey: "a",
+        mode: "auto",
+        level: 1,
+        model: "model-a",
+        proxyUrl: `http://127.0.0.1:${deadPort}`
+      },
+      model: "model-a",
+      fallbackRoutes: [{
+        provider: { name: "direct", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "model-b" },
+        model: "model-b"
+      }],
+      tool: "claude",
+      engine: "claude",
+      maxAttemptsPerRoute: 1,
+      retryBackoffMs: 0
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "model-a", messages: [{ role: "user", content: "hi" }] })
+      });
+      // proxied 路由的代理端口拒绝连接 → 按路由分派失败 → 轮转到 direct 路由成功。
+      // 若 dispatcher 只按全局（或共享单实例），proxied 会直连成功，轮转不会发生。
+      assert.equal(response.status, 200);
+      const body = JSON.parse(await response.text());
+      assert.equal(body.choices[0].message.content, "recovered");
+    } finally {
+      await proxy.close();
+      await backup.close();
+    }
+  });
 });
 
 test("image command redacts its prompt from usage logs", async () => {
@@ -808,6 +904,279 @@ test("usage proxy does not rotate providers for non-model GET probes", async () 
       await backup.close();
     }
   });
+});
+
+test("usage proxy keeps auxiliary requests on the selected provider after connection failure", async () => {
+  await withTempHome(async () => {
+    const unavailable = net.createServer();
+    await new Promise((resolve) => unavailable.listen(0, "127.0.0.1", resolve));
+    const primaryPort = unavailable.address().port;
+    await new Promise((resolve) => unavailable.close(resolve));
+    let backupRequests = 0;
+    const backup = await startTestServer(async (_req, res) => {
+      backupRequests += 1;
+      res.statusCode = 200;
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const failovers = [];
+    const routeResults = [];
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "primary", baseUrl: `http://127.0.0.1:${primaryPort}`, apiKey: "a", mode: "auto", level: 1, model: "claude-primary" },
+      model: "claude-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "claude-backup" },
+        model: "claude-backup"
+      }],
+      tool: "claude",
+      engine: "claude",
+      maxAttemptsPerRoute: 1,
+      onFailover: (event) => failovers.push(event),
+      onRouteResult: (route, success) => routeResults.push([route.provider.name, success])
+    });
+
+    try {
+      for (const request of [
+        { path: "/v1/models", init: undefined },
+        { path: "/v1/messages/count_tokens", init: { method: "POST", headers: { "content-type": "application/json" }, body: "{}" } }
+      ]) {
+        const response = await fetch(`${proxy.baseUrl}${request.path}`, request.init);
+        assert.equal(response.status, 502);
+      }
+      assert.equal(backupRequests, 0);
+      assert.deepEqual(failovers, []);
+      assert.deepEqual(routeResults, []);
+    } finally {
+      await proxy.close();
+      await backup.close();
+    }
+  });
+});
+
+test("usage proxy does not rotate providers when an auxiliary endpoint is missing", async () => {
+  await withTempHome(async () => {
+    const failovers = [];
+    const routeResults = [];
+    const primaryPaths = [];
+    // count_tokens 在多数中转站上未实现：它的 404 是端点缺失，不代表 Provider 故障。
+    const primary = await startTestServer(async (req, res) => {
+      primaryPaths.push(req.url);
+      if (req.url === "/v1/messages/count_tokens") {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: { message: "Invalid URL (POST /v1/messages/count_tokens)" } }));
+        return;
+      }
+      res.statusCode = 200;
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const backup = await startTestServer(async (_req, res) => {
+      res.statusCode = 200;
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "primary", baseUrl: primary.url, apiKey: "a", mode: "auto", level: 1, model: "claude-primary" },
+      model: "claude-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "claude-backup" },
+        model: "claude-backup"
+      }],
+      tool: "claude",
+      engine: "claude",
+      onFailover: (event) => failovers.push(event),
+      onRouteResult: (route, success, reason) => routeResults.push([route.provider.name, success, reason])
+    });
+
+    try {
+      const probe = await fetch(`${proxy.baseUrl}/v1/messages/count_tokens`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-primary", messages: [{ role: "user", content: "hi" }] })
+      });
+      // 404 原样返回给 CLI，不轮转、不记入健康分。
+      assert.equal(probe.status, 404);
+      assert.deepEqual(failovers, []);
+      assert.deepEqual(routeResults, []);
+
+      // 真正的模型端点仍然落在同一个 Provider 上，候选链没有被提前烧掉。
+      const real = await fetch(`${proxy.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-primary", messages: [{ role: "user", content: "hi" }] })
+      });
+      assert.equal(real.status, 200);
+      assert.deepEqual(primaryPaths, ["/v1/messages/count_tokens", "/v1/messages"]);
+      assert.deepEqual(routeResults, [["primary", true, "http_200"]]);
+    } finally {
+      await proxy.close();
+      await primary.close();
+      await backup.close();
+    }
+  });
+});
+
+test("model invocation detection separates completion endpoints from auxiliary ones", () => {
+  assert.equal(isModelInvocationRequest("POST", "/v1/messages"), true);
+  assert.equal(isModelInvocationRequest("POST", "/v1/chat/completions"), true);
+  assert.equal(isModelInvocationRequest("POST", "/responses"), true);
+  assert.equal(isModelInvocationRequest("POST", "/v1/images/generations"), true);
+  // 辅助端点与探测请求都不参与轮转。
+  assert.equal(isModelInvocationRequest("POST", "/v1/messages/count_tokens"), false);
+  assert.equal(isModelInvocationRequest("POST", "/v1/models"), false);
+  assert.equal(isModelInvocationRequest("GET", "/v1/messages"), false);
+  assert.equal(isModelInvocationRequest("POST", "/v1/messages?beta=true"), true);
+});
+
+test("usage proxy retries the same provider before rotating on a transient failure", async () => {
+  await withTempHome(async () => {
+    const failovers = [];
+    const routeResults = [];
+    let primaryRequests = 0;
+    let backupRequests = 0;
+    // 第一次 429 只是限流抖动：原地重试就能成功，不该白扔掉一个 Provider。
+    const primary = await startTestServer(async (req, res) => {
+      primaryRequests += 1;
+      await readRequestBody(req);
+      if (primaryRequests === 1) {
+        res.statusCode = 429;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ error: { message: "rate limited" } }));
+        return;
+      }
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ model: "claude-primary", usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+    });
+    const backup = await startTestServer(async (_req, res) => {
+      backupRequests += 1;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const proxy = await startOpenAiUsageProxy({
+      provider: { name: "primary", baseUrl: primary.url, apiKey: "a", mode: "auto", level: 1, model: "claude-primary" },
+      model: "claude-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "claude-backup" },
+        model: "claude-backup"
+      }],
+      tool: "claude",
+      engine: "claude",
+      retryBackoffMs: 0,
+      onFailover: (event) => failovers.push(event),
+      onRouteResult: (route, success, reason) => routeResults.push([route.provider.name, success, reason])
+    });
+
+    try {
+      const response = await fetch(`${proxy.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-primary", messages: [{ role: "user", content: "hi" }] })
+      });
+      assert.equal(response.status, 200);
+      assert.equal(primaryRequests, 2);
+      assert.equal(backupRequests, 0);
+      // 重试成功后不切换、也不留下失败记账，健康分不受影响。
+      assert.deepEqual(failovers, []);
+      assert.deepEqual(routeResults, [["primary", true, "http_200"]]);
+    } finally {
+      await proxy.close();
+      await primary.close();
+      await backup.close();
+    }
+  });
+});
+
+test("usage proxy rotates immediately on deterministic rejections and after retries are exhausted", async () => {
+  await withTempHome(async () => {
+    const denied = { failovers: [], routeResults: [], primaryRequests: 0 };
+    const primary = await startTestServer(async (req, res) => {
+      denied.primaryRequests += 1;
+      await readRequestBody(req);
+      res.statusCode = 403;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ message: "无权访问 image 分组" }));
+    });
+    const backup = await startTestServer(async (req, res) => {
+      await readRequestBody(req);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ model: "claude-backup", usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+    });
+    const deniedProxy = await startOpenAiUsageProxy({
+      provider: { name: "primary", baseUrl: primary.url, apiKey: "a", mode: "auto", level: 1, model: "claude-primary" },
+      model: "claude-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "claude-backup" },
+        model: "claude-backup"
+      }],
+      tool: "claude",
+      engine: "claude",
+      retryBackoffMs: 0,
+      onFailover: (event) => denied.failovers.push(event),
+      onRouteResult: (route, success, reason) => denied.routeResults.push([route.provider.name, success, reason])
+    });
+
+    try {
+      const response = await fetch(`${deniedProxy.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-primary", messages: [{ role: "user", content: "hi" }] })
+      });
+      assert.equal(response.status, 200);
+      // 403 是确定性拒绝（鉴权/分组权限），重试拿到的还是同一个错误，直接换 Provider。
+      assert.equal(denied.primaryRequests, 1);
+      assert.deepEqual(denied.failovers.map((event) => [event.type, event.reason]), [["automatic", "http_403"]]);
+      assert.deepEqual(denied.routeResults, [["primary", false, "http_403"], ["backup", true, "http_200"]]);
+    } finally {
+      await deniedProxy.close();
+    }
+
+    const exhausted = { failovers: [], routeResults: [], primaryRequests: 0 };
+    const flaky = await startTestServer(async (req, res) => {
+      exhausted.primaryRequests += 1;
+      await readRequestBody(req);
+      res.statusCode = 503;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ error: { message: "upstream unavailable" } }));
+    });
+    const exhaustedProxy = await startOpenAiUsageProxy({
+      provider: { name: "flaky", baseUrl: flaky.url, apiKey: "a", mode: "auto", level: 1, model: "claude-primary" },
+      model: "claude-primary",
+      fallbackRoutes: [{
+        provider: { name: "backup", baseUrl: backup.url, apiKey: "b", mode: "auto", level: 2, model: "claude-backup" },
+        model: "claude-backup"
+      }],
+      tool: "claude",
+      engine: "claude",
+      maxAttemptsPerRoute: 3,
+      retryBackoffMs: 0,
+      onFailover: (event) => exhausted.failovers.push(event),
+      onRouteResult: (route, success, reason) => exhausted.routeResults.push([route.provider.name, success, reason])
+    });
+
+    try {
+      const response = await fetch(`${exhaustedProxy.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-primary", messages: [{ role: "user", content: "hi" }] })
+      });
+      assert.equal(response.status, 200);
+      // 重试额度（3 次）用尽后才轮转，且整段只记一次失败。
+      assert.equal(exhausted.primaryRequests, 3);
+      assert.deepEqual(exhausted.failovers.map((event) => [event.type, event.reason]), [["automatic", "http_503"]]);
+      assert.deepEqual(exhausted.routeResults, [["flaky", false, "http_503"], ["backup", true, "http_200"]]);
+    } finally {
+      await exhaustedProxy.close();
+      await flaky.close();
+      await primary.close();
+      await backup.close();
+    }
+  });
+});
+
+test("image-only providers are excluded from the automatic fallback chain", () => {
+  assert.equal(isImageOnlyModelSet("gpt-image-2", ["gpt-image-2", "dall-e-3"]), true);
+  assert.equal(isImageOnlyModelSet("gpt-image-2", []), true);
+  // 混合目录仍然可以进入自动链，因为它有可用的对话模型。
+  assert.equal(isImageOnlyModelSet("gpt-image-2", ["gpt-image-2", "gpt-5.5"]), false);
+  assert.equal(isImageOnlyModelSet("claude-sonnet-5", ["claude-sonnet-5"]), false);
+  assert.equal(isImageOnlyModelSet("", []), false);
 });
 
 test("failover notices stay in-protocol and summarize after the CLI exits", () => {
@@ -1384,8 +1753,8 @@ test("OpenAI usage proxy passes through native Responses no-channel errors witho
       const text = await response.text();
       assert.equal(response.status, 503);
       assert.match(text, /No available channel/);
-      // Transient no-channel error must not waste a chat attempt.
-      assert.deepEqual(requests.map((request) => request.url), ["/v1/responses"]);
+      // Transient no-channel error is retried in place on /responses, never downgraded to chat.
+      assert.deepEqual(requests.map((request) => request.url), ["/v1/responses", "/v1/responses"]);
       assert.equal(proxy.getMetrics().failureCount, 1);
     } finally {
       await proxy.close();
@@ -1418,7 +1787,8 @@ test("OpenAI usage proxy passes through Cloudflare 524 without chat fallback", a
       });
       assert.equal(response.status, 524);
       assert.match(await response.text(), /524/);
-      assert.deepEqual(requests, ["/v1/responses"]);
+      // 524 是瞬时上游超时，先原地重试一次；仍失败时原样透传，不走 chat 降级。
+      assert.deepEqual(requests, ["/v1/responses", "/v1/responses"]);
       assert.equal(proxy.getMetrics().failureCount, 1);
     } finally {
       await proxy.close();

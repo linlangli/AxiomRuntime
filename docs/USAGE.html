@@ -543,11 +543,11 @@ ai setup</pre>
                 <td>指定 provider 和模型启动工具。</td>
                 <td>有效输出前失败时在同一 CLI 会话内按 level 切换。</td>
               </tr>
-              <tr data-search="proxy network host port runtime claude codex">
+              <tr data-search="proxy network host port runtime provider claude codex">
                 <td><span class="group-label">使用</span></td>
-                <td><code class="cmd">ai proxy</code><br /><code class="cmd">ai proxy 127.0.0.1 8081</code><br /><code class="cmd">ai proxy --disable</code></td>
-                <td>为 Runtime 自身及通过 <code>ai</code> 启动的 Claude Code / Codex 设置 HTTP(S) 代理。</td>
-                <td>自动补全协议；不修改原生 CLI 永久配置。</td>
+                <td><code class="cmd">ai proxy</code><br /><code class="cmd">ai proxy 我的站 127.0.0.1 8081</code><br /><code class="cmd">ai proxy 127.0.0.1 8081</code><br /><code class="cmd">ai proxy --disable</code></td>
+                <td>为指定 Provider 设置代理，或为未覆盖的 Provider 设置 Runtime 默认代理。</td>
+                <td>Provider 优先、默认值兜底；不修改原生 CLI 永久配置。</td>
               </tr>
               <tr data-search="set codex chatgpt login oauth provider proxy config auth restart app">
                 <td><span class="group-label">使用</span></td>
@@ -657,17 +657,20 @@ ai use codex 51talk gpt-5.5</pre>
                 <p>不指定 provider 时使用 <code>level: 1</code>；不指定模型时使用 provider 默认 <code>model</code>。</p>
               </div>
               <div class="note">
-                <h3>Runtime 出站代理</h3>
+                <h3>Runtime 与 Provider 出站代理</h3>
                 <pre>ai proxy
+ai proxy 我的站 127.0.0.1 8081
+ai proxy 我的站 --disable
 ai proxy 127.0.0.1 8081
 ai proxy 127.0.0.1:8081
 ai proxy http://127.0.0.1:8081
 ai proxy --disable</pre>
                 <ul>
-                  <li>交互模式分别询问主机/IP与端口；缺少协议时自动补为 <code>http://</code>。</li>
+                  <li>无参数时先选择 Provider 或 Runtime 默认值，再输入主机/IP与端口；缺少协议时自动补为 <code>http://</code>。</li>
                   <li>已有代理时先显示当前地址，再提供编辑、关闭和取消选项；不通过输入 <code>off</code> 关闭。</li>
-                  <li>新增或编辑先进行零 Token 的代理端点 TCP 连通检查；失败时显示原因并保留原配置。</li>
-                  <li>配置保存在 <code>~/.ai-gateway/runtime.json</code>，作用于 Runtime 网络请求及其启动的 Claude/Codex。</li>
+                  <li>新增或编辑（包括 <code>ai provider edit</code> 的 <code>proxyUrl</code>）先进行零 Token 的代理端点 TCP 连通检查；失败时保留原配置。</li>
+                  <li>Provider 代理保存在 <code>~/.ai-gateway/providers.json</code>，优先于 <code>~/.ai-gateway/runtime.json</code> 的默认代理；清除 Provider 覆盖后回退默认值。</li>
+                  <li>模型探测和 Transport Proxy 上游按实际 Provider 选择代理；CLI 子进程使用启动 Provider 的代理环境。</li>
                   <li>本地回环地址自动加入 <code>NO_PROXY</code>，避免 execution-scoped Transport Proxy 发生代理回环。</li>
                   <li>不会修改 <code>~/.claude</code> 或 <code>~/.codex</code>；直接运行原生命令不受影响。</li>
                 </ul>
@@ -692,8 +695,11 @@ ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
                   <li>正整数 <code>level</code> 组成自动切换链；<code>level: 0</code> 只允许显式使用，不进入自动候选。</li>
                   <li>显式指定 Provider 时不会先刷新全部 Provider，而是直接使用该 Provider 的已缓存模型并实际尝试；健康缓存暂时为 <code>error</code> 不会在请求前静默跳过，失败后才进入同模型族的自动切换链。</li>
                   <li>Claude Code 只在提供 Claude 模型的 Provider 间切换；Codex 只在提供 Codex/OpenAI 兼容模型的 Provider 间切换，不跨模型族。</li>
-                  <li>真正带请求体的模型 <code>POST</code> 在产生有效输出前遇到连接错误、认证错误、限流或上游故障时，会在同一 Claude Code/Codex 会话内切换 Provider、改写备用模型并显示提示；CLI 启动期的无请求体 <code>GET</code> 探测不会触发 Provider 轮转。</li>
+                  <li>只有会产生补全的模型端点（<code>/v1/messages</code>、<code>/v1/chat/completions</code>、<code>/v1/completions</code>、<code>/v1/responses</code>、<code>/v1/embeddings</code>、<code>/v1/images/generations</code>）的带请求体 <code>POST</code> 参与降级：在产生有效输出前遇到连接错误、认证错误、限流或上游故障时，会在同一 Claude Code/Codex 会话内切换 Provider、改写备用模型并显示提示。</li>
+                  <li>CLI 启动期的无请求体 <code>GET</code> 探测，以及辅助端点（多数中转站未实现的 <code>/v1/messages/count_tokens</code> 等）的 <code>404</code>，都会原样返回给 CLI，既不触发 Provider 轮转，也不计入健康分。</li>
+                  <li>一次失败不会立刻换 Provider：限流（<code>429</code>）、<code>5xx</code>、连接层错误和有效输出前的流中断先在当前 Provider 原地重试（默认最多 2 次尝试，退避 300ms 起翻倍），重试额度用尽才轮转；<code>401</code>/<code>403</code>/<code>404</code> 与响应头超时是确定性失败，不重试直接换下一跳。重试成功不计失败、不扣健康分，重试全部失败整段只记一次失败。</li>
                   <li>已经产生文字、推理或工具参数后不会静默重放；用户在当前 CLI 中重新提交或使用原生重试动作即确认切换，下一次请求使用备用 Provider。</li>
+                  <li>真实成功的健康检查把该 Provider 的健康分直接恢复到满分，历史误判扣分不会长期滞留。</li>
                   <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings；本次子进程会移除继承的 <code>ANTHROPIC_AUTH_TOKEN</code>，临时 settings 还会用空值遮蔽用户 settings 里的同名变量，避免与所选 Provider 的 <code>ANTHROPIC_API_KEY</code> 形成双认证。</li>
                   <li><code>ai use codex</code> 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
                   <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，非 root 执行 Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。root 下请求 <code>auto</code> 会被安全约束为默认权限，临时 settings 中继承的 bypass 配置也会被清除。</li>
