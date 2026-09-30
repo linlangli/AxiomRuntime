@@ -256,7 +256,7 @@ flowchart TD
 | `engine-registry.ts` | Claude/Codex 策略注册 | ③ Capabilities |
 | `claude-permission-policy.ts` | UID 0 下约束 `bypassPermissions` 为 `default` | ⑨ Security |
 | `tool-runner.ts` | 运行环境 + 密钥注入 + 临时文件 | ④ Kernel |
-| `fallback.ts` | 候选排序、`level: 0` 排除、显式覆盖与 Claude/Codex 模型族隔离 | ③ + ④ |
+| `fallback.ts` | 候选排序、`level: 0` 排除、显式覆盖、全局 failover 开关与 Claude/Codex 模型族隔离 | ③ + ④ |
 | `openai-usage-*.ts`（7 个） | 本地 HTTP 代理、协议翻译、用量记录 | ⑤ Transport |
 | `images/image-generation-service.ts` | 图片模型解析、请求、响应校验和安全落盘 | ③ Capability + ⑤ Transport |
 
@@ -285,6 +285,8 @@ flowchart TD
 `recordProviderRuntimeSuccess` 与所有 `status: "ok"` 的健康写入把 `healthScore` **直接置满**，而不是按固定步长累加。失败扣 35、成功加 25 的不对称步长意味着被误判扣出来的坑永远填不平，`healthScore` 会长期停在低位而失去诊断价值；一次真实成功比历史累计更有说服力。
 
 `resolveProviderCandidatesForTool()` 必须先按当前 CLI 的模型族过滤候选：Claude Code 只能得到 Claude 模型，Codex 只能得到 Codex/OpenAI 兼容模型。Provider 默认模型不兼容时，可从已发现目录选择同族模型；目录为空且默认模型不兼容时不得乐观加入候选链。显式指定的 Provider 即使健康缓存为 `error` 也必须先实际尝试一次；请求级自动切换只在过滤后的候选链内发生。
+
+全局开关 `runtime.json` 的 `failoverDisabled`（`ai failover off`）把候选链折叠到单候选，只尝试选定（或默认 `level: 1`）的 Provider，失败即报错不轮转。折叠发生在候选解析这一层，因此 `ai use` 的请求级 `fallbackRoutes`、会话级轮转，以及 runtime-server / Telegram / doctor 的候选迭代一并失效，无需调用方各自判断。原地重试（同一 Provider 上的限流/`5xx`/连接层重试）不受影响。
 
 Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`engine-registry` 构造子进程环境时必须移除继承的 `ANTHROPIC_AUTH_TOKEN`；由于 Claude 的 `--settings` 是附加配置，`tool-runner` 还必须在临时 settings 中用空值显式遮蔽用户 settings 里的同名变量，避免 OAuth token 与 Provider key 同时存在。该隔离仅限 execution scope，不得修改用户 shell 或 `~/.claude/settings.json`。
 

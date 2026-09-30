@@ -1,5 +1,6 @@
 import { isProviderCircuitOpen, readCache } from "../config/cache-store.js";
 import { readProviders } from "../config/providers-store.js";
+import { loadRuntimeConfig } from "../config/runtime-config.js";
 import { writeLog } from "../logs/log-service.js";
 import { isModelCompatible, pickCompatibleModel } from "../models/model-filter.js";
 import type { CliToolType, Provider } from "../types.js";
@@ -68,7 +69,7 @@ export async function resolveProviderCandidatesForTool(
     throw new Error("No providers configured. Run `ai add` first.");
   }
 
-  const cache = await readCache();
+  const [cache, runtimeConfig] = await Promise.all([readCache(), loadRuntimeConfig()]);
   const selected = providerName ? providers.find((provider) => provider.name === providerName) : undefined;
   const automaticProviders = providers.filter((provider) => provider.level > 0);
   const candidates = selected
@@ -77,12 +78,27 @@ export async function resolveProviderCandidatesForTool(
       : [selected, ...automaticProviders.filter((provider) => provider.name !== selected.name)]
     : automaticProviders;
 
-  if (providerName && candidates[0]?.name !== providerName) {
+  // 全局关闭自动降级：折叠到单候选，只尝试选定（或默认 level:1）的 Provider，
+  // 失败即报错，不再轮转。请求级与会话级的 fallback 都从这条候选链派生，此处折叠即可一并关闭。
+  const failoverDisabled = runtimeConfig.failoverDisabled === true;
+  const scoped = failoverDisabled ? candidates.slice(0, 1) : candidates;
+  if (failoverDisabled) {
+    await writeLog({
+      level: "info",
+      category: "strategy",
+      action: "failover_disabled",
+      message: `Provider auto-failover is disabled; only ${scoped[0]?.name ?? "(none)"} will be attempted.`,
+      ...(traceId ? { traceId } : {}),
+      metadata: { tool, provider: scoped[0]?.name ?? null }
+    });
+  }
+
+  if (providerName && scoped[0]?.name !== providerName) {
     throw new Error(`Provider not found: ${providerName}`);
   }
 
   const resolved: ResolvedRun[] = [];
-  for (const provider of candidates) {
+  for (const provider of scoped) {
     const cached = cache.providers[provider.name];
     const explicitlySelected = providerName === provider.name;
     if (!explicitlySelected && isProviderCircuitOpen(cached)) {

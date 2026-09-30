@@ -15,7 +15,8 @@ import { runModelsCommand } from "../dist/cli/commands/models.js";
 import { runAddCommand } from "../dist/cli/commands/add.js";
 import { buildProviderLevelChoices } from "../dist/cli/commands/edit.js";
 import { runProxyCommand } from "../dist/cli/commands/proxy.js";
-import { loadRuntimeConfig } from "../dist/core/config/runtime-config.js";
+import { runFailoverCommand } from "../dist/cli/commands/failover.js";
+import { loadRuntimeConfig, setRuntimeFailover } from "../dist/core/config/runtime-config.js";
 import { configureGlobalProxy } from "../dist/core/network/proxy.js";
 import { getExecutionUserDoctorItem, runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveExactProviderForTool, resolveProviderForTool, resolveProviderCandidatesForTool } from "../dist/core/runner/fallback.js";
@@ -1428,6 +1429,72 @@ test("explicit model requests drop providers whose catalog lacks that model", as
     const candidates = await resolveProviderCandidatesForTool("codex", undefined, "gpt-5.6-sol");
     assert.deepEqual(candidates.map((candidate) => candidate.provider.name), ["codex"]);
     assert.equal(candidates.every((candidate) => candidate.model === "gpt-5.6-sol"), true);
+  });
+});
+
+test("setRuntimeFailover persists the flag and clears it on re-enable", async () => {
+  await withTempHome(async () => {
+    assert.equal((await loadRuntimeConfig()).failoverDisabled, undefined);
+
+    const disabled = await setRuntimeFailover(true);
+    assert.equal(disabled.failoverDisabled, true);
+    assert.equal((await loadRuntimeConfig()).failoverDisabled, true);
+
+    const enabled = await setRuntimeFailover(false);
+    assert.equal(enabled.failoverDisabled, undefined);
+    assert.equal((await loadRuntimeConfig()).failoverDisabled, undefined);
+  });
+});
+
+test("disabling auto-failover collapses candidate resolution to a single provider", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "primary", baseUrl: "https://primary.test/v1", apiKey: "p", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "backup", baseUrl: "https://backup.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-5.4" },
+      { name: "explicit-zero", baseUrl: "https://zero.test/v1", apiKey: "z", mode: "auto", level: 0, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("primary", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("backup", { status: "ok", models: ["gpt-5.4"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("explicit-zero", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+
+    // 默认开启：自动链保留全部 level > 0 候选。
+    const automaticOn = await resolveProviderCandidatesForTool("codex");
+    assert.deepEqual(automaticOn.map((candidate) => candidate.provider.name), ["primary", "backup"]);
+
+    await setRuntimeFailover(true);
+
+    const automaticOff = await resolveProviderCandidatesForTool("codex");
+    assert.deepEqual(automaticOff.map((candidate) => candidate.provider.name), ["primary"]);
+
+    const explicitOff = await resolveProviderCandidatesForTool("codex", "backup");
+    assert.deepEqual(explicitOff.map((candidate) => candidate.provider.name), ["backup"]);
+  });
+});
+
+test("ai failover toggles the global switch and reports state", async () => {
+  await withTempHome(async () => {
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    try {
+      await runFailoverCommand([]);
+      assert.equal(output.some((line) => line.includes("auto-failover is ON")), true);
+
+      await runFailoverCommand(["off"]);
+      assert.equal((await loadRuntimeConfig()).failoverDisabled, true);
+      assert.equal(output.some((line) => line.includes("disabled")), true);
+
+      await runFailoverCommand([]);
+      assert.equal(output.some((line) => line.includes("auto-failover is OFF")), true);
+
+      await runFailoverCommand(["on"]);
+      assert.equal((await loadRuntimeConfig()).failoverDisabled, undefined);
+      assert.equal(output.some((line) => line.includes("enabled")), true);
+
+      await assert.rejects(runFailoverCommand(["bogus"]), /Usage: ai failover/);
+    } finally {
+      console.log = originalLog;
+    }
   });
 });
 

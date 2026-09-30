@@ -549,6 +549,12 @@ ai setup</pre>
                 <td>为指定 Provider 设置代理，或为未覆盖的 Provider 设置 Runtime 默认代理。</td>
                 <td>Provider 优先、默认值兜底；不修改原生 CLI 永久配置。</td>
               </tr>
+              <tr data-search="failover fallback disable provider auto switch off on">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai failover on</code><br /><code class="cmd">ai failover off</code><br /><code class="cmd">ai failover</code></td>
+                <td>一键开启或关闭 Provider 自动降级切换。</td>
+                <td><code>off</code> 后 Provider 失败只报错不切换；无参数查看当前状态。</td>
+              </tr>
               <tr data-search="set codex chatgpt login oauth provider proxy config auth restart app">
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai set codex chatgpt</code><br /><code class="cmd">ai set codex provider 51talk-cq gpt-5.6-sol</code><br /><code class="cmd">ai set codex provider 51talk-cq</code><br /><code class="cmd">ai set codex provider</code><br /><code class="cmd">ai set codex proxy 127.0.0.1:7890</code></td>
@@ -693,6 +699,7 @@ ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
                 <h3>运行规则</h3>
                 <ul>
                   <li>正整数 <code>level</code> 组成自动切换链；<code>level: 0</code> 只允许显式使用，不进入自动候选。</li>
+                  <li>用 <code>ai failover off</code> 可一键关闭自动降级：之后只尝试选定（或默认 <code>level: 1</code>）的 Provider，失败即报错不切换；<code>ai failover on</code> 恢复，<code>ai failover</code> 查看状态。</li>
                   <li>显式指定 Provider 时不会先刷新全部 Provider，而是直接使用该 Provider 的已缓存模型并实际尝试；健康缓存暂时为 <code>error</code> 不会在请求前静默跳过，失败后才进入同模型族的自动切换链。</li>
                   <li>Claude Code 只在提供 Claude 模型的 Provider 间切换；Codex 只在提供 Codex/OpenAI 兼容模型的 Provider 间切换，不跨模型族。</li>
                   <li>只有会产生补全的模型端点（<code>/v1/messages</code>、<code>/v1/chat/completions</code>、<code>/v1/completions</code>、<code>/v1/responses</code>、<code>/v1/embeddings</code>、<code>/v1/images/generations</code>）的带请求体 <code>POST</code> 参与降级：在产生有效输出前遇到连接错误、认证错误、限流或上游故障时，会在同一 Claude Code/Codex 会话内切换 Provider、改写备用模型并显示提示。</li>

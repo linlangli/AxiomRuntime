@@ -193,6 +193,7 @@ ai last                                # 沿用上次的工具、服务商和模
 - 不指定模型 → 用该服务商的默认 `model`
 - 显式指定服务商 → 不先刷新全部 Provider，直接使用该 Provider 的已缓存模型并实际尝试；即使健康缓存暂时为 `error`，也不会在请求前静默跳过
 - 当前服务商不可用 → 按 `level` 顺序自动降级
+- 全局一键关闭自动降级用 `ai failover off`；关闭后只尝试选定（或默认 `level: 1`）的 Provider，失败即报错不切换。`ai failover on` 恢复；无参数 `ai failover` 查看当前状态
 - `level: 0` → 不参与自动降级；显式指定该 Provider 时只使用它
 - Claude Code 只会选择提供 Claude 模型的 Provider；Codex 只会选择提供 Codex/OpenAI 兼容模型的 Provider，不会跨模型族切换
 - Codex 认 `gpt`、`codex`、`grok`、`o` 系列和 `openai` 开头的模型名
@@ -588,6 +589,15 @@ AI_GATEWAY_HOME=/path/to/config ai provider list
 ```
 
 新增或轮换凭证请用 `ai provider add/edit`，不要手改 `apiKey`。
+
+**`runtime.json`** —— 运行时全局默认值。`proxyUrl` 是未在 Provider 上单独配置时的默认代理；`failoverDisabled: true` 会关闭 Provider 自动降级切换（失败只报错不换路）。这两个字段建议用 `ai proxy` / `ai failover` 命令改，不要手写：
+
+```json
+{
+  "proxyUrl": "http://127.0.0.1:8081",
+  "failoverDisabled": true
+}
+```
 
 **`model-pricing.json`** —— 给只返回 token 不返回费用的模型估算成本。单位是**美元/百万 token**，可按模型名或 `服务商/模型` 配置：
 

@@ -3,6 +3,7 @@ import { runAddCommand } from "./commands/add.js";
 import { runCheckCommand } from "./commands/check.js";
 import { runContextCommand } from "./commands/context.js";
 import { runDoctorCommand } from "./commands/doctor.js";
+import { runFailoverCommand } from "./commands/failover.js";
 import { runProviderDeleteCommand, runProviderEditCommand } from "./commands/edit.js";
 import { runHelpCommand } from "./commands/help.js";
 import { runImageCommand } from "./commands/image.js";
@@ -147,7 +148,7 @@ function maskSecretArg(value: string): string {
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["setup", "use", "image", "set", "proxy", "add", "memory", "telegram", "models", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["setup", "use", "image", "set", "proxy", "failover", "add", "memory", "telegram", "models", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -288,6 +289,11 @@ function registerBuiltInCommands(): void {
     name: "proxy",
     description: "configure AI Runtime proxy",
     run: (args) => runProxyCommand(args)
+  });
+  registerCliCommand({
+    name: "failover",
+    description: "toggle provider auto-failover",
+    run: (args) => runFailoverCommand(args)
   });
   registerCliCommand({
     name: "last",

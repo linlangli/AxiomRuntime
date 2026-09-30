@@ -109,7 +109,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 |---|---|---|
 | 启动 Claude Code | 🟢 | 临时 `--settings`，不碰 `~/.claude/settings.json`；execution scope 删除进程继承的 `ANTHROPIC_AUTH_TOKEN`，并以空值遮蔽用户 settings 中的同名变量，避免与 Provider API Key 冲突 |
 | 启动 Codex | 🟢 | `-c model_provider=` + `env_key`，不碰全局 `auth.json`/`config.toml` |
-| 运行时降级 | 🟡 | `ai use` 在同一原生 CLI 会话内对**会产生补全的模型端点**做请求级切换；失败先在当前 Provider 原地重试（限流/`5xx`/连接层错误可重试，`401`/`403`/`404` 直接换），重试耗尽才轮转，已有输出则等待用户重新提交/重试确认。辅助端点（`/v1/messages/count_tokens` 等中转站常未实现的路径）的 `404` 不触发轮转，也不计入健康分。**一处偏差**：待确认状态在读请求体之前消费，不区分方法，CLI 自发的无关请求会替用户确认切换 |
+| 运行时降级 | 🟡 | `ai use` 在同一原生 CLI 会话内对**会产生补全的模型端点**做请求级切换；失败先在当前 Provider 原地重试（限流/`5xx`/连接层错误可重试，`401`/`403`/`404` 直接换），重试耗尽才轮转，已有输出则等待用户重新提交/重试确认。辅助端点（`/v1/messages/count_tokens` 等中转站常未实现的路径）的 `404` 不触发轮转，也不计入健康分。`ai failover off` 一键全局关闭跨 Provider 自动降级（候选链折叠为单候选，只尝试选定或默认 Provider，失败即报错不轮转；原地重试不受影响）。**一处偏差**：待确认状态在读请求体之前消费，不区分方法，CLI 自发的无关请求会替用户确认切换 |
 | 健康分恢复 | 🟢 | 一次真实成功探测把 `healthScore` 直接置满，不靠固定步长累加填坑，避免误判造成的低分长期滞留 |
 | 切换提示不破坏 TUI | 🟢 | 会话期间提示走协议内错误事件由原生 CLI 渲染，退出后再打印切换汇总；父进程不在 TUI 重绘期间写终端 |
 | Runtime 出站代理 | 🟢 | `ai proxy` 可选择 Provider 或 Runtime 默认值；Provider 的 `proxyUrl` 优先、缺省时回退默认值，清除覆盖后恢复回退；新增或编辑先做零 Token 连通检查。探测和 Transport Proxy 上游按实际 Provider 路由；不修改原生 CLI 配置 |
