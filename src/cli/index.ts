@@ -20,6 +20,7 @@ import { runSetupCommand } from "./commands/setup.js";
 import { runStatusCommand } from "./commands/status.js";
 import { runTelegramCommand } from "./commands/telegram.js";
 import { runVersionCommand } from "./commands/version.js";
+import { runWebCommand } from "./commands/web.js";
 import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
 import { getCliCommand, registerCliCommand } from "./registry.js";
@@ -302,11 +303,9 @@ function registerBuiltInCommands(): void {
   });
   registerCliCommand({
     name: "web",
-    description: "web",
+    description: "Open the local Web control panel",
     interactive: false,
-    run: async () => {
-      console.log("`ai web` is planned but not implemented in this foundation build.");
-    }
+    run: runWebCommand
   });
 }
 

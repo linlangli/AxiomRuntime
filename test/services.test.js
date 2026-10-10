@@ -388,6 +388,34 @@ test("setCodexProvider writes custom provider config and Codex-compatible auth a
   assert.doesNotMatch(config, /provider-secret/);
 });
 
+test("setCodexProvider removes stale provider auth command hooks", async () => {
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-codex-stale-auth-command-"));
+  await fs.writeFile(path.join(codexHome, "config.toml"), [
+    'model_provider = "old"',
+    "[model_providers.old]",
+    'name = "Old provider"',
+    'experimental_bearer_token_command = ["node", "C:/workspace/dist/cli/codex-auth.js"]',
+    "[features]",
+    "multi_agent = true",
+    ""
+  ].join("\n"));
+  await setCodexProvider({
+    type: "provider",
+    model: "gpt-5.6-sol",
+    provider: {
+      name: "new-provider",
+      baseUrl: "https://example.test/v1",
+      apiKey: "provider-secret",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.6-sol"
+    }
+  }, { codexHome, scheduleRestart: async () => ({ scheduled: false, reason: "test" }) });
+  const config = await fs.readFile(path.join(codexHome, "config.toml"), "utf8");
+  assert.doesNotMatch(config, /codex-auth\.js|token_command|auth_command/);
+  assert.match(config, /\[features\]\nmulti_agent = true/);
+});
+
 test("setCodexProvider accepts Codex-written ChatGPT auth and switches to openai", async () => {
   const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-codex-chatgpt-"));
   await fs.writeFile(path.join(codexHome, "config.toml"), "model_provider = \"custom\"\n", "utf8");

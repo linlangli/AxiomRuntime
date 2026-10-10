@@ -97,7 +97,12 @@ src/
 | `core/config`、`core/providers`、`core/models`、`core/runner`、`core/images`、`core/usage`、`core/sessions` | 🟢 |
 | `core/memory` | 🟡 仅 embedding 配置 |
 | `telegram/memory` | 🟡 单表 + 关键词匹配 |
-| `core/contracts`、`core/transport-proxy`、`core/policy`、`core/learning`、`core/auth-session`、`core/skills`、`plugins/`、`web/` | 🔴 目录不存在 |
+| `core/contracts`、`core/transport-proxy`、`core/policy`、`core/learning`、`core/auth-session`、`core/skills`、`plugins/` | 🔴 目录不存在 |
+| 本机 Web adapter（`src/web`、`src/core/web`） | 🟡 `ai web` 已实现基础控制面；企业治理与完整实时 trace 仍规划中 |
+
+本机总览由 `src/core/web/dashboard-service.ts` 从现有 usage ledger 投影累计用量、全局每日用量和 Provider 每日用量（`usage.providers[].daily`），不创建第二份 usage ledger。Web adapter 只负责最近 30 个 UTC 自然日的 Provider 曲线、最近 70 个 UTC 自然日的调用活动和累计 Provider Token 占比；时间窗内空日期补零，累计汇总不受展示时间窗影响。
+
+公网门户是独立静态构建，不打包进入 npm，也不访问本地控制面 API。生产环境与 `app.offerpilot.life` 共用 Nginx 的 `stream` SNI 入口；`axiom.offerpilot.life` 在 `443` 被分流到独立的 `8450` TLS 站点，静态文件放在 `/srv/axiomruntime-portal/current`，由不可变 release 目录和原子 symlink 切换部署。CI 负责构建、上传、健康检查和失败回滚；证书签发和 Nginx 分流属于服务器预配置。
 
 ---
 
@@ -109,7 +114,7 @@ flowchart TB
     CLI["cli 🟢"]
     TG["telegram 🟢"]
     API["server/API 🟢"]
-    WEB["web 🔴"]
+    WEB["web 🟡"]
     SCH["scheduler 🔴"]
   end
 
@@ -530,12 +535,17 @@ Claude adapter **必须**在构造参数和临时 settings **之前**检测 UID 
 
 持久的 vendor client 配置是**显式管理操作**，不是执行期 provider 路由。
 
-- `ai use codex` 只为**本次子进程**固定 provider
-- `ai set codex` 调用独立的 core integration service，持久切换 Codex client
+- Codex App、Codex CLI 与 IDE extension 在同一 OS 用户和同一 `CODEX_HOME` 下共享用户级 `config.toml` 配置层
+- `ai use codex` 通过 CLI `-c` 只为**本次子进程**固定 provider，不回写共享配置
+- `ai set codex` 调用独立的 core integration service，持久切换 Codex client，共享配置会在 App/CLI 后续新进程中生效
 
 该 service 的约束：ChatGPT OAuth 委托 `codex login`；持久写入限于用户级 `CODEX_HOME/config.toml` 和 `auth.json`；使用原子替换 + 回滚；API Key **不进入** TOML 和日志；凭证文件权限强制 `0600`。Provider 变更只从该 provider 已发现的模型缓存中解析模型；写入 Codex `base_url` 时复用 Codex Runner 的规范化规则，保证末尾恰好一个 `/v1`。
 
 代理变更保留无关 TOML 状态，只管理 `shell_environment_policy.set` 下的标准 HTTP(S)/ALL 代理键，拒绝命令行代理凭证；macOS 上事务性同步用户 launchd 环境。**只有在请求的持久状态一致后**才重启桌面客户端。重启辅助进程必须移除继承的 `OPENAI_API_KEY`，让客户端读取刚写入的 `auth.json`，避免旧 Shell 凭证覆盖新 Provider。
+
+`npm run build` 不得先删除整个 `dist/`：正在运行的 Codex 进程或旧配置可能仍引用其文件。持久切换 Provider 时，仅清理指向过时 `dist/cli/codex-auth.js` 的 Provider auth command，其他用户配置继续保留；构建本身不修改 `CODEX_HOME`。
+
+🟡 本机 Web 控制面中的 Codex App 配置页是该 core integration service 的 adapter：读取时展示 `model_provider`、model、proxy 与凭证状态，写入时提交与 `ai set codex chatgpt | provider | proxy` 等价的命令意图，不在浏览器端直接编辑 TOML/JSON。当前页面展示等价命令、重启影响和历史 session 不迁移提示；完整配置 diff、operation progress、手动 rollback 与企业 policy 仍是后续能力。secret 只显示 configured/missing 状态。
 
 ---
 

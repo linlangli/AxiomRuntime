@@ -255,7 +255,7 @@ ai last                            # 上次选择的工具 / 服务商 / 模型
 
 > 已知限制：`ai session list` 和 `ai last` 记的是**启动时选定**的 Provider。如果执行期间发生过请求级自动切换，实际承接请求的 Provider 要用 `ai log --trace` 确认。
 >
-> 实时查看是 Web 面板的职责，设计稿 `docs/AxiomRuntime.pen` 已确立两处落点：侧栏「当前 provider」卡（五屏共享，显示 provider / level / model / 切换来源 / traceId）和「使用与日志」页首项的「进行中」链路卡（逐跳展示已试过的 Provider，以及是否在等待你重新提交以确认切换）。**Web 面板本身仍是 🔴 未实现**，见第 13 节。
+`ai web` 的侧栏显示当前**默认** Provider，使用与日志页按 `traceId` 分组显示近期事件；它尚不能可靠显示原生 CLI 运行期间的实时承接 Provider、等待确认状态或完整逐跳原因。需要精确确认实际承接者时，仍请用 `ai log --print --trace <traceId>`。
 
 ### 它对你的环境做了什么
 
@@ -342,6 +342,7 @@ ai set codex                              # 全交互，先选做什么
 - `config.toml` 只写服务商信息和选中的模型，**不写 API Key**；写入 `base_url` 前会检查末尾是否已有 `/v1`，没有则自动补上，已有则不会重复；你原有的 project、MCP、plugin 设置都保留
 - API Key 写入 `auth.json`，权限强制 `0600`
 - 两个文件都用临时文件原子替换。任何一步失败（登录取消、认证无效、写入失败）都会**回滚到原状**
+- 如果旧版本在 Provider 表中留下指向 `dist/cli/codex-auth.js` 的 auth command，重新执行 `ai set codex provider ...` 会在写入新配置时清理该过期引用；单纯构建项目不会修改你的 Codex 配置
 - macOS 上配置一致后会自动重启 `Codex.app` 或 `ChatGPT.app`，并清理重启进程继承的 `OPENAI_API_KEY`，确保客户端读取刚写入的 `auth.json`；找不到应用或在其他平台，配置照样生效，但需要手动重启
 
 > 切到自定义服务商会**替换掉当前的 ChatGPT token**。以后想切回去需要重新走一次浏览器登录。
@@ -559,7 +560,21 @@ ai help          # 打开 HTML 命令手册
 ai --version
 ```
 
-> `ai help` 当前用系统默认程序打开独立的 `USAGE.html`。设计稿 `docs/AxiomRuntime.pen` 已补充「帮助中心」屏（`Screen Help`），把这份手册并入 Web 管理页的侧边栏导航；Web 面板本身仍是 🔴 未实现。
+`ai help` 用系统默认程序打开独立的 `USAGE.html`。`ai web` 的「帮助中心」展示常见入口和命令，完整手册仍以 `ai help` 为准。
+
+### 本地 Web 控制面板
+
+```bash
+ai web
+```
+
+命令启动仅监听 `127.0.0.1` 的临时端口并打开浏览器；终端保持运行，按 `Ctrl+C` 关闭。打开链接含一次运行有效的访问 token；不要把链接发给别人。控制面板可查看 Provider 健康缓存、真实用量趋势、最近日志与会话，添加/编辑/删除或检查 Provider，也可执行与 `ai set codex` 等价的持久配置操作。添加或改动 Provider 地址、API Key 会先进行真实探测，可能产生少量 Token。
+
+「CLI 与 Codex App」页中的 Claude Code 区域目前只读，复制 `ai use claude` 在终端执行。Codex App/CLI 在同一 `CODEX_HOME` 下共享用户级配置；`ai use codex` 只影响本次 CLI 进程。Web 设置 Codex 时会提示确认，但旧的 Codex App 历史聊天**不会迁移**，可能仍使用旧 Provider 并报 `403`；请新建聊天。Web 目前不提供配置 diff、操作进度或手动回滚入口，core 的持久写入仍有失败自动回滚。
+
+运行时总览的 Token 趋势独占整行，按 Provider 展示最近 30 个 UTC 自然日，默认总 Token，可切换输入或输出；没有调用的日期补零。总览不展示服务商健康列表，详细健康状态请查看「服务商」。下方调用活动与 Provider 用量占比在桌面各占一半，窄屏上下排列。Provider 用量占比按累计 Token 汇总，以大环形图和底部可翻页图例展示，悬停扇区查看用量和比例。调用活动展示最近 70 个 UTC 自然日，采用最大约 20px 的紧凑方格，不随卡片放大；右上角为该区间 Token 总量，点击日期进入当天日志。图表只反映 Runtime 已记录的 usage，不包含未经过 Runtime 的直接调用。
+
+公网门户 `https://axiom.offerpilot.life/` 是独立部署的静态介绍页，不连接本机配置、不提供远程控制，也不包含在 npm 包内。默认分支的 GitLab CI 会先构建 `web/dist/portal/`，再用受限的 `axiom-portal-deploy` SSH 账号上传不可变 release、原子切换 `current` symlink，并用线上首页内容做健康检查；失败会自动恢复上一 release。部署账号只能写 `/srv/axiomruntime-portal`，SSH 主机指纹和私钥通过受保护的 `portal-production` CI variables 注入，私钥不进仓库。服务器证书和 Nginx SNI 分流属于一次性运维配置。门户发布需要先把改动合并到默认分支。
 
 ---
 
@@ -658,7 +673,6 @@ Node.js 版本低于 22.19.0。升级后重新安装，别忽略警告。
 
 | 功能 | 当前状态 |
 |---|---|
-| `ai web` 控制面板 | 命令存在但会提示暂未实现 |
 | 自动记忆 | 普通聊天**不会**自动记录。目前只有 Telegram 的显式 `/remember` |
 | 记忆的向量检索 | 只有 embedding 配置命令；实际检索用关键词打分 |
 | 终端 `ai use` 接入记忆 | 记忆目前只在 Telegram 生效 |
@@ -673,5 +687,5 @@ Node.js 版本低于 22.19.0。升级后重新安装，别忽略警告。
 
 - `ai provider list` 和 `ai status` 显示掩码 API Key（保留首末 4 位）。目标是只显示「已配置 / 缺失」状态，录屏分享前请注意
 - 编辑 `apiKey` 时当前值会作为输入默认值显示
-- `ai use` 运行期间无法实时查看当前 Provider（原生 TUI 独占终端），只能退出后看切换汇总或 `ai log --trace`；实时视图依赖未实现的 Web 面板
+- `ai web` 的侧栏显示默认 Provider，不是请求级实时承接者；`ai use` 运行期间的准确切换结果仍需用 `ai log --trace` 核实
 - `ai session list` / `ai last` 记的是**启动时**选定的 Provider，执行期间发生的请求级自动切换不回写，实际承接者用 `ai log --trace` 确认

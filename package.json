@@ -16,7 +16,9 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "npm run clean && tsc && chmod +x dist/cli/index.js",
+    "build": "tsc && npm run build:web:console && chmod +x dist/cli/index.js",
+    "build:web:console": "npm --prefix web run build:console",
+    "build:web:portal": "npm --prefix web run build:portal",
     "dev": "node --enable-source-maps dist/cli/index.js",
     "server": "node --enable-source-maps dist/server/index.js",
     "telegram:service": "node --enable-source-maps dist/telegram/supervisor.js",

@@ -222,7 +222,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 
 | 能力 | 说明 |
 |---|---|
-| `ai web` 控制面板 | 命令存在但提示暂未实现 |
+| `ai web` 控制面板 | 本机基础控制面已实现；企业治理、完整实时 trace 与远程多租户尚未实现 |
 | Skill 自动沉淀 | 程序性记忆整套未实现 |
 | 受治理学习闭环 | LearningSignal → Decision → Candidate → 评测 → 激活 |
 | Policy Engine | 确定性策略求值 |
@@ -407,13 +407,17 @@ Model / provider 延迟**不纳入**本地 Transport overhead，但必须分别�
 
 ---
 
-## 8. Web 控制面方向 🔴
+## 8. Web 控制面方向 🟡
 
 ```bash
-ai web    # 命令存在，提示暂未实现
+ai web    # 启动本机基础控制面板
 ```
 
 Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大版，**不拥有独立业务逻辑**。所有写操作调用与 CLI/API 相同的核心契约，并显示 policy decision、影响 scope、revision、审批状态与 rollback 入口。
+
+🟢 本机运行时总览已实现按 Provider 的最近 30 个 UTC 自然日 Token 趋势（总量 / 输入 / 输出切换），趋势图独占整行并增加高度，不展示服务商健康列表。下方最近 70 个 UTC 自然日调用活动与累计 Token 占比环形图在桌面等宽、窄屏上下排列；活动采用紧凑方格，大环形图采用底部可翻页图例。无调用日期补零，点击曲线日期或热力图日期跳转日志过滤；数据仅来自 Runtime 已记录 usage，不推测未接管的外部调用。企业 FinOps、完整实时 trace 与远程多租户仍未实现。
+
+🟢 公网门户 `axiom.offerpilot.life` 已部署为独立静态站点；门户构建不进入 npm 包，也不读取本机控制面。默认分支的 GitLab CI 使用受保护的 `portal-production` 环境变量，通过最小权限 SSH 账号发布不可变 release，健康检查失败自动 rollback。证书续期、Nginx SNI 分流和服务器初始化属于部署前置运维步骤。
 
 | 模块 | 内容 |
 |---|---|
@@ -431,7 +435,7 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 
 ### 8.1 调用链路可视化（R0 设计基线）🔴
 
-设计稿位于 `docs/AxiomRuntime.pen`，含运行时纵览、服务商、使用与日志、命令中心、帮助中心五屏。其中"使用与日志"页确立了 **调用链路（trace）视图** 作为 Execution & Audit 的默认形态：日志不以扁平事件流呈现，而按 `requestId` 聚合成一次请求的完整 provider 调用链路。
+设计稿位于 `docs/AxiomRuntime.pen`，含运行时纵览、服务商、使用与日志、命令中心、CLI 与 Codex App、帮助中心六个控制台主屏。其中"使用与日志"页确立了 **调用链路（trace）视图** 作为 Execution & Audit 的默认形态：日志不以扁平事件流呈现，而按 `requestId` 聚合成一次请求的完整 provider 调用链路。
 
 链路卡片的每一跳（hop）必须展示：provider 的 `level`、provider 名称、触发的日志 `action`、该跳结果（成功 / 失败 / 跳过）、耗时，以及来自日志 `metadata` 的原因说明。四类典型链路必须可区分：直连成功、自动切换后成功、熔断跳过后降级、全部候选失败。
 
@@ -470,6 +474,14 @@ ai log --print --trace trc_70d90ad64d1846bf   # 只打印该链路的各跳，�
 判定"进行中"的依据是该 traceId 还没有出现终止跳（`*_settled` / `*_candidates_exhausted`）。链路过滤器因此增加「进行中」一档。等待确认状态对应请求级 failover 的 `confirmation_required`：Runtime 已选好候选但不自动重放，Web 需说明"重新提交或重试即确认切换"，而不是显示为失败。
 
 侧栏卡是可复用组件，任何 Web 页面都能看到当前 provider，不需要先进入日志页。**secret 仍只显示 ref/status，不回显 API Key。**
+
+### 8.2 Codex App 可视化配置（R0 设计基线）🔴
+
+“CLI 与 Codex App”页把已实现的 `ai set codex` core integration service 呈现为可查看、可确认、可回滚的 Web 管理操作。页面说明 Codex App、CLI 与 IDE extension 在同一 `CODEX_HOME` 下共享用户级 `config.toml`，同时区分 CLI `-c` 的进程级临时覆盖。页面读取并展示当前 `model_provider`、model、proxy、`config.toml` / `auth.json` 托管状态，但 API Key 只显示 configured/missing，不回显明文。
+
+设置区必须覆盖三种与 CLI 等价的模式：`chatgpt`、`provider [name] [model]`、`proxy <endpoint|off>`。提交前显示等价 CLI 命令、目标配置 diff、重启需求、备份与失败回滚语义；提交后显示 operation progress 和最终 restart 状态。Web 不自行拼装或写入 TOML/JSON，所有读写复用同一 core integration API。
+
+Provider 切换只更新 Codex App 用户级配置，不迁移已有原生历史 session。确认区必须明确说明：旧聊天继续发送时可能仍访问原 Provider 并返回权限错误，用户应新建聊天；未来若提供 session migration，必须作为独立能力标记，不能由配置写入结果暗示已经完成。
 
 ---
 

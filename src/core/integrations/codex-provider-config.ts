@@ -221,7 +221,8 @@ export function buildCodexProviderConfig(
   const selectedModel = assertCodexGptModel(model);
   const baseUrl = getRunnerEngine("codex").normalizeBaseUrl(provider.baseUrl);
   const eol = current.includes("\r\n") ? "\r\n" : "\n";
-  let next = removeProviderTables(current, providerId);
+  let next = removeStaleProviderAuthCommands(current);
+  next = removeProviderTables(next, providerId);
   next = setTopLevelTomlString(next, "cli_auth_credentials_store", "file");
   next = setTopLevelTomlString(next, "model_provider", providerId);
   next = setTopLevelTomlString(next, "model", selectedModel);
@@ -237,7 +238,8 @@ export function buildCodexProviderConfig(
 }
 
 export function buildCodexChatGptConfig(current: string): string {
-  let next = setTopLevelTomlString(current, "cli_auth_credentials_store", "file");
+  let next = removeStaleProviderAuthCommands(current);
+  next = setTopLevelTomlString(next, "cli_auth_credentials_store", "file");
   next = setTopLevelTomlString(next, "model_provider", "openai");
   return ensureTrailingNewline(next);
 }
@@ -545,6 +547,20 @@ function removeProviderTables(current: string, providerId: string): string {
       skip = header === prefix || header.startsWith(`${prefix}.`);
     }
     if (!skip) kept.push(line);
+  }
+  return kept.join(current.includes("\r\n") ? "\r\n" : "\n");
+}
+
+function removeStaleProviderAuthCommands(current: string): string {
+  const lines = current.split(/\r?\n/);
+  let inProviderTable = false;
+  const kept: string[] = [];
+  for (const line of lines) {
+    const header = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line)?.[1];
+    if (header) inProviderTable = header === "model_providers" || header.startsWith("model_providers.");
+    if (inProviderTable && /^\s*(?:(?:experimental_)?(?:bearer_)?token_command|(?:provider_)?auth_command)\s*=/.test(line)
+      && /(?:^|[\\/])codex-auth\.js/.test(line)) continue;
+    kept.push(line);
   }
   return kept.join(current.includes("\r\n") ? "\r\n" : "\n");
 }

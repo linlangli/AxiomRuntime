@@ -2,6 +2,8 @@ image: node:22.19.0
 
 stages:
   - test
+  - build
+  - deploy
   - publish
 
 variables:
@@ -27,7 +29,39 @@ test:
       when: never
     - when: on_success
   script:
+    - npm --prefix web ci --cache .npm --prefer-offline
     - npm test
+    - npm --prefix web run typecheck
+
+build_portal:
+  stage: build
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - npm --prefix web ci --cache .npm --prefer-offline
+    - npm run build:web:portal
+  artifacts:
+    expire_in: 7 days
+    paths:
+      - web/dist/portal/
+
+deploy_portal:
+  stage: deploy
+  image: debian:bookworm-slim
+  resource_group: portal-production
+  dependencies:
+    - build_portal
+  before_script:
+    - apt-get update && apt-get install --yes --no-install-recommends openssh-client rsync ca-certificates curl coreutils && rm -rf /var/lib/apt/lists/*
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  environment:
+    name: portal-production
+    url: https://axiom.offerpilot.life/
+  variables:
+    GIT_STRATEGY: fetch
+  script:
+    - bash scripts/deploy-portal.sh
 
 publish_npm:
   stage: publish
@@ -54,6 +88,7 @@ publish_npm:
         echo "Tag version ($TAG_VERSION) must match package.json version ($PACKAGE_VERSION)."
         exit 1
       fi
+    - npm --prefix web ci --cache .npm --prefer-offline
     - npm test
     - npm pack --dry-run
     - echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc

@@ -29,7 +29,8 @@ README 需要区分“已经能用”和“只是规划”。下面的状态以�
 | 本地 HTTP Runtime API | ✅ | ✅ | Bearer 鉴权，适合本机集成 |
 | Telegram 显式记忆 | 🟡 | 🟡 | `/remember` 等命令可用，普通聊天不会自动记忆 |
 | 自动记忆、向量检索、终端记忆 | 🚧 | 🚧 | embedding 配置已就绪，入库和召回尚未接入 |
-| 加密凭证、Skill 沉淀、学习治理、插件和 Web 界面 | 🚧 | 🚧 | 仍是后续路线，不要按已实现能力使用 |
+| 本机 Web 控制面板（`ai web`） | ✅ | ✅ | 本机打开，查看用量与日志、管理 Provider 和 Codex 配置；实时执行视图尚未完整实现 |
+| 加密凭证、Skill 沉淀、学习治理和插件 | 🚧 | 🚧 | 仍是后续路线，不要按已实现能力使用 |
 
 如果你通过 npm 安装，实际可用的是 npm `0.0.4` 那一列；README 会随功能发布同步更新。
 
@@ -298,7 +299,7 @@ AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 2. **可复用能力沉淀**：把经过验证的重复流程沉淀为 Skill 或 Workflow，并支持评测、激活和回滚。
 3. **统一 Runtime 契约**：统一 CLI、Telegram、HTTP 的身份、权限、事件、取消、幂等和恢复语义。
 4. **更完整的安全能力**：加密凭证、登录态托管、细粒度策略和可审计的权限决策。
-5. **更多接入面**：Web、桌面、调度和插件体系。当前 `ai web` 只是占位命令。
+5. **更多接入面**：企业级 Web 治理、桌面、调度和插件体系。本机 `ai web` 控制面板已实现基础视图与配置操作；公网门户是独立部署的静态站点，不进入 npm 包。
 
 这些是产品路线，不是已经发布的功能。README、使用指南和产品文档会继续按 🟢 / 🟡 / 🔴 状态同步。
 
@@ -306,6 +307,7 @@ AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 
 ```bash
 npm install
+npm --prefix web ci
 npm run build
 npm test
 npm link
