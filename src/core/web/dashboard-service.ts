@@ -9,6 +9,7 @@ import { listRecentSessions } from "../sessions/session-service.js";
 import { estimateTokenCostUsd, readModelPricing } from "../usage/pricing.js";
 import { getConfigRoot } from "../config/paths.js";
 import { getLocalSettings } from "./local-settings.js";
+import { projectHistoryLogs, summarizeCalls } from "./execution-history.js";
 
 export async function getWebDashboard() {
   const [statuses, cache, usage, logs, sessions, pricing, codex, settings] = await Promise.all([
@@ -78,17 +79,7 @@ export async function getWebDashboard() {
     days.set(date, day);
     byProvider.set(event.provider, provider);
   }
-  const safeLogs = logs.map(({ timestamp, level, category, action, traceId, metadata }) => ({
-    timestamp, level, category, action, traceId: traceId ?? null,
-    provider: typeof metadata?.provider === "string" ? metadata.provider : null,
-    model: typeof metadata?.model === "string" ? metadata.model : null,
-    status: typeof metadata?.status === "string" ? metadata.status : null,
-    attempt: typeof metadata?.attempt === "number" ? metadata.attempt : null,
-    durationMs: typeof metadata?.durationMs === "number" ? metadata.durationMs : null,
-    from: typeof metadata?.from === "string" ? metadata.from : null,
-    to: typeof metadata?.to === "string" ? metadata.to : null,
-    reason: typeof metadata?.reason === "string" && /^[a-z_]{1,60}$/.test(metadata.reason) ? metadata.reason : null
-  }));
+  const safeLogs = projectHistoryLogs(logs);
   return {
     generatedAt: new Date().toISOString(),
     configRoot: getConfigRoot(),
@@ -104,9 +95,10 @@ export async function getWebDashboard() {
         }))
     },
     pricing,
+    calls: summarizeCalls(safeLogs, new Set(sessions.map(session => session.id))),
     logs: safeLogs.reverse(),
-    sessions: sessions.map(({ id, tool, provider, model, startedAt, endedAt, status, fallbackFrom }) =>
-      ({ id, tool, provider, model, startedAt, endedAt, status, fallbackFrom })),
+    sessions: sessions.map(({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom }) =>
+      ({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom })),
     codex, settings
   };
 }

@@ -40,8 +40,15 @@ export interface ModelPrice {
 }
 export interface LogItem {
   timestamp: string; level: string; category: string; action: string; traceId: string | null
-  provider: string | null; model: string | null; status: string | null; attempt: number | null
+  provider: string | null; model: string | null; status: string | number | null; attempt: number | null
   durationMs: number | null; from: string | null; to: string | null; reason: string | null
+  kind: 'model' | 'check' | 'config' | 'system'; tool: string | null; exitCode: number | null; sessionId: string | null
+}
+export interface CallItem {
+  id: string; state: 'succeeded' | 'failed' | 'unknown'; startedAt: string; lastEventAt: string; endedAt: string | null
+  durationMs: number | null; observedDurationMs: number | null; provider: string | null; initialProvider: string | null
+  model: string | null; tool: string | null; route: string[]; switchCount: number; retryCount: number
+  sessionIds: string[]; events: LogItem[]
 }
 export interface ServiceCapability { id: string; name: string; method: string; path: string }
 export interface ServiceExposure {
@@ -59,7 +66,7 @@ export interface LocalSettings {
 }
 export interface SessionItem {
   id: string; tool: string; provider: string; model: string; startedAt: string; endedAt: string | null
-  status: string; fallbackFrom: string | null
+  status: string; exitCode: number | null; fallbackFrom: string | null
 }
 export interface Dashboard {
   generatedAt: string; configRoot: string; providers: ProviderStatus[]
@@ -71,7 +78,7 @@ export interface Dashboard {
     }>
   }
   pricing: Record<string, ModelPrice>
-  logs: LogItem[]; sessions: SessionItem[]
+  calls: CallItem[]; logs: LogItem[]; sessions: SessionItem[]
   codex: { providerId: string; model: string | null; proxy: string | null; authConfigured: boolean; configPresent: boolean; configPath: string; authPath: string }
   settings: LocalSettings
 }

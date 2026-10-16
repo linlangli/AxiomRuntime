@@ -107,10 +107,10 @@ function onTrendClick(event: { dataIndex?: number }) {
     <div class="activity-body"><div class="activity-calendar" :style="{ '--weeks': activityColumns }">
       <div class="activity-axis"><span v-for="tick in activityTicks" :key="tick.column" :style="{ gridColumn: tick.column + 1 }">{{ tick.label }}</span></div>
       <div class="activity-weekdays"><span v-for="weekday in ['一', '二', '三', '四', '五', '六', '日']" :key="weekday">{{ weekday }}</span></div>
-      <div class="activity-cells"><template v-for="(day, index) in calendarCells" :key="day?.date ?? `padding-${index}`"><button v-if="day?.inRange" :title="`${day.date} · ${fullNumber(day.total)} Token`" :aria-label="`${day.date}，${fullNumber(day.total)} Token，查看当天日志`" :style="{ background: activityColor(day.total) }" @click="emit('selectDay', day.date)"></button><span v-else class="activity-padding" :class="{ 'activity-outside': day }" :title="day ? `${day.date} · 当前区间外` : undefined"></span></template></div>
+      <div class="activity-cells"><template v-for="(day, index) in calendarCells" :key="day?.date ?? `padding-${index}`"><button v-if="day?.inRange" :title="`${day.date} · ${fullNumber(day.total)} Token`" :aria-label="`${day.date}，${fullNumber(day.total)} Token，查看当天调用`" :style="{ background: activityColor(day.total) }" @click="emit('selectDay', day.date)"></button><span v-else class="activity-padding" :class="{ 'activity-outside': day }" :title="day ? `${day.date} · 当前区间外` : undefined"></span></template></div>
     </div></div>
     <div v-if="selectedWindowDays < activityWindowDays" class="activity-context">展示最近 {{ activityWindowDays }} 天日历 · 淡灰格为所选区间外</div>
-    <div class="activity-footer"><span>点击日期查看日志</span><div class="activity-scale"><span>少</span><i v-for="color in activityColors" :key="color" :style="{ background: color }"></i><span>多</span></div></div>
+    <div class="activity-footer"><span>点击日期查看调用记录</span><div class="activity-scale"><span>少</span><i v-for="color in activityColors" :key="color" :style="{ background: color }"></i><span>多</span></div></div>
   </section>
 </template>
 

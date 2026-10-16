@@ -9,6 +9,7 @@ import { writeCache } from "../dist/core/config/cache-store.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
 import { appendUsageEvent } from "../dist/core/config/usage-store.js";
 import { writeLog } from "../dist/core/logs/log-service.js";
+import { startSession, finishSession } from "../dist/core/sessions/session-service.js";
 import { startLocalWebServer } from "../dist/web/local-server.js";
 import { getWebDashboard } from "../dist/core/web/dashboard-service.js";
 
@@ -90,6 +91,9 @@ test("local Web serves the panel, protects mutations, and redacts secrets", asyn
   await writeProviders([{ name: "sample", baseUrl: "https://example.test/v1", apiKey: "super-secret-api-key", mode: "auto", level: 1, model: "gpt-test" }]);
   await writeCache({ providers: { sample: { status: "ok", models: ["gpt-test"], lastCheckedAt: "2026-10-09T00:00:00.000Z", lastError: null } } });
   await appendUsageEvent({ provider: "sample", tool: "codex", model: "gpt-test", source: "proxy", inputTokens: 10, outputTokens: 5, totalTokens: 15, createdAt: "2026-10-09T00:00:00.000Z" });
+  const session = await startSession({ tool: "codex", provider: "sample", model: "gpt-test", mode: "auto", projectPath: root, fallbackFrom: null });
+  await finishSession(session.id, 1);
+  await writeLog({ category: "usage", action: "runtime_server_request_settled", message: "super-secret-log-message", traceId: "request-test", metadata: { provider: "sample", model: "gpt-test", status: 503, sessionId: session.id, apiKey: "super-secret-api-key" } });
   await writeLog({ category: "provider", action: "test_event", message: "super-secret-log-message", metadata: { provider: "sample", apiKey: "super-secret-api-key" } });
   const server = await startLocalWebServer();
   const url = new URL(server.url);
@@ -111,6 +115,12 @@ test("local Web serves the panel, protects mutations, and redacts secrets", asyn
     assert.equal(dashboard.providers[0].credentialConfigured, true);
     assert.equal(dashboard.usage.totalTokens, 15);
     assert.equal(dashboard.logs[0].action, "test_event");
+    assert.equal(dashboard.calls.length, 1);
+    assert.equal(dashboard.calls[0].state, "failed");
+    assert.equal(dashboard.calls[0].provider, "sample");
+    assert.equal(dashboard.calls[0].events[0].status, 503);
+    assert.deepEqual(dashboard.calls[0].sessionIds, [session.id]);
+    assert.equal(dashboard.sessions[0].exitCode, 1);
 
     const mutation = { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", origin: "https://evil.example" }, body: JSON.stringify({ name: "sample" }) };
     assert.equal((await fetch(`${baseUrl}/api/providers/refresh`, mutation)).status, 403);

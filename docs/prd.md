@@ -422,7 +422,9 @@ ai web    # 启动本机基础控制面板
 
 Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大版，**不拥有独立业务逻辑**。所有写操作调用与 CLI/API 相同的核心契约，并显示 policy decision、影响 scope、revision、审批状态与 rollback 入口。
 
-🟢 本机控制面已拆分为运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心六个一级页面。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 汇总表、Token 趋势、GitHub 式周列 × 7 天小方格调用活动和带圆角轻量涂鸦纹理的占比图；短区间保留至少 70 天日历上下文，区间外日期以淡灰格标识，不作为零用量计入统计。成本卡片支持通过 core pricing API 按 Provider/模型维护美元/百万 token 价格，Provider 完整下拉列表合并当前配置、历史 usage 和已有价格键，模型下拉合并缓存目录、默认模型、历史 usage 模型和已有价格键，并支持手动输入模型；切换 Provider 时刷新对应模型和价格，空模型目录清除上一 Provider 的模型；按当前日期与 Provider 筛选计算成本，未定价事件单独计数；区间内空日期补零，点击日期跳转调用追踪。数据仅来自 Runtime 已记录 usage，不推测未接管的外部调用。
+🟢 本机控制面已拆分为运行总览、用量统计、本地配置、运行记录、对外服务、帮助中心六个一级页面。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 汇总表、Token 趋势、GitHub 式周列 × 7 天小方格调用活动和带圆角轻量涂鸦纹理的占比图；短区间保留至少 70 天日历上下文，区间外日期以淡灰格标识，不作为零用量计入统计。成本卡片支持通过 core pricing API 按 Provider/模型维护美元/百万 token 价格，Provider 完整下拉列表合并当前配置、历史 usage 和已有价格键，模型下拉合并缓存目录、默认模型、历史 usage 模型和已有价格键，并支持手动输入模型；切换 Provider 时刷新对应模型和价格，空模型目录清除上一 Provider 的模型；按当前日期与 Provider 筛选计算成本，未定价事件单独计数；区间内空日期补零，点击日期跳转运行记录。数据仅来自 Runtime 已记录 usage，不推测未接管的外部调用。
+
+🟢 运行记录分为调用记录、工具会话、系统日志。调用列表按执行归组，侧边详情展示结果、Provider 过程与中文时间线；同 Provider 重试与跨 Provider 切换分开计数，缺少终止事件显示结果未知，结果 Provider 仅取明确终止证据。工具会话显示初始配置、起止、时长和退出码，调用关联只接受明确且匹配的 `sessionId`。系统日志按模型请求/服务检查/配置变更/系统运行分类，支持级别、Provider、分类和搜索筛选。当前数据范围为最近 300 条日志和 30 次工具会话，不推算逐调用用量。
 
 🟡 本地配置支持通过 core API 编辑 Provider、路由、Codex、Runtime/Provider 出站代理、Telegram Bot 和 embedding 连接；写入前展示变更预览，核心服务负责校验、原子写入、失败回滚和受限权限备份。Claude Code 用户级区域仍为只读。
 
@@ -444,15 +446,15 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 
 每个页面必须有 `empty` / `loading` / `degraded` / `permission-denied` / `partial-failure` 状态。危险操作必须展示影响范围、二次确认和 operation progress。
 
-### 8.1 调用链路可视化（R0 设计基线）🔴
+### 8.1 运行记录与调用详情 🟡
 
-设计稿位于 `docs/AxiomRuntime.pen`。当前控制面将 Execution & Audit 落在"调用追踪"页：日志不以扁平事件流呈现，而按 `traceId` 聚合成一次请求的完整 provider 调用链路；"本地配置"和"对外服务"分别管理本机运行方式与远程能力授权。
+设计稿位于 `docs/AxiomRuntime.pen`。当前控制面将 Execution & Audit 落在「运行记录」页，分为「调用记录 / 工具会话 / 系统日志」三个四字标签。🟢 调用记录按 `traceId` 聚合最近日志中的一次执行，列表优先显示结果、模型、Provider、时间，侧边详情展示结果摘要、Provider 过程、中文时间线与可展开的原始字段。工具会话展示启动配置、时长和退出结果；系统日志按模型请求、服务检查、配置变更、系统运行分类，支持级别/Provider/分类筛选及明确关联调用的跳转。「本地配置」和「对外服务」分别管理本机运行方式与远程能力授权。
 
-链路卡片的每一跳（hop）必须展示：provider 的 `level`、provider 名称、触发的日志 `action`、该跳结果（成功 / 失败 / 跳过）、耗时，以及来自日志 `metadata` 的原因说明。四类典型链路必须可区分：直连成功、自动切换后成功、熔断跳过后降级、全部候选失败。
+🟢 验收行为：明确区分执行成功、执行失败、结果未知；缺少终止事件不推断正在运行，HTTP 失败响应不能被标成成功。重试与跨 Provider 切换分别计数，配对的切换计划/应用事件不重复计数，路由保留重复回跳。结果 Provider 仅取自终止事件，未记录耗时则显示事件跨度；无 `traceId` 的独立事件不生成调用。工具会话仅凭明确且匹配的 `sessionId` 关联调用，缺少退出记录不声称进程存活。每个标签有独立搜索提示和空状态；图表日期入口默认进入调用记录并保留日期。🔴 完整逐跳 `level`、耗时与逐请求成本仍依赖日志契约补齐；当前执行分组可能包含多次请求，不能推断逐请求 Token、成本或实际承接者。
 
-数据来源均为已落库的 `writeLog` 事件，Web 只做聚合与呈现，不重算路由。
+数据来源均为已落库的 `writeLog` 事件；`src/core/web/execution-history.ts` 提供只读、脱敏的状态与关联投影，Web 负责中文展示，不重算路由或新增 usage ledger。
 
-链路聚合键是 `LogEvent.traceId` 🟢：一次请求 / 一条消息 / 一次 `ai use` 在入口处生成一个 traceId，之后候选解析、每次切换、终止跳全部复用它。HTTP 入口直接复用 `requestId` 作为 traceId，`x-request-id` 响应头因此可直接反查链路。历史日志没有该字段，读取方必须容忍缺失。
+链路聚合键是 `LogEvent.traceId` 🟢：HTTP 请求 / Telegram Provider 尝试 / 一次 `ai use` 的候选解析、切换与终止事件复用入口 ID。HTTP 入口直接复用 `requestId` 作为 traceId，`x-request-id` 响应头可反查链路。历史日志及部分工具代理、任务生命周期事件没有该字段，读取方必须容忍缺失；不通过时间或 Provider 补关联。
 
 | 链路语义 | 日志 action | 关键 metadata |
 |---|---|---|
@@ -460,10 +462,10 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 | 熔断 / 健康 / 无模型跳过 | `fallback_skip_provider` | `reason`（`circuit_open` / `health_error` / `no_compatible_model`）、`level`、`circuitOpenUntil` |
 | 请求级切换 | `runtime_server_provider_fallback` | `requestId`、`attempt`、`totalCandidates`、`level`、`error` |
 | 会话级切换 | `fallback_applied` / `runtime_fallback_retry` / `runtime_provider_fallback_retry` | `from`、`to`、`nextModel`、`attempt`、`error` |
-| 终止跳（成功） | `runtime_server_request_settled` / `tool_run_settled` / `runtime_provider_settled` | `provider`、`attempt`、`fellBack`、`status` |
+| 终止跳（上游响应 / 工具成功） | `runtime_server_request_settled` / `tool_run_settled` / `runtime_provider_settled` | `provider`、`attempt`、`fellBack`、`status`；HTTP 响应须按 `status` 判定成功或失败 |
 | 终止跳（全败） | `runtime_server_candidates_exhausted` / `tool_candidates_exhausted` / `runtime_provider_candidates_exhausted` | `attempted`、`totalCandidates`、`status` |
 
-每条链路都以一个终止跳收尾，`fellBack` 直接回答"这次请求是否发生过自动切换"，`attempt` / `totalCandidates` 给出第几跳落地。
+完整链路应以明确终止事件收尾，但有限日志窗口或中断执行可能缺少它，此时结果未知。`fellBack`、`attempt` / `totalCandidates` 仅在已记录时作为原始证据展示。
 
 CLI 侧已可读同一条链路 🟢：
 
@@ -480,9 +482,9 @@ ai log --print --trace trc_70d90ad64d1846bf   # 只打印该链路的各跳，�
 | 位置 | 内容 | 数据来源 |
 |---|---|---|
 | 侧栏"当前 provider"卡（`Sidebar` 可复用组件，五屏共享） | 正在承接的 provider 名、`level`、model、是否已发生切换及第几跳、当前 traceId | 最近一条同 traceId 的 `provider_resolved*` / `runtime_server_provider_fallback` 事件 |
-| "调用追踪"页列表首项"记录不完整"链路卡 | 已经过的每一跳（level / provider / action / 结果 / 耗时 / 原因），并标出是否缺少终止事件 | 该 traceId 下尚无终止跳的日志序列 |
+| 「运行记录 → 调用记录」的「结果未知」记录 | 当前日志窗口内的 Provider、action、原因与结果证据 | 该 traceId 下缺少明确终止事件的日志序列 |
 
-判定"进行中"的依据是该 traceId 还没有出现终止跳（`*_settled` / `*_candidates_exhausted`）。链路过滤器因此增加「进行中」一档。等待确认状态对应请求级 failover 的 `confirmation_required`：Runtime 已选好候选但不自动重放，Web 需说明"重新提交或重试即确认切换"，而不是显示为失败。
+缺少终止事件只能判定「结果未知」，不能据此判断「进行中」。实时 Provider、进程存活与等待确认状态仍为 🔴，由 Runtime 可查询的活跃执行/确认契约提供证据后才能开放；当前页面仅在时间线显示 `confirmation_required` 的等待确认事件，不把它当作执行成功或失败。
 
 侧栏卡是可复用组件，任何 Web 页面都能看到当前 provider，不需要先进入日志页。**secret 仍只显示 ref/status，不回显 API Key。**
 
