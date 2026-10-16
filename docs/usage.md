@@ -219,7 +219,7 @@ ai last                                # 沿用上次的工具、服务商和模
 
 ### 哪些请求不会触发切换
 
-只有**会真正产生补全的模型端点**参与降级：`/v1/messages`、`/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/embeddings`、`/v1/images/generations`。其余请求收到的 HTTP 错误原样返回给 CLI；连接失败或响应头超时则返回本地代理错误。它们都不重试、不轮转，也不计入 Provider 健康分。
+只有**会真正产生补全的模型端点**参与降级：`/v1/messages`、`/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/embeddings`、`/v1/images/generations`、`/v1/images/edits`，其中 multipart 参考图上传不自动重试或轮转。其余辅助请求收到的 HTTP 错误原样返回给 CLI；连接失败或响应头超时则返回本地代理错误。它们都不重试、不轮转，也不计入 Provider 健康分。
 
 最常见的一类是 Anthropic 的 `/v1/messages/count_tokens`。Claude Code 会主动调用它来估算上下文长度，而多数第三方中转站没有实现这个端点，会返回：
 
@@ -255,7 +255,7 @@ ai last                            # 上次选择的工具 / 服务商 / 模型
 
 > 已知限制：`ai session list` 和 `ai last` 记的是**启动时选定**的 Provider。如果执行期间发生过请求级自动切换，实际承接请求的 Provider 要用 `ai log --trace` 确认。
 >
-`ai web` 的侧栏显示当前**默认** Provider，使用与日志页按 `traceId` 分组显示近期事件；它尚不能可靠显示原生 CLI 运行期间的实时承接 Provider、等待确认状态或完整逐跳原因。需要精确确认实际承接者时，仍请用 `ai log --print --trace <traceId>`。
+`ai web` 的侧栏显示当前**默认** Provider，「调用追踪」按 `traceId` 分组显示近期事件；它仍不改变原生 CLI TUI 的实时显示限制。需要在终端精确确认实际承接者时，可用 `ai log --print --trace <traceId>`。
 
 ### 它对你的环境做了什么
 
@@ -298,17 +298,22 @@ Provider 代理优先作用于该 Provider 的模型发现、健康探测和模�
 ai image                                                   # 交互选择 Provider、模型并输入提示词
 ai image 51talk-image "一只戴墨镜的猫，数字插画"          # 使用 Provider 默认模型
 ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"  # 指定具体模型
+ai image 51talk-image "保持人物一致，改成水彩风格" --image "./参考图.png"
+ai image 51talk-image gpt-image-2 "替换背景为海边" --image "C:\My Pictures\人物.jpg"
 ```
 
 规则：
 
-- 直接运行 `ai image` 时，会依次选择 Provider、具体模型并输入提示词。
+- 直接运行 `ai image` 时，会依次选择 Provider、具体模型、生成方式（文生图 / 参考本地图片），参考图模式再输入本地文件路径，最后输入提示词。只有 Provider/模型、没有提示词时也会询问生成方式；已有提示词的旧用法不增加交互。交互路径可带成对引号。
+- `--image <path>` 或 `--image=<path>` 指定单张本地参考图，可放在位置参数前后；路径有空格时加引号。支持按文件内容识别的 PNG、JPEG、WebP，最大 20 MiB；不支持 GIF、目录、远程 URL、多张参考图或 mask。无效文件在图片上传前拒绝，不修改原图；输出仍为新文件。
+- 参考图模式调用 multipart `/v1/images/edits`，不是将路径拼进提示词。Provider 和模型必须支持该接口；模型列表中存在不代表支持图片编辑，服务端仍可能返回格式、尺寸或能力错误。当前不实现 Responses 图片工具等非兼容接口。
+- 参考图会上传给所选 Provider；**不会自动重试或向其他 Provider fallback**，所选 Provider 不健康时也不会偷偷换站。仅指定模型而未指定 Provider 时，按原有健康/顺序规则选择一个可用 Provider。请只选择可信服务商，失败后明确选择其他服务商重新运行。
 - 第一个参数是 Provider 名（例如 `51talk-image`）。第二个参数如果匹配该 Provider 的模型缓存，就作为具体模型；否则从第二个参数开始全部拼成提示词，并使用 Provider 默认模型。
 - Provider 和模型必须出现在模型缓存中。命令执行前会自动刷新；也可以先运行 `ai status` 检查模型列表。如果没有 Provider，先运行 `ai add`。
 - 为避免模型名与提示词歧义，指定具体模型时建议给提示词加引号，例如 `ai image 51talk-image gpt-image-2 "提示词"`。
-- Runtime 按 Provider 健康状态和 `level` 顺序尝试，失败会自动切换下一个同样提供该模型的 Provider。
+- 文生图保持原有 Provider 健康状态和 `level` 顺序尝试，失败会自动切换下一个同样提供该模型的 Provider；参考图模式不跨 Provider 切换。
 - `b64_json` 响应会以 `0600` 权限保存到当前目录，输出绝对路径；远程 `https` 图片响应会输出 URL，不会自动下载不受信任的地址。
-- 图片生成请求最长等待 120 秒；生成服务通常比文本请求耗时更长，超过此时间会自动失败并尝试下一个 Provider。
+- 图片请求等待响应头上限为 120 秒；文生图失败可尝试下一个 Provider，参考图失败直接报告，不自动重试或换站。
 - 图片请求复用 execution-scoped Transport Proxy；Provider 返回的真实 usage 会写入同一份 `usage.json`，不会估算图片 token。
 
 ---
@@ -564,15 +569,21 @@ ai --version
 
 ### 本地 Web 控制面板
 
+公网门户 [axiom.offerpilot.life](https://axiom.offerpilot.life/) 提供安装步骤、命令参考与当前能力边界，可复制安装命令。页面中的终端用量和 Telegram 对话均为示例；查看本机真实用量、日志或配置请使用下方 `ai web`。
+
 ```bash
 ai web
 ```
 
 命令启动仅监听 `127.0.0.1` 的临时端口并打开浏览器；终端保持运行，按 `Ctrl+C` 关闭。打开链接含一次运行有效的访问 token；不要把链接发给别人。控制面板可查看 Provider 健康缓存、真实用量趋势、最近日志与会话，添加/编辑/删除或检查 Provider，也可执行与 `ai set codex` 等价的持久配置操作。添加或改动 Provider 地址、API Key 会先进行真实探测，可能产生少量 Token。
 
-「CLI 与 Codex App」页中的 Claude Code 区域目前只读，复制 `ai use claude` 在终端执行。Codex App/CLI 在同一 `CODEX_HOME` 下共享用户级配置；`ai use codex` 只影响本次 CLI 进程。Web 设置 Codex 时会提示确认，但旧的 Codex App 历史聊天**不会迁移**，可能仍使用旧 Provider 并报 `403`；请新建聊天。Web 目前不提供配置 diff、操作进度或手动回滚入口，core 的持久写入仍有失败自动回滚。
+Web 控制面的「本地配置」提供「服务配置、模型路由、工具配置、网络代理、消息接入、记忆设置、配置维护」七个二级分类。可以在浏览器编辑 Provider、自动切换、Codex 持久配置、Runtime/Provider 出站代理、具名 Telegram Bot 和 embedding 连接；提交前会展示变更预览，写入前自动创建本机快照，失败由 core 保留旧配置。Claude Code 用户级区域只读，复制 `ai use claude` 在终端执行。Codex App/CLI 在同一 `CODEX_HOME` 下共享用户级配置；旧聊天不会迁移，请新建聊天。配置维护可恢复最近 20 个受限权限快照，但不包含用量账本、数据库或 Codex 用户配置。
 
-运行时总览的 Token 趋势独占整行，按 Provider 展示最近 30 个 UTC 自然日，默认总 Token，可切换输入或输出；没有调用的日期补零。总览不展示服务商健康列表，详细健康状态请查看「服务商」。下方调用活动与 Provider 用量占比在桌面各占一半，窄屏上下排列。Provider 用量占比按累计 Token 汇总，以大环形图和底部可翻页图例展示，悬停扇区查看用量和比例。调用活动展示最近 70 个 UTC 自然日，采用最大约 20px 的紧凑方格，不随卡片放大；右上角为该区间 Token 总量，点击日期进入当天日志。图表只反映 Runtime 已记录的 usage，不包含未经过 Runtime 的直接调用。
+「对外服务」提供「反代接入、能力开放、访问控制、接入测试」四个二级分类。页面编辑 API 上游和公网 HTTPS 入口，按接口能力勾选开放项，为每个调用方创建独立凭证并可撤销，凭证只在创建时显示一次，落盘只保留摘要。它会生成 Nginx 片段和 curl 示例；Web 不会写远程服务器，也不会把本机管理页面暴露出去。启动 API 服务时可使用这份能力配置，逐请求检查全局开放能力和凭证权限。
+
+保存开放配置并创建凭证后，在运行 Runtime 的机器执行 `npm run server`；默认监听 `127.0.0.1:8080`，可用 `AI_GATEWAY_SERVER_HOST` / `AI_GATEWAY_SERVER_PORT` 修改。首次启用开放配置需重启已运行的 API 服务，之后能力关闭与凭证撤销逐请求生效。旧的 `AI_GATEWAY_SERVER_TOKEN` / `AI_GATEWAY_SERVER_TOKEN_FILE` 仍支持，但也受全局开放能力范围限制。反代片段中的上游地址从反代服务器视角填写；Runtime 在另一台电脑时先建立 VPN 或隧道。单个 Provider／模型限制、限流额度与组织权限仍未实现。
+
+「用量统计」支持最近 7/30/70 个 UTC 自然日和 Provider 筛选。趋势图可切换总量/输入/输出；调用活动采用随筛选区间变化的方格；Provider 占比使用带圆角分段、轻量纹理和可切换图例的环形图。成本卡片右上角的设置按钮可以按 Provider/模型编辑输入、输出和可选 Cache Read 价格（美元/百万 token），保存后当前区间立即重算；未配置价格的事件会单独提示且不计入成本。点击趋势或活动日期进入「调用追踪」的日期过滤。图表只反映 Runtime 已记录的 usage，不包含未经过 Runtime 的直接调用。「调用追踪」分为调用链路、会话记录、运行日志；链路详情按事件时间展示 Provider、切换方向、状态、原因、耗时和 traceId。
 
 公网门户 `https://axiom.offerpilot.life/` 是独立部署的静态介绍页，不连接本机配置、不提供远程控制，也不包含在 npm 包内。默认分支的 GitLab CI 会先构建 `web/dist/portal/`，再用受限的 `axiom-portal-deploy` SSH 账号上传不可变 release、原子切换 `current` symlink，并用线上首页内容做健康检查；失败会自动恢复上一 release。部署账号只能写 `/srv/axiomruntime-portal`，SSH 主机指纹和私钥通过受保护的 `portal-production` CI variables 注入，私钥不进仓库。服务器证书和 Nginx SNI 分流属于一次性运维配置。门户发布需要先把改动合并到默认分支。
 
@@ -614,7 +625,7 @@ AI_GATEWAY_HOME=/path/to/config ai provider list
 }
 ```
 
-**`model-pricing.json`** —— 给只返回 token 不返回费用的模型估算成本。单位是**美元/百万 token**，可按模型名或 `服务商/模型` 配置：
+**`model-pricing.json`** —— 给只返回 token 不返回费用的模型估算成本。单位是**美元/百万 token**，可按模型名或 `服务商/模型` 配置。也可以在 `ai web` →「用量统计」→ 成本卡片右上角设置按钮中编辑；Web 通过 core pricing API 校验并原子写入，不会回显任何 Provider 密钥：
 
 ```json
 {

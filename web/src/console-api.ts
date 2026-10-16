@@ -33,9 +33,29 @@ export interface DailyUsage {
   date: string; inputTokens: number; outputTokens: number; totalTokens: number
   estimatedCostUsd: number; unpricedEvents: number
 }
+export interface ModelPrice {
+  inputPerMillionUsd: number
+  outputPerMillionUsd: number
+  cacheReadPerMillionUsd?: number
+}
 export interface LogItem {
   timestamp: string; level: string; category: string; action: string; traceId: string | null
   provider: string | null; model: string | null; status: string | null; attempt: number | null
+  durationMs: number | null; from: string | null; to: string | null; reason: string | null
+}
+export interface ServiceCapability { id: string; name: string; method: string; path: string }
+export interface ServiceExposure {
+  publicBaseUrl: string; upstreamUrl: string; capabilities: string[]; updatedAt: string | null
+  credentials: Array<{ id: string; name: string; capabilities: string[]; createdAt: string }>
+  catalog: ServiceCapability[]
+}
+export interface LocalSettings {
+  runtime: { proxyUrl?: string; failoverDisabled?: boolean }
+  embedding: null | { name: string; baseUrl: string; model: string; providerType: string; queryTask: string; passageTask: string; dimensions: number | null; credentialConfigured: boolean; lastCheckedAt: string | null }
+  bots: Array<{ name: string; tokenConfigured: boolean; defaultEngine: 'claude' | 'codex'; defaultCwd: string; provider?: string; model?: string; proxyUrl?: string; allowedUserIds: number[]; allowAllUsers: boolean }>
+  exposure: ServiceExposure
+  backups: Array<{ id: string; createdAt: string }>
+  managedFiles: string[]
 }
 export interface SessionItem {
   id: string; tool: string; provider: string; model: string; startedAt: string; endedAt: string | null
@@ -45,8 +65,10 @@ export interface Dashboard {
   generatedAt: string; configRoot: string; providers: ProviderStatus[]
   usage: {
     totalTokens: number; estimatedCostUsd: number; unpricedEvents: number; daily: DailyUsage[]
-    providers: Array<{ provider: string; totalTokens: number; estimatedCostUsd: number; daily: Array<{ date: string; inputTokens: number; outputTokens: number; totalTokens: number }> }>
+    providers: Array<{ provider: string; totalTokens: number; estimatedCostUsd: number; unpricedEvents: number; daily: DailyUsage[] }>
   }
+  pricing: Record<string, ModelPrice>
   logs: LogItem[]; sessions: SessionItem[]
   codex: { providerId: string; model: string | null; proxy: string | null; authConfigured: boolean; configPresent: boolean; configPath: string; authPath: string }
+  settings: LocalSettings
 }

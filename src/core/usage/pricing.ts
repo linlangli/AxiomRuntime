@@ -32,6 +32,15 @@ export async function upsertModelPrice(providerName: string, model: string, pric
   }));
 }
 
+export async function removeModelPrice(providerName: string, model: string): Promise<ModelPricingTable> {
+  const key = getProviderModelPricingKey(providerName, model);
+  return updateJsonFile(getModelPricingPath(), {}, (raw) => {
+    const table = normalizePricingTable(raw);
+    delete table[key];
+    return table;
+  });
+}
+
 export function getProviderModelPricingKey(providerName: string, model: string): string {
   return `${providerName.trim()}/${model.trim()}`;
 }

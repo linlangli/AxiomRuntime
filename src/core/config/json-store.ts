@@ -62,7 +62,7 @@ async function writeJsonFileUnlocked<T>(filePath: string, value: T): Promise<voi
     `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`
   );
   try {
-    await fs.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await fs.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     await fs.rename(temporaryPath, filePath);
   } catch (error) {
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);

@@ -9,6 +9,7 @@ import {
   recordProviderRuntimeSuccess
 } from "../core/config/cache-store.js";
 import { loadRuntimeConfig } from "../core/config/runtime-config.js";
+import { loadServiceExposure, authorizeServiceCredential, SERVICE_CAPABILITIES } from "../core/config/service-exposure.js";
 import { readProviders } from "../core/config/providers-store.js";
 import { writeLog } from "../core/logs/log-service.js";
 import {
@@ -46,7 +47,8 @@ const ALLOWED_PROXY_PATHS = new Set([
 export type RuntimeServerOptions = {
   host?: string;
   port?: number;
-  token: string;
+  token?: string;
+  useExposureConfig?: boolean;
   maxRequestBytes?: number;
   upstreamHeadersTimeoutMs?: number;
   agentWorkspaceRoot?: string;
@@ -62,8 +64,8 @@ export type RuntimeServer = {
 export async function startRuntimeServer(options: RuntimeServerOptions): Promise<RuntimeServer> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 8080;
-  const token = options.token.trim();
-  if (!token) throw new Error("AI Gateway server token cannot be empty.");
+  const token = options.token?.trim() ?? "";
+  if (!token && (!options.useExposureConfig || !(await loadServiceExposure()).credentials.length)) throw new Error("AI Gateway server requires a token or configured service credentials.");
 
   const headersTimeoutMs = normalizePositiveInteger(options.upstreamHeadersTimeoutMs, DEFAULT_HEADERS_TIMEOUT_MS);
   // 按代理 URL 分派：Provider 级 proxyUrl 覆盖 runtime.json 全局默认（启动时读一次），
@@ -93,7 +95,7 @@ export async function startRuntimeServer(options: RuntimeServerOptions): Promise
     const requestId = normalizeRequestId(req.headers["x-request-id"]);
     res.setHeader("x-request-id", requestId);
     try {
-      await handleRequest({ req, res, requestId, token, maxRequestBytes, globalProxyUrl, dispatcherFor, agentRuntime });
+      await handleRequest({ req, res, requestId, token, useExposureConfig: options.useExposureConfig === true, maxRequestBytes, globalProxyUrl, dispatcherFor, agentRuntime });
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError && !res.headersSent) {
         sendJson(res, 413, { error: { message: error.message, request_id: requestId } });
@@ -139,6 +141,7 @@ async function handleRequest(input: {
   res: http.ServerResponse;
   requestId: string;
   token: string;
+  useExposureConfig: boolean;
   maxRequestBytes: number;
   globalProxyUrl: string | null;
   dispatcherFor: (proxyUrl: string | null) => Dispatcher;
@@ -158,10 +161,21 @@ async function handleRequest(input: {
     });
     return;
   }
-  if (!isAuthorized(req.headers.authorization, input.token)) {
+  const exposure = input.useExposureConfig ? await loadServiceExposure() : null;
+  const credentialCapabilities = exposure ? authorizeServiceCredential(exposure, req.headers.authorization?.replace(/^Bearer /, "") ?? "") : null;
+  const adminAuthorized = Boolean(input.token) && isAuthorized(req.headers.authorization, input.token);
+  if (!adminAuthorized && !credentialCapabilities) {
     res.setHeader("www-authenticate", "Bearer");
     sendJson(res, 401, { error: { message: "Unauthorized.", request_id: requestId } });
     return;
+  }
+  if (exposure) {
+    const capability = SERVICE_CAPABILITIES.find(item => item.method === req.method && item.path === path);
+    if (!capability || !exposure.capabilities.includes(capability.id) || (!adminAuthorized && !credentialCapabilities?.includes(capability.id))) {
+      await writeLog({ level: "warn", category: "provider", action: "runtime_service_access_denied", message: "Service capability denied.", traceId: requestId, metadata: { requestId, capability: capability?.id ?? "unknown" } });
+      sendJson(res, 403, { error: { message: "Capability is not authorized.", request_id: requestId } });
+      return;
+    }
   }
   if (req.method === "GET" && path === "/v1/models") {
     await sendModels(res);

@@ -140,6 +140,8 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 |---|---|---|
 | CLI 图片生成 | 🟢 | `ai image [provider] [model] [prompt]`；支持完全交互、Provider 默认模型和显式模型 |
 | 标准 images API | 🟢 | 调用 OpenAI-compatible `/v1/images/generations` |
+| 本地参考图 | 🟢 | `--image <path>` 或交互选择参考图模式，multipart `/v1/images/edits`；单张 PNG/JPEG/WebP，≤20 MiB，按内容识别；服务商/模型须支持编辑，不支持多图、mask 或 Responses 图片工具 |
+| 参考图隐私与失败边界 | 🟢 | 上传前本地校验，文件名使用通用名称；不记录图片内容、提示词和原始文件名；所选 Provider 不可用直接失败，不自动重试或跨 Provider fallback；文生图行为保持兼容 |
 | 图片安全落盘 | 🟢 | 支持 `b64_json`，限制响应/图片大小并以 `0600` 保存 |
 | URL 响应 | 🟢 | 仅输出无凭证的 `https` URL，不自动下载 |
 | 图片 usage | 🟢 | 复用唯一 Transport Proxy/UsageObserver 记录真实 usage |
@@ -409,13 +411,19 @@ Model / provider 延迟**不纳入**本地 Transport overhead，但必须分别�
 
 ## 8. Web 控制面方向 🟡
 
+公网门户按 Web Landing 设计呈现蓝黑色首屏、三栏终端示例、Bento 能力区、五步执行流程、四步安装、命令参考、Telegram 示例与能力状态表。验收覆盖桌面和移动端、导航锚点、安装命令复制与静态资源可达性；示例明确标记，`ai use` 临时配置与 `ai set codex` 持久配置分别说明，旧聊天不迁移的限制必须保留。本机 Web 标为部分实现，不将企业治理描述为已交付。
+
 ```bash
 ai web    # 启动本机基础控制面板
 ```
 
 Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大版，**不拥有独立业务逻辑**。所有写操作调用与 CLI/API 相同的核心契约，并显示 policy decision、影响 scope、revision、审批状态与 rollback 入口。
 
-🟢 本机运行时总览已实现按 Provider 的最近 30 个 UTC 自然日 Token 趋势（总量 / 输入 / 输出切换），趋势图独占整行并增加高度，不展示服务商健康列表。下方最近 70 个 UTC 自然日调用活动与累计 Token 占比环形图在桌面等宽、窄屏上下排列；活动采用紧凑方格，大环形图采用底部可翻页图例。无调用日期补零，点击曲线日期或热力图日期跳转日志过滤；数据仅来自 Runtime 已记录 usage，不推测未接管的外部调用。企业 FinOps、完整实时 trace 与远程多租户仍未实现。
+🟢 本机控制面已拆分为运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心六个一级页面。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 汇总表、Token 趋势、随区间变化的调用活动和带圆角分段与轻量涂鸦纹理的占比图；成本卡片支持通过 core pricing API 按 Provider/模型维护美元/百万 token 价格，按当前日期与 Provider 筛选计算成本，未定价事件单独计数；空日期补零，点击日期跳转调用追踪。数据仅来自 Runtime 已记录 usage，不推测未接管的外部调用。
+
+🟡 本地配置支持通过 core API 编辑 Provider、路由、Codex、Runtime/Provider 出站代理、Telegram Bot 和 embedding 连接；写入前展示变更预览，核心服务负责校验、原子写入、失败回滚和受限权限备份。Claude Code 用户级区域仍为只读。
+
+🟡 对外服务支持配置 API 上游/公网入口、选择已实现能力、创建可撤销的能力凭证、生成 Nginx 片段和调用示例。Runtime server 可按请求检查全局能力白名单与凭证能力；反代/TLS 部署、Provider/模型级额度与组织权限仍未实现。
 
 🟢 公网门户 `axiom.offerpilot.life` 已部署为独立静态站点；门户构建不进入 npm 包，也不读取本机控制面。默认分支的 GitLab CI 使用受保护的 `portal-production` 环境变量，通过最小权限 SSH 账号发布不可变 release，健康检查失败自动 rollback。证书续期、Nginx SNI 分流和服务器初始化属于部署前置运维步骤。
 
@@ -435,7 +443,7 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 
 ### 8.1 调用链路可视化（R0 设计基线）🔴
 
-设计稿位于 `docs/AxiomRuntime.pen`，含运行时纵览、服务商、使用与日志、命令中心、CLI 与 Codex App、帮助中心六个控制台主屏。其中"使用与日志"页确立了 **调用链路（trace）视图** 作为 Execution & Audit 的默认形态：日志不以扁平事件流呈现，而按 `requestId` 聚合成一次请求的完整 provider 调用链路。
+设计稿位于 `docs/AxiomRuntime.pen`。当前控制面将 Execution & Audit 落在"调用追踪"页：日志不以扁平事件流呈现，而按 `traceId` 聚合成一次请求的完整 provider 调用链路；"本地配置"和"对外服务"分别管理本机运行方式与远程能力授权。
 
 链路卡片的每一跳（hop）必须展示：provider 的 `level`、provider 名称、触发的日志 `action`、该跳结果（成功 / 失败 / 跳过）、耗时，以及来自日志 `metadata` 的原因说明。四类典型链路必须可区分：直连成功、自动切换后成功、熔断跳过后降级、全部候选失败。
 
@@ -469,7 +477,7 @@ ai log --print --trace trc_70d90ad64d1846bf   # 只打印该链路的各跳，�
 | 位置 | 内容 | 数据来源 |
 |---|---|---|
 | 侧栏"当前 provider"卡（`Sidebar` 可复用组件，五屏共享） | 正在承接的 provider 名、`level`、model、是否已发生切换及第几跳、当前 traceId | 最近一条同 traceId 的 `provider_resolved*` / `runtime_server_provider_fallback` 事件 |
-| "使用与日志"页列表首项"进行中"链路卡 | 已经过的每一跳（level / provider / action / 结果 / 耗时 / 原因），以及是否处于「等待用户重新提交以确认切换」状态与继续方式 | 该 traceId 下尚无终止跳的日志序列 |
+| "调用追踪"页列表首项"记录不完整"链路卡 | 已经过的每一跳（level / provider / action / 结果 / 耗时 / 原因），并标出是否缺少终止事件 | 该 traceId 下尚无终止跳的日志序列 |
 
 判定"进行中"的依据是该 traceId 还没有出现终止跳（`*_settled` / `*_candidates_exhausted`）。链路过滤器因此增加「进行中」一档。等待确认状态对应请求级 failover 的 `confirmation_required`：Runtime 已选好候选但不自动重放，Web 需说明"重新提交或重试即确认切换"，而不是显示为失败。
 
@@ -477,7 +485,7 @@ ai log --print --trace trc_70d90ad64d1846bf   # 只打印该链路的各跳，�
 
 ### 8.2 Codex App 可视化配置（R0 设计基线）🔴
 
-“CLI 与 Codex App”页把已实现的 `ai set codex` core integration service 呈现为可查看、可确认、可回滚的 Web 管理操作。页面说明 Codex App、CLI 与 IDE extension 在同一 `CODEX_HOME` 下共享用户级 `config.toml`，同时区分 CLI `-c` 的进程级临时覆盖。页面读取并展示当前 `model_provider`、model、proxy、`config.toml` / `auth.json` 托管状态，但 API Key 只显示 configured/missing，不回显明文。
+“本地配置 / 工具配置”页把已实现的 `ai set codex` core integration service 呈现为可查看、可确认、可回滚的 Web 管理操作。页面说明 Codex App、CLI 与 IDE extension 在同一 `CODEX_HOME` 下共享用户级 `config.toml`，同时区分 CLI `-c` 的进程级临时覆盖。页面读取并展示当前 `model_provider`、model、proxy、`config.toml` / `auth.json` 托管状态，但 API Key 只显示 configured/missing，不回显明文。
 
 设置区必须覆盖三种与 CLI 等价的模式：`chatgpt`、`provider [name] [model]`、`proxy <endpoint|off>`。提交前显示等价 CLI 命令、目标配置 diff、重启需求、备份与失败回滚语义；提交后显示 operation progress 和最终 restart 状态。Web 不自行拼装或写入 TOML/JSON，所有读写复用同一 core integration API。
 

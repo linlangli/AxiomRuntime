@@ -100,9 +100,13 @@ src/
 | `core/contracts`、`core/transport-proxy`、`core/policy`、`core/learning`、`core/auth-session`、`core/skills`、`plugins/` | 🔴 目录不存在 |
 | 本机 Web adapter（`src/web`、`src/core/web`） | 🟡 `ai web` 已实现基础控制面；企业治理与完整实时 trace 仍规划中 |
 
-本机总览由 `src/core/web/dashboard-service.ts` 从现有 usage ledger 投影累计用量、全局每日用量和 Provider 每日用量（`usage.providers[].daily`），不创建第二份 usage ledger。Web adapter 只负责最近 30 个 UTC 自然日的 Provider 曲线、最近 70 个 UTC 自然日的调用活动和累计 Provider Token 占比；时间窗内空日期补零，累计汇总不受展示时间窗影响。
+本机控制面由 `src/core/web/dashboard-service.ts` 和 `src/core/web/local-settings.ts` 从现有 usage ledger、配置服务和 `service-exposure.json` 投影数据，不创建第二份 usage ledger。Web 现在提供六个一级页面：运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 分日成本、成本卡片内按 Provider/模型编辑 `model-pricing.json`，以及圆角分段图；调用活动使用当前筛选区间；调用追踪按 `traceId` 聚合事件、会话和日志；本地配置通过 core API 编辑 Provider、路由、Codex、出站代理、Telegram、embedding，并提供受限权限的配置备份与恢复。敏感值只在表单提交时接收，状态接口不回显。
+
+`service-exposure.json` 是对外能力授权的控制面配置。它维护公网入口、Runtime 上游地址、能力白名单和一次性显示的调用凭证摘要；反向代理与 TLS 仍属于部署环境。Runtime server 可启用该配置，逐请求同时检查凭证能力和全局开放能力，能力关闭或凭证撤销立即拒绝请求。Web 只生成 Nginx 片段和接入示例，不自动写远程服务器。
 
 公网门户是独立静态构建，不打包进入 npm，也不访问本地控制面 API。生产环境与 `app.offerpilot.life` 共用 Nginx 的 `stream` SNI 入口；`axiom.offerpilot.life` 在 `443` 被分流到独立的 `8450` TLS 站点，静态文件放在 `/srv/axiomruntime-portal/current`，由不可变 release 目录和原子 symlink 切换部署。CI 负责构建、上传、健康检查和失败回滚；证书签发和 Nginx 分流属于服务器预配置。
+
+门户呈现遵循 `docs/AxiomRuntime.pen` 的 Web Landing：终端示例、能力卡片、执行流程、安装、命令参考、Telegram 与实现状态。示例用量和对话不是实时数据；版本从 `package.json` 获取。响应式布局、键盘导航和安装命令复制仅属于静态 UI，不引入新的 core API 或配置写入。
 
 ---
 
@@ -267,7 +271,7 @@ flowchart TD
 
 `openai-usage-*` 这一组是当前的请求级路由与用量代理实现，**目标态按职责剥离到 ⑤ Transport Proxy**，拆成 `transport-core` / `TransformCoordinator` / `UsageObserver` / `MemoryExtension` + 兼容 facade。`startOpenAiUsageProxy()` 作为兼容 facade 保留，行为由 parity 测试锁定。
 
-请求级 failover 只适用于**会真正产生补全的模型端点**：`/v1/messages`、`/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/embeddings`、`/v1/images/generations` 的带请求体 `POST`。其余请求不重试、不轮转、不写健康失败；收到 HTTP 响应时原样返回，连接失败或响应头超时时返回本地代理错误。这类请求包括：
+请求级 failover 只适用于**会真正产生补全的模型端点**：`/v1/messages`、`/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/embeddings`、`/v1/images/generations`、`/v1/images/edits` 的带请求体 `POST`，其中 multipart 上传不自动重试或轮转，避免未授权的参考图转发。其余辅助请求不重试、不轮转、不写健康失败；收到 HTTP 响应时原样返回，连接失败或响应头超时时返回本地代理错误。这类请求包括：
 
 - Claude Code/Codex 启动或能力探测产生的无请求体 `GET`；
 - 辅助端点的 `POST`，典型是 Anthropic 的 `/v1/messages/count_tokens`。多数第三方中转站没有实现它，会返回 `Invalid URL (POST /v1/messages/count_tokens)` 形式的 `404`。这是**端点缺失**，不是 Provider 故障。
@@ -306,7 +310,9 @@ Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`eng
 
 ### 图片生成 🟢
 
-`ai image [provider] [model] [prompt]` 是独立的 `ImageGenerationService` capability，不复用 Claude/Codex 的 Agent 模型兼容过滤。CLI 无参数时交互选择 Provider 和具体模型；指定 Provider 时，第二个参数只有匹配该 Provider 模型缓存才解释为模型，否则保持 `provider + prompt` 兼容。Core 按明确的 Provider/模型选择候选，并按健康度和 `level` 自动 fallback，通过 execution-scoped Transport Proxy 调用 OpenAI-compatible `/v1/images/generations`。图片请求和代理响应头等待上限统一为 120 秒，避免通用文本代理的 45 秒 headers timeout 截断正常的图片生成；超时后继续 Provider fallback。响应校验 `b64_json`/安全的 `https` URL，并将 base64 图片以 `0600` 权限原子保存。图片请求的真实 usage 仍由唯一 UsageObserver 记录；CLI 不记录提示词到 command usage log。
+本地参考图通过可选 core 输入 `imagePath` 接入：CLI 支持 `--image <path>` / `--image=<path>`，无提示词的交互流程选择文生图或参考图。Core 在任何图片请求前读取普通文件，限制 20 MiB 并按内容识别 PNG/JPEG/WebP，拒绝 GIF、无效文件和目录；有界读取避免文件增长突破限制。参考图使用通用文件名，以原生 `FormData` 发送到 `/v1/images/edits`，复用同一 execution-scoped Transport Proxy 和 UsageObserver；Transport 对 multipart 字节保持原样，不用 JSON 模型重写破坏上传。图片路径、原始文件名、提示词与图片内容不进入 CLI command usage log。参考图仅尝试一个选定 Provider，禁用自动重试和跨 Provider fallback，显式 Provider 不健康时不得改选备用站。非兼容接口、多图、mask 不在本次能力范围，编辑支持由服务商实际响应决定。
+
+`ai image [provider] [model] [prompt]` 是独立的 `ImageGenerationService` capability，不复用 Claude/Codex 的 Agent 模型兼容过滤。CLI 无参数时交互选择 Provider、具体模型和生成方式；指定 Provider 时，第二个参数只有匹配该 Provider 模型缓存才解释为模型，否则保持 `provider + prompt` 兼容。文生图按明确的 Provider/模型选择候选，并按健康度和 `level` 自动 fallback，通过 execution-scoped Transport Proxy 调用 OpenAI-compatible `/v1/images/generations`；参考图的选择与失败语义见上段。图片请求等待响应头上限为 120 秒，避免通用文本代理的 45 秒 headers timeout 截断正常的图片生成；仅文生图超时后继续 Provider fallback。响应校验 `b64_json`/安全的 `https` URL，并将 base64 图片以 `0600` 权限原子保存。图片请求的真实 usage 仍由唯一 UsageObserver 记录；CLI 不记录提示词到 command usage log。
 
 ### 进度流式 🟢
 

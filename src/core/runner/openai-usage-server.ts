@@ -97,7 +97,8 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
       // 只有真正会产生补全的模型端点才允许轮转。count_tokens 这类辅助端点在很多中转站上
       // 并不存在，它的 404 不代表 Provider 不可用，不能据此烧掉整条候选链。
       const modelInvocation = isModelInvocationRequest(req.method, req.url ?? "/");
-      const canFailover = req.method === "POST" && requestBytes > 0 && modelInvocation;
+      const multipart = req.headers["content-type"]?.toLowerCase().startsWith("multipart/form-data") ?? false;
+      const canFailover = req.method === "POST" && requestBytes > 0 && modelInvocation && !multipart;
 
       let routeIndex = activeRouteIndex;
       let attempt = 1;
@@ -135,7 +136,9 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
           }
           return "exhausted";
         };
-        const requestBody = rewriteRequestModel(originalRequestBody, route.model);
+        const requestBody = multipart
+          ? originalRequestBody
+          : rewriteRequestModel(originalRequestBody, route.model);
         const requestModel = extractRequestModel(requestBody) ?? route.model;
         const responsesStream = engine === "codex" && isResponsesStreamRequest(req.url ?? "/", requestBody);
         const upstreamBaseUrl = getToolBaseUrl(engine, route.provider);
@@ -453,7 +456,8 @@ const MODEL_INVOCATION_PATHS = new Set([
   "/completions",
   "/responses",
   "/embeddings",
-  "/images/generations"
+  "/images/generations",
+  "/images/edits"
 ]);
 
 export function isModelInvocationRequest(method: string | undefined, incomingUrl: string): boolean {

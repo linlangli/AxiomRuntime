@@ -9,12 +9,14 @@ export type ImageCommandInput = {
   model?: string;
   target?: string;
   prompt: string;
+  imagePath?: string;
 };
 
 export async function runImageCommand(args: string[]): Promise<void> {
   await refreshAllProviders();
   const [providers, cache] = await Promise.all([listProviders(), readCache()]);
   const input = await resolveImageCommandInput(args, providers, cache.providers);
+  if (input.imagePath) console.log("Reference image will be uploaded to one selected provider. Automatic retries and cross-provider fallback are disabled.");
   const result = await generateImage(input);
   console.log(`Generated with ${result.provider} / ${result.model}`);
   if (result.filePath) console.log(`Image saved: ${result.filePath}`);
@@ -33,11 +35,28 @@ export async function resolveImageCommandInput(
     throw new Error("No providers configured. Run `ai add` first.");
   }
 
+  const parsed = parseImageArgs(args);
+  args = parsed.args;
+  let imagePath = parsed.imagePath;
   const target = args[0]?.trim();
+  const resolvePrompt = async (promptArgs: string[]): Promise<{ prompt: string; imagePath?: string }> => {
+    if (!promptArgs.length && !imagePath) {
+      const mode = await select("Select image mode", [
+        { label: "Text to image / 文生图", value: "generate" },
+        { label: "Reference local image / 参考本地图片", value: "edit" }
+      ]);
+      if (mode === "edit") {
+        imagePath = (await text("Local reference image path (PNG, JPEG, WebP; max 20 MiB)"))
+          .trim().replace(/^(["'])(.*)\1$/, "$2");
+        if (!imagePath) throw new Error("Local reference image path is required.");
+      }
+    }
+    const prompt = requirePrompt(promptArgs.join(" ").trim() || await text("Image prompt"));
+    return { prompt, ...(imagePath ? { imagePath } : {}) };
+  };
   const namedProvider = target ? providers.find((provider) => provider.name === target) : undefined;
   if (target && !namedProvider) {
-    const prompt = args.slice(1).join(" ").trim() || await text("Image prompt");
-    return { target, prompt: requirePrompt(prompt) };
+    return { target, ...await resolvePrompt(args.slice(1)) };
   }
 
   const provider = namedProvider ?? await selectImageProvider(providers, providerCache, select);
@@ -50,8 +69,26 @@ export async function resolveImageCommandInput(
       ? getDefaultImageModel(provider, models)
       : await selectImageModel(provider, models, select);
   const promptArgs = hasExplicitModel ? args.slice(2) : args.slice(1);
-  const prompt = promptArgs.join(" ").trim() || await text("Image prompt");
-  return { provider: provider.name, model, prompt: requirePrompt(prompt) };
+  return { provider: provider.name, model, ...await resolvePrompt(promptArgs) };
+}
+
+function parseImageArgs(input: string[]): { args: string[]; imagePath?: string } {
+  const args: string[] = [];
+  let imagePath: string | undefined;
+  for (let index = 0; index < input.length; index += 1) {
+    const argument = input[index]!;
+    if (argument === "--") { args.push(...input.slice(index + 1)); break; }
+    if (argument === "--image" || argument.startsWith("--image=")) {
+      if (imagePath !== undefined) throw new Error("Only one --image reference is supported.");
+      const value = argument === "--image" ? input[++index] : argument.slice("--image=".length);
+      if (!value?.trim() || value.startsWith("--")) throw new Error("--image requires a local file path.");
+      imagePath = value.trim();
+    } else {
+      if (argument.startsWith("--")) throw new Error(`Unknown image option: ${argument.split("=")[0]}`);
+      args.push(argument);
+    }
+  }
+  return { args, imagePath };
 }
 
 async function selectImageProvider(

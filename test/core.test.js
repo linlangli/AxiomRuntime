@@ -243,7 +243,7 @@ test("image command interactively selects provider, model, and prompt", async ()
     },
     async (message, choices) => {
       prompts.push({ message, choices });
-      return prompts.length === 1 ? "51talk-image" : "gpt-image-1";
+      return prompts.length === 1 ? "51talk-image" : prompts.length === 2 ? "gpt-image-1" : "generate";
     },
     async (message) => {
       assert.equal(message, "Image prompt");
@@ -258,7 +258,8 @@ test("image command interactively selects provider, model, and prompt", async ()
   });
   assert.deepEqual(prompts.map((item) => item.message), [
     "Select image provider",
-    "Select image model for 51talk-image"
+    "Select image model for 51talk-image",
+    "Select image mode"
   ]);
 });
 

@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import { startRuntimeServer } from "./runtime-server.js";
+import { loadServiceExposure } from "../core/config/service-exposure.js";
 
-function readToken(): string {
+function readToken(): string | undefined {
   const inline = process.env.AI_GATEWAY_SERVER_TOKEN?.trim();
   if (inline) return inline;
   const file = process.env.AI_GATEWAY_SERVER_TOKEN_FILE?.trim();
   if (file) return fs.readFileSync(file, "utf8").trim();
-  throw new Error("Set AI_GATEWAY_SERVER_TOKEN or AI_GATEWAY_SERVER_TOKEN_FILE.");
+  return undefined;
 }
 
+const exposure = await loadServiceExposure();
 const server = await startRuntimeServer({
   host: process.env.AI_GATEWAY_SERVER_HOST || "127.0.0.1",
   port: Number(process.env.AI_GATEWAY_SERVER_PORT || "8080"),
   token: readToken(),
+  useExposureConfig: exposure.updatedAt !== null,
   maxRequestBytes: Number(process.env.AI_GATEWAY_MAX_REQUEST_BYTES || "16777216"),
   upstreamHeadersTimeoutMs: Number(process.env.AI_GATEWAY_UPSTREAM_HEADERS_TIMEOUT_MS || "45000"),
   agentWorkspaceRoot: process.env.AI_GATEWAY_AGENT_WORKSPACE_ROOT,

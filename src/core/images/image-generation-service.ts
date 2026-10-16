@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isProviderCircuitOpen, readCache, recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../config/cache-store.js";
@@ -30,8 +31,11 @@ export type GeneratedImage = {
   url?: string;
 };
 
+type ReferenceImage = { bytes: Uint8Array<ArrayBuffer>; mimeType: string; fileName: string };
+
 export async function resolveImageProviderCandidates(
-  selection: string | ImageProviderSelection
+  selection: string | ImageProviderSelection,
+  allowFallback = true
 ): Promise<ImageProviderCandidate[]> {
   const target = typeof selection === "string" ? selection.trim() : "";
   let providerName = typeof selection === "string" ? "" : selection.providerName?.trim() ?? "";
@@ -66,7 +70,8 @@ export async function resolveImageProviderCandidates(
       || (!knownModels.length && provider.model === targetModel);
     return offersModel ? [{ provider, model: targetModel }] : [];
   });
-  if (!preferredProvider) return candidates;
+  if (!preferredProvider) return allowFallback ? candidates : candidates.slice(0, 1);
+  if (!allowFallback) return candidates.filter((candidate) => candidate.provider.name === preferredProvider.name);
   return [
     ...candidates.filter((candidate) => candidate.provider.name === preferredProvider.name),
     ...candidates.filter((candidate) => candidate.provider.name !== preferredProvider.name)
@@ -79,12 +84,14 @@ export async function generateImage(input: {
   model?: string;
   prompt: string;
   outputDir?: string;
+  imagePath?: string;
 }): Promise<GeneratedImage> {
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error("Image prompt is required.");
+  const reference = input.imagePath !== undefined ? await readReferenceImage(input.imagePath) : undefined;
 
   const selection = input.target ?? { providerName: input.provider, model: input.model };
-  const candidates = await resolveImageProviderCandidates(selection);
+  const candidates = await resolveImageProviderCandidates(selection, !reference);
   if (!candidates.length) {
     const selectionName = input.target ?? input.provider ?? input.model ?? "(unknown)";
     throw new Error(`No usable provider offers image model for ${selectionName}. Run \`ai status\` to refresh model lists.`);
@@ -93,7 +100,7 @@ export async function generateImage(input: {
   const failures: string[] = [];
   for (const candidate of candidates) {
     try {
-      const result = await generateWithProvider(candidate, prompt, input.outputDir ?? process.cwd());
+      const result = await generateWithProvider(candidate, prompt, input.outputDir ?? process.cwd(), reference);
       await recordProviderRuntimeSuccess(candidate.provider.name);
       return result;
     } catch (error) {
@@ -116,26 +123,40 @@ export async function generateImage(input: {
 async function generateWithProvider(
   candidate: ImageProviderCandidate,
   prompt: string,
-  outputDir: string
+  outputDir: string,
+  reference?: ReferenceImage
 ): Promise<GeneratedImage> {
   const usageProxy = await startOpenAiUsageProxy({
     provider: candidate.provider,
     model: candidate.model,
     tool: "image",
     engine: "codex",
-    upstreamHeadersTimeoutMs: IMAGE_REQUEST_TIMEOUT_MS
+    upstreamHeadersTimeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
+    ...(reference ? { maxAttemptsPerRoute: 1 } : {})
   });
 
   try {
-    const response = await fetchWithTimeout(`${usageProxy.baseUrl}/images/generations`, {
+    let body: string | FormData = JSON.stringify({ model: candidate.model, prompt, n: 1 });
+    if (reference) {
+      const form = new FormData();
+      form.set("model", candidate.model);
+      form.set("prompt", prompt);
+      form.set("n", "1");
+      form.set("image", new Blob([reference.bytes], { type: reference.mimeType }), reference.fileName);
+      body = form;
+    }
+    const response = await fetchWithTimeout(`${usageProxy.baseUrl}/images/${reference ? "edits" : "generations"}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${candidate.provider.apiKey}`,
-        "content-type": "application/json"
+        ...(reference ? {} : { "content-type": "application/json" })
       },
-      body: JSON.stringify({ model: candidate.model, prompt, n: 1 })
+      body
     });
     const text = await readBoundedResponseText(response, MAX_IMAGE_RESPONSE_BYTES);
+    if (!response.ok && reference && [404, 405, 415, 501].includes(response.status)) {
+      throw new Error(`Provider does not support this image edit request (HTTP ${response.status}). Choose a provider/model supporting multipart /images/edits. The reference was not sent to fallback providers.`);
+    }
     const payload = parseJsonResponse(text);
     if (!response.ok) {
       throw new Error(readProviderError(payload) ?? `Provider returned HTTP ${response.status}.`);
@@ -170,6 +191,33 @@ async function generateWithProvider(
     return { ...baseResult, url: image.url };
   } finally {
     await usageProxy.close().catch(() => undefined);
+  }
+}
+
+async function readReferenceImage(filePath: string): Promise<ReferenceImage> {
+  if (!filePath.trim()) throw new Error("Local reference image path is required.");
+  const file = await fs.open(path.resolve(filePath), constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) throw new Error("Reference image must be a regular local file.");
+    if (stat.size > MAX_IMAGE_BYTES) throw new Error("Reference image exceeds 20 MiB.");
+    const buffer = Buffer.alloc(MAX_IMAGE_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await file.read(buffer, length, buffer.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > MAX_IMAGE_BYTES) throw new Error("Reference image exceeds 20 MiB.");
+    const bytes = buffer.subarray(0, length);
+    let extension: string;
+    try { extension = detectImageExtension(bytes); }
+    catch { throw new Error("Reference image must be PNG, JPEG, or WebP (detected from file content)."); }
+    if (extension === "gif") throw new Error("Reference image must be PNG, JPEG, or WebP; GIF is not supported.");
+    const mimeType = extension === "jpg" ? "image/jpeg" : `image/${extension}`;
+    return { bytes: Uint8Array.from(bytes), mimeType, fileName: `reference.${extension}` };
+  } finally {
+    await file.close();
   }
 }
 

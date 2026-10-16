@@ -77,4 +77,10 @@ Use `rg` and direct file reads for literal text, documentation, configuration va
 
 ## Delivery Standard
 
+### Local Web Control Plane
+
+- Local Web settings must call shared core configuration APIs and retain loopback Host, Origin, and token checks. Never expose the management adapter through generated reverse-proxy configuration.
+- Service exposure is configured in `service-exposure.json`; server authentication must enforce the intersection of global enabled capabilities and a caller credential's capabilities before dispatch. Credential values are shown only at creation and persisted as SHA-256 digests.
+- Managed configuration snapshots contain secrets and must use restricted file permissions. Restore operations must preserve the current service credential set so revoked credentials are never reactivated by restoring an older snapshot. Codex user configuration, usage ledgers, and databases are outside snapshot scope.
+
 A capability is not complete until its stable interface, policy boundary, failure behavior, observability, tests, migration path, English normative documentation, and Chinese user documentation are defined. Feature flags may defer activation; they may not disguise an incomplete implementation as complete.

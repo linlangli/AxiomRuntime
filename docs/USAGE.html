@@ -642,8 +642,8 @@ ai setup</pre>
               <tr data-search="web dashboard panel local">
                 <td><span class="group-label">其它</span></td>
                 <td><code class="cmd">ai web</code></td>
-                <td>启动本机控制面板并打开浏览器；展示整行 Provider 30 天 Token 趋势（总量/输入/输出），下方等宽的大环形占比图（底部图例）与紧凑方格的 70 天调用活动。日期按 UTC，无调用日补零；服务商健康详情见「服务商」；终端按 Ctrl+C 关闭。</td>
-                <td>仅监听 127.0.0.1；访问链接含临时 token。旧 Codex App 聊天不会随配置切换而迁移。</td>
+                <td>启动本机控制面板并打开浏览器；页面分为运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心。图表支持 7/30/70 天筛选、Provider 趋势、带圆角分段的占比图和随区间变化的调用活动；成本卡片右上角可编辑每个 Provider/模型的美元/百万 token 输入、输出和 Cache Read 价格。本地配置可编辑 Provider/Codex/代理/Telegram/embedding，对外服务可选择能力并生成反代示例。</td>
+                <td>仅监听 127.0.0.1；访问链接含临时 token。配置写入前生成快照，凭证只在创建时显示一次。反代与 TLS 需要在自己的服务器部署，旧 Codex App 聊天不会随配置切换而迁移。</td>
               </tr>
             </tbody>
           </table>
@@ -685,13 +685,17 @@ ai proxy --disable</pre>
                 <h3>生成图片</h3>
                 <pre>ai image
 ai image 51talk-image "一只戴墨镜的猫，数字插画"
-ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
+ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"
+ai image 51talk-image "保持人物一致，改成水彩风格" --image "./参考图.png"</pre>
                 <ul>
-                  <li>直接运行 <code>ai image</code> 时，会依次选择 Provider、具体模型并输入提示词。</li>
+                  <li>直接运行 <code>ai image</code> 时，会依次选择 Provider、具体模型和生成方式（文生图 / 参考本地图片）；参考图模式输入文件路径，最后输入提示词。已有提示词的旧用法不增加交互。</li>
+                  <li><code>--image &lt;path&gt;</code> 或 <code>--image=&lt;path&gt;</code> 指定单张本地参考图，支持 PNG、JPEG、WebP，按文件内容识别，最大 20 MiB。路径有空格请加引号；不支持 GIF、URL、多图或 mask。原图不修改，结果另存新文件。</li>
+                  <li>参考图上传给所选 Provider，调用 multipart <code>/v1/images/edits</code>。Provider / 模型须支持图片编辑；模型列表存在不代表支持该接口。服务端仍可能拒绝格式、尺寸或能力。非兼容的 Responses 图片工具接口不在此功能范围。</li>
+                  <li>参考图不自动重试、不向其他 Provider fallback；所选 Provider 不健康时直接失败。只指定模型时按健康/顺序选择一个可用 Provider。仅使用可信服务商；失败后明确选其他服务商重新运行。文生图保留原有 fallback。</li>
                   <li>第一个参数是 Provider 名；第二个参数匹配模型缓存时作为具体模型，否则从第二个参数开始作为提示词并使用默认模型。</li>
                   <li>命令执行前会自动刷新模型缓存；也可以先运行 <code>ai status</code> 检查。指定模型时建议给提示词加引号。</li>
                   <li><code>b64_json</code> 会以 <code>0600</code> 权限保存到当前目录并输出绝对路径；远程响应只接受无凭证的 <code>https</code> URL。</li>
-                  <li>图片请求最长等待 120 秒；超时会自动失败并尝试下一个 Provider。</li>
+                  <li>图片请求等待响应头上限为 120 秒；参考图失败直接报告，文生图可尝试下一个 Provider。</li>
                   <li>请求经过 execution-scoped Transport Proxy，真实 usage 复用唯一 <code>UsageObserver</code> 账本。</li>
                 </ul>
               </div>
@@ -702,7 +706,7 @@ ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"</pre>
                   <li>用 <code>ai failover off</code> 可一键关闭自动降级：之后只尝试选定（或默认 <code>level: 1</code>）的 Provider，失败即报错不切换；<code>ai failover on</code> 恢复，<code>ai failover</code> 查看状态。</li>
                   <li>显式指定 Provider 时不会先刷新全部 Provider，而是直接使用该 Provider 的已缓存模型并实际尝试；健康缓存暂时为 <code>error</code> 不会在请求前静默跳过，失败后才进入同模型族的自动切换链。</li>
                   <li>Claude Code 只在提供 Claude 模型的 Provider 间切换；Codex 只在提供 Codex/OpenAI 兼容模型的 Provider 间切换，不跨模型族。</li>
-                  <li>只有会产生补全的模型端点（<code>/v1/messages</code>、<code>/v1/chat/completions</code>、<code>/v1/completions</code>、<code>/v1/responses</code>、<code>/v1/embeddings</code>、<code>/v1/images/generations</code>）的带请求体 <code>POST</code> 参与降级：在产生有效输出前遇到连接错误、认证错误、限流或上游故障时，会在同一 Claude Code/Codex 会话内切换 Provider、改写备用模型并显示提示。</li>
+                  <li>只有会产生补全的模型端点（<code>/v1/messages</code>、<code>/v1/chat/completions</code>、<code>/v1/completions</code>、<code>/v1/responses</code>、<code>/v1/embeddings</code>、<code>/v1/images/generations</code>、<code>/v1/images/edits</code>）的带请求体 <code>POST</code> 参与降级：在产生有效输出前遇到连接错误、认证错误、限流或上游故障时，会在同一 Claude Code/Codex 会话内切换 Provider、改写备用模型并显示提示。multipart 参考图上传是例外，不自动重试或轮转。</li>
                   <li>CLI 启动期的无请求体 <code>GET</code> 探测，以及辅助端点（多数中转站未实现的 <code>/v1/messages/count_tokens</code> 等）的 <code>404</code>，都会原样返回给 CLI，既不触发 Provider 轮转，也不计入健康分。</li>
                   <li>一次失败不会立刻换 Provider：限流（<code>429</code>）、<code>5xx</code>、连接层错误和有效输出前的流中断先在当前 Provider 原地重试（默认最多 2 次尝试，退避 300ms 起翻倍），重试额度用尽才轮转；<code>401</code>/<code>403</code>/<code>404</code> 与响应头超时是确定性失败，不重试直接换下一跳。重试成功不计失败、不扣健康分，重试全部失败整段只记一次失败。</li>
                   <li>已经产生文字、推理或工具参数后不会静默重放；用户在当前 CLI 中重新提交或使用原生重试动作即确认切换，下一次请求使用备用 Provider。</li>
@@ -918,7 +922,7 @@ ai session clear</pre>
                 <pre>~/.ai-gateway/providers.json
 ~/.ai-gateway/memory.json
 ~/.ai-gateway/model-pricing.json</pre>
-                <p><code>providers.json</code> 保存聊天 provider；<code>memory.json</code> 保存记忆检索 embedding 模型。<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格。</p>
+                <p><code>providers.json</code> 保存聊天 provider；<code>memory.json</code> 保存记忆检索 embedding 模型。<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格，也可以在 Web 用量统计页的成本设置中编辑；未配置价格的 usage 不计入估算成本。</p>
                 <p><strong>注意：</strong>这两个文件当前都以明文保存 <code>apiKey</code>。请限制文件权限并且不要提交到仓库。凭证改由 SecretStore 管理、配置只留 <code>apiKeyRef</code> 是目标架构，尚未实现。</p>
               </div>
             </details>

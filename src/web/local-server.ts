@@ -9,6 +9,9 @@ import { getProviderStatus } from "../core/status/status-service.js";
 import { addProvider, deleteProvider, updateProvider } from "../core/providers/provider-service.js";
 import { writeLog } from "../core/logs/log-service.js";
 import type { Provider, ProviderMode } from "../core/types.js";
+import { applyLocalSettings, createSettingsBackup } from "../core/web/local-settings.js";
+import { SettingsInputError, saveServiceExposure, createServiceCredential, revokeServiceCredential, checkServiceConnection } from "../core/config/service-exposure.js";
+import { readModelPricing, removeModelPrice, upsertModelPrice } from "../core/usage/pricing.js";
 
 const ASSET_ROOT = fileURLToPath(new URL("./control/", import.meta.url));
 const MIME_TYPES: Record<string, string> = {
@@ -52,7 +55,7 @@ export async function startLocalWebServer(options: { port?: number; assetRoot?: 
       }
       await serveAsset(response, root, pathname);
     } catch (error) {
-      if (error instanceof WebInputError) sendJson(response, error.status, { error: error.message });
+      if (error instanceof WebInputError || error instanceof SettingsInputError) sendJson(response, error instanceof WebInputError ? error.status : 400, { error: error.message });
       else sendJson(response, 500, { error: "Operation failed. Check the local Runtime logs for details." });
     }
   });
@@ -70,8 +73,66 @@ export async function startLocalWebServer(options: { port?: number; assetRoot?: 
 }
 
 async function handleApi(request: http.IncomingMessage, response: http.ServerResponse, pathname: string): Promise<void> {
+  if (request.method === "POST" && pathname === "/api/exposure/test") {
+    const body = await readBody(request);
+    if (!isRecord(body)) throw new WebInputError("Invalid test target.");
+    sendJson(response, 200, await checkServiceConnection(body.target));
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/settings") {
+    const body = await readBody(request);
+    if (!isRecord(body)) throw new WebInputError("Invalid settings action.");
+    sendJson(response, 200, await applyLocalSettings(body));
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/exposure") {
+    const body = await readBody(request);
+    if (!isRecord(body)) throw new WebInputError("Invalid service configuration.");
+    await createSettingsBackup();
+    await saveServiceExposure({ publicBaseUrl: body.publicBaseUrl, upstreamUrl: body.upstreamUrl, capabilities: body.capabilities });
+    await writeLog({ category: "provider", action: "web_service_exposure_updated", message: "Service exposure policy updated." });
+    sendJson(response, 200, { effect: "开放范围已保存；API 服务启用此配置后，每个请求检查最新授权。反代与 TLS 需在服务器部署。" });
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/exposure/credentials") {
+    const body = await readBody(request);
+    if (!isRecord(body)) throw new WebInputError("Invalid credential request.");
+    const result = await createServiceCredential(body.name, body.capabilities);
+    await writeLog({ category: "provider", action: "web_service_credential_created", message: "Scoped service credential created.", metadata: { credentialId: result.id } });
+    sendJson(response, 200, result);
+    return;
+  }
+  if (request.method === "DELETE" && pathname.startsWith("/api/exposure/credentials/")) {
+    const id = pathname.slice("/api/exposure/credentials/".length);
+    await revokeServiceCredential(id);
+    await writeLog({ category: "provider", action: "web_service_credential_revoked", message: "Service credential revoked.", metadata: { credentialId: id } });
+    sendJson(response, 200, { effect: "访问凭证已撤销。" });
+    return;
+  }
   if (request.method === "GET" && pathname === "/api/state") {
     sendJson(response, 200, await getWebDashboard());
+    return;
+  }
+  if (request.method === "GET" && pathname === "/api/pricing") {
+    sendJson(response, 200, await readModelPricing());
+    return;
+  }
+  if (request.method === "PUT" && pathname === "/api/pricing") {
+    const body = await readBody(request);
+    const input = parsePricingInput(body);
+    await createSettingsBackup();
+    const pricing = await upsertModelPrice(input.providerName, input.model, input.price);
+    await writeLog({ category: "provider", action: "web_model_pricing_updated", message: "Model pricing updated from local Web.", metadata: { provider: input.providerName, model: input.model } });
+    sendJson(response, 200, pricing);
+    return;
+  }
+  if (request.method === "DELETE" && pathname === "/api/pricing") {
+    const body = await readBody(request);
+    const input = parsePricingIdentity(body);
+    await createSettingsBackup();
+    const pricing = await removeModelPrice(input.providerName, input.model);
+    await writeLog({ category: "provider", action: "web_model_pricing_removed", message: "Model pricing removed from local Web.", metadata: { provider: input.providerName, model: input.model } });
+    sendJson(response, 200, pricing);
     return;
   }
   if (request.method === "POST" && pathname === "/api/codex") {
@@ -98,6 +159,7 @@ async function handleApi(request: http.IncomingMessage, response: http.ServerRes
   if (request.method === "POST" && pathname === "/api/providers") {
     const body = await readBody(request);
     if (!isRecord(body) || typeof body.name !== "string" || typeof body.baseUrl !== "string" || typeof body.apiKey !== "string") throw new WebInputError("Provider name, URL and API Key are required.");
+    await createSettingsBackup();
     const provider = await addProvider({ name: body.name, baseUrl: body.baseUrl, apiKey: body.apiKey, model: typeof body.model === "string" ? body.model : undefined, mode: body.mode === "ask" ? "ask" : "auto", level: typeof body.level === "number" ? body.level : undefined });
     sendJson(response, 200, { name: provider.name });
     return;
@@ -112,11 +174,13 @@ async function handleApi(request: http.IncomingMessage, response: http.ServerRes
     }
     if (body.mode === "auto" || body.mode === "ask") patch.mode = body.mode as ProviderMode;
     if (typeof body.level === "number") patch.level = body.level;
+    await createSettingsBackup();
     const provider = await updateProvider(name, patch);
     sendJson(response, 200, { name: provider.name });
     return;
   }
   if (request.method === "DELETE" && pathname.startsWith("/api/providers/")) {
+    await createSettingsBackup();
     const provider = await deleteProvider(decodeURIComponent(pathname.slice("/api/providers/".length)));
     await writeLog({ category: "provider", action: "web_provider_deleted", message: "Provider deleted from local Web.", metadata: { provider: provider.name } });
     sendJson(response, 200, { name: provider.name });
@@ -153,6 +217,37 @@ async function readBody(request: http.IncomingMessage): Promise<unknown> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function parsePricingIdentity(value: unknown): { providerName: string; model: string } {
+  if (!isRecord(value) || typeof value.providerName !== "string" || typeof value.model !== "string") {
+    throw new WebInputError("Provider 和模型不能为空。");
+  }
+  const providerName = value.providerName.trim();
+  const model = value.model.trim();
+  if (!providerName || !model || providerName.length > 120 || model.length > 200) {
+    throw new WebInputError("Provider 或模型名称无效。");
+  }
+  return { providerName, model };
+}
+
+function parsePricingInput(value: unknown): { providerName: string; model: string; price: { inputPerMillionUsd: number; outputPerMillionUsd: number; cacheReadPerMillionUsd?: number } } {
+  const identity = parsePricingIdentity(value);
+  if (!isRecord(value)) throw new WebInputError("价格配置无效。");
+  const input = readNonNegativeFiniteNumber(value.inputPerMillionUsd);
+  const output = readNonNegativeFiniteNumber(value.outputPerMillionUsd);
+  const cache = value.cacheReadPerMillionUsd === undefined || value.cacheReadPerMillionUsd === null || value.cacheReadPerMillionUsd === ""
+    ? undefined
+    : readNonNegativeFiniteNumber(value.cacheReadPerMillionUsd);
+  if (input === undefined || output === undefined || (value.cacheReadPerMillionUsd !== undefined && value.cacheReadPerMillionUsd !== null && value.cacheReadPerMillionUsd !== "" && cache === undefined)) {
+    throw new WebInputError("输入、输出价格必须是大于等于 0 的有限数字。");
+  }
+  return { ...identity, price: { inputPerMillionUsd: input, outputPerMillionUsd: output, ...(cache !== undefined ? { cacheReadPerMillionUsd: cache } : {}) } };
+}
+
+function readNonNegativeFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+  return value;
 }
 
 function sendJson(response: http.ServerResponse, status: number, body: unknown): void {

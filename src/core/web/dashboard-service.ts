@@ -8,10 +8,11 @@ import { getProviderStatuses } from "../status/status-service.js";
 import { listRecentSessions } from "../sessions/session-service.js";
 import { estimateTokenCostUsd, readModelPricing } from "../usage/pricing.js";
 import { getConfigRoot } from "../config/paths.js";
+import { getLocalSettings } from "./local-settings.js";
 
 export async function getWebDashboard() {
-  const [statuses, cache, usage, logs, sessions, pricing, codex] = await Promise.all([
-    getProviderStatuses(), readCache(), readUsage(), readRecentLogs(300), listRecentSessions(30), readModelPricing(), readCodexConfigSummary()
+  const [statuses, cache, usage, logs, sessions, pricing, codex, settings] = await Promise.all([
+    getProviderStatuses(), readCache(), readUsage(), readRecentLogs(300), listRecentSessions(30), readModelPricing(), readCodexConfigSummary(), getLocalSettings()
   ]);
   const providers = statuses.map(({ apiKey, requestProfile, ...status }) => ({
     ...status,
@@ -26,15 +27,15 @@ export async function getWebDashboard() {
     circuitOpenUntil: cache.providers[status.name]?.circuitOpenUntil ?? null
   }));
   const days = new Map<string, { date: string; inputTokens: number; outputTokens: number; totalTokens: number; estimatedCostUsd: number; unpricedEvents: number }>();
-  const byProvider = new Map<string, { provider: string; totalTokens: number; estimatedCostUsd: number; days: Map<string, { date: string; inputTokens: number; outputTokens: number; totalTokens: number }> }>();
+  const byProvider = new Map<string, { provider: string; totalTokens: number; estimatedCostUsd: number; unpricedEvents: number; days: Map<string, { date: string; inputTokens: number; outputTokens: number; totalTokens: number; estimatedCostUsd: number; unpricedEvents: number }> }>();
   let totalTokens = 0;
   let estimatedCostUsd = 0;
   let unpricedEvents = 0;
   for (const event of usage.events) {
     const date = event.createdAt.slice(0, 10);
     const day = days.get(date) ?? { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0, unpricedEvents: 0 };
-    const provider = byProvider.get(event.provider) ?? { provider: event.provider, totalTokens: 0, estimatedCostUsd: 0, days: new Map() };
-    const providerDay = provider.days.get(date) ?? { date, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    const provider = byProvider.get(event.provider) ?? { provider: event.provider, totalTokens: 0, estimatedCostUsd: 0, unpricedEvents: 0, days: new Map() };
+    const providerDay = provider.days.get(date) ?? { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0, unpricedEvents: 0 };
     providerDay.inputTokens += event.inputTokens;
     providerDay.outputTokens += event.outputTokens;
     providerDay.totalTokens += event.totalTokens;
@@ -47,9 +48,12 @@ export async function getWebDashboard() {
     totalTokens += event.totalTokens;
     if (cost === undefined) {
       day.unpricedEvents += 1;
+      providerDay.unpricedEvents += 1;
+      provider.unpricedEvents += 1;
       unpricedEvents += 1;
     } else {
       day.estimatedCostUsd += cost;
+      providerDay.estimatedCostUsd += cost;
       provider.estimatedCostUsd += cost;
       estimatedCostUsd += cost;
     }
@@ -61,7 +65,11 @@ export async function getWebDashboard() {
     provider: typeof metadata?.provider === "string" ? metadata.provider : null,
     model: typeof metadata?.model === "string" ? metadata.model : null,
     status: typeof metadata?.status === "string" ? metadata.status : null,
-    attempt: typeof metadata?.attempt === "number" ? metadata.attempt : null
+    attempt: typeof metadata?.attempt === "number" ? metadata.attempt : null,
+    durationMs: typeof metadata?.durationMs === "number" ? metadata.durationMs : null,
+    from: typeof metadata?.from === "string" ? metadata.from : null,
+    to: typeof metadata?.to === "string" ? metadata.to : null,
+    reason: typeof metadata?.reason === "string" && /^[a-z_]{1,60}$/.test(metadata.reason) ? metadata.reason : null
   }));
   return {
     generatedAt: new Date().toISOString(),
@@ -73,10 +81,11 @@ export async function getWebDashboard() {
       providers: [...byProvider.values()].sort((left, right) => right.totalTokens - left.totalTokens)
         .map(({ days: providerDays, ...provider }) => ({ ...provider, daily: [...providerDays.values()].sort((left, right) => left.date.localeCompare(right.date)) }))
     },
+    pricing,
     logs: safeLogs.reverse(),
     sessions: sessions.map(({ id, tool, provider, model, startedAt, endedAt, status, fallbackFrom }) =>
       ({ id, tool, provider, model, startedAt, endedAt, status, fallbackFrom })),
-    codex
+    codex, settings
   };
 }
 

@@ -40,8 +40,8 @@ test("Web usage separates Provider daily tokens and retains activity beyond 30 r
     assert.equal(latest.totalTokens, 50);
     assert.deepEqual(usage.providers.map(provider => [provider.provider, provider.totalTokens]), [["first", 905], ["second", 30]]);
     assert.equal(usage.providers[0].daily.length, 60);
-    assert.deepEqual(usage.providers[0].daily.at(-1), { date: latest.date, inputTokens: 12, outputTokens: 8, totalTokens: 20 });
-    assert.deepEqual(usage.providers[1].daily, [{ date: latest.date, inputTokens: 20, outputTokens: 10, totalTokens: 30 }]);
+    assert.deepEqual(usage.providers[0].daily.at(-1), { date: latest.date, inputTokens: 12, outputTokens: 8, totalTokens: 20, estimatedCostUsd: 0, unpricedEvents: 2 });
+    assert.deepEqual(usage.providers[1].daily, [{ date: latest.date, inputTokens: 20, outputTokens: 10, totalTokens: 30, estimatedCostUsd: 0, unpricedEvents: 1 }]);
     for (const day of usage.daily) {
       const totals = usage.providers.flatMap(provider => provider.daily.filter(providerDay => providerDay.date === day.date));
       for (const metric of ["inputTokens", "outputTokens", "totalTokens"]) {
