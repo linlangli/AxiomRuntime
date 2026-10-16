@@ -642,7 +642,7 @@ ai setup</pre>
               <tr data-search="web dashboard panel local">
                 <td><span class="group-label">其它</span></td>
                 <td><code class="cmd">ai web</code></td>
-                <td>启动本机控制面板并打开浏览器；页面分为运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心。图表支持 7/30/70 天筛选、Provider 趋势、带圆角分段的占比图和随区间变化的调用活动；成本卡片右上角可编辑每个 Provider/模型的美元/百万 token 输入、输出和 Cache Read 价格。本地配置可编辑 Provider/Codex/代理/Telegram/embedding，对外服务可选择能力并生成反代示例。</td>
+                <td>启动本机控制面板并打开浏览器；页面分为运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心。图表支持 7/30/70 天筛选、Provider 趋势、带轻量纹理且无分段间隔的占比图和铺满卡片的调用活动；成本卡片右上角可编辑每个 Provider/模型的美元/百万 token 输入、输出和 Cache Read 价格，Provider 会合并当前配置、历史 usage 与已有价格键，模型会合并缓存目录、默认模型、历史 usage 与已有价格键。本地配置可编辑 Provider/Codex/代理/Telegram/embedding，对外服务可选择能力并生成反代示例。</td>
                 <td>仅监听 127.0.0.1；访问链接含临时 token。配置写入前生成快照，凭证只在创建时显示一次。反代与 TLS 需要在自己的服务器部署，旧 Codex App 聊天不会随配置切换而迁移。</td>
               </tr>
             </tbody>

@@ -27,14 +27,32 @@ export async function getWebDashboard() {
     circuitOpenUntil: cache.providers[status.name]?.circuitOpenUntil ?? null
   }));
   const days = new Map<string, { date: string; inputTokens: number; outputTokens: number; totalTokens: number; estimatedCostUsd: number; unpricedEvents: number }>();
-  const byProvider = new Map<string, { provider: string; totalTokens: number; estimatedCostUsd: number; unpricedEvents: number; days: Map<string, { date: string; inputTokens: number; outputTokens: number; totalTokens: number; estimatedCostUsd: number; unpricedEvents: number }> }>();
+  const byProvider = new Map<string, {
+    provider: string;
+    totalTokens: number;
+    estimatedCostUsd: number;
+    unpricedEvents: number;
+    models: Map<string, { model: string; totalTokens: number; lastUsedAt: string }>;
+    days: Map<string, { date: string; inputTokens: number; outputTokens: number; totalTokens: number; estimatedCostUsd: number; unpricedEvents: number }>;
+  }>();
   let totalTokens = 0;
   let estimatedCostUsd = 0;
   let unpricedEvents = 0;
   for (const event of usage.events) {
     const date = event.createdAt.slice(0, 10);
     const day = days.get(date) ?? { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0, unpricedEvents: 0 };
-    const provider = byProvider.get(event.provider) ?? { provider: event.provider, totalTokens: 0, estimatedCostUsd: 0, unpricedEvents: 0, days: new Map() };
+    const provider = byProvider.get(event.provider) ?? {
+      provider: event.provider,
+      totalTokens: 0,
+      estimatedCostUsd: 0,
+      unpricedEvents: 0,
+      models: new Map(),
+      days: new Map()
+    };
+    const model = provider.models.get(event.model) ?? { model: event.model, totalTokens: 0, lastUsedAt: event.createdAt };
+    model.totalTokens += event.totalTokens;
+    if (event.createdAt > model.lastUsedAt) model.lastUsedAt = event.createdAt;
+    provider.models.set(event.model, model);
     const providerDay = provider.days.get(date) ?? { date, inputTokens: 0, outputTokens: 0, totalTokens: 0, estimatedCostUsd: 0, unpricedEvents: 0 };
     providerDay.inputTokens += event.inputTokens;
     providerDay.outputTokens += event.outputTokens;
@@ -79,7 +97,11 @@ export async function getWebDashboard() {
       totalTokens, estimatedCostUsd, unpricedEvents,
       daily: [...days.values()].sort((left, right) => left.date.localeCompare(right.date)),
       providers: [...byProvider.values()].sort((left, right) => right.totalTokens - left.totalTokens)
-        .map(({ days: providerDays, ...provider }) => ({ ...provider, daily: [...providerDays.values()].sort((left, right) => left.date.localeCompare(right.date)) }))
+        .map(({ days: providerDays, models, ...provider }) => ({
+          ...provider,
+          models: [...models.values()].sort((left, right) => right.totalTokens - left.totalTokens || right.lastUsedAt.localeCompare(left.lastUsedAt) || left.model.localeCompare(right.model)),
+          daily: [...providerDays.values()].sort((left, right) => left.date.localeCompare(right.date))
+        }))
     },
     pricing,
     logs: safeLogs.reverse(),

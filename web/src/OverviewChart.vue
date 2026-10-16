@@ -51,8 +51,8 @@ const providerOption = computed(() => ({
   tooltip: { ...tooltip, trigger: 'item', confine: true, formatter: '{b}\n{c} Token · {d}%' },
   legend: { show: false, selected: legendSelected.value },
   series: [{
-    type: 'pie', radius: ['49%', '80%'], center: ['50%', '50%'], padAngle: providerRows.value.length > 1 ? .8 : 0,
-    itemStyle: { borderRadius: 10, borderColor: '#fffdf9', borderWidth: 1, decal: { symbol: 'rect', dashArrayX: [1, 0], dashArrayY: [1, 7], rotation: -.65, color: 'rgba(63,49,37,.12)' } },
+    type: 'pie', radius: ['49%', '80%'], center: ['50%', '50%'], padAngle: 0,
+    itemStyle: { borderRadius: 0, borderColor: 'transparent', borderWidth: 0, decal: { symbol: 'rect', dashArrayX: [1, 0], dashArrayY: [1, 7], rotation: -.65, color: 'rgba(63,49,37,.12)' } },
     label: { show: false }, labelLine: { show: false },
     emphasis: { scaleSize: 5, label: { show: false } },
     data: providerRows.value.map(provider => ({ name: provider.provider, value: provider.totalTokens, itemStyle: { color: provider.color } }))
@@ -122,12 +122,13 @@ function onTrendClick(event: { dataIndex?: number }) {
 .donut-total strong { color: #76664e; font-size: 30px; font-weight: 550; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
 .donut-total span { color: #b0a18a; font-size: 10px; }
 .activity-body { flex: 1; min-height: 380px; display: grid; place-items: center; overflow-x: auto; padding: 8px 0; }
-.activity-calendar { display: grid; grid-template-columns: 20px minmax(0, 1fr); grid-template-rows: 20px auto; column-gap: 11px; row-gap: 9px; width: min(100%, calc(36px + var(--weeks) * 38px)); }
+.activity-calendar { display: grid; grid-template-columns: 20px minmax(0, 1fr); grid-template-rows: 20px auto; column-gap: 11px; row-gap: 9px; width: 100%; min-width: 0; }
 .activity-axis { grid-column: 2; display: grid; gap: 7px; color: #b0a087; font-size: 10px; }
 .activity-axis span { white-space: nowrap; }
 .activity-weekdays { display: grid; grid-template-rows: repeat(7, minmax(0, 1fr)); gap: 7px; color: #b0a087; font-size: 10px; align-items: center; text-align: center; }
 .activity-cells { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, minmax(0, 1fr)); gap: 7px; min-width: 0; }
-.activity-cells button, .activity-padding { width: 100%; aspect-ratio: 1; padding: 0; border: 1px solid #8274520b; border-radius: 4px 6px 3px 5px; }
+.activity-cells button, .activity-padding { width: min(100%, 84px); justify-self: center; aspect-ratio: 1; padding: 0; border: 1px solid #8274520b; border-radius: 4px 6px 3px 5px; }
+.activity-padding { background: #eeede6; }
 .activity-cells button { transition: box-shadow .15s, transform .15s; }
 .activity-cells button:hover, .activity-cells button:focus-visible { box-shadow: inset 0 0 0 2px #7f9e5e; transform: rotate(-4deg); outline: 0; }
 .activity-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 20px; color: #b0a087; font-size: 10px; }

@@ -419,7 +419,7 @@ ai web    # 启动本机基础控制面板
 
 Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大版，**不拥有独立业务逻辑**。所有写操作调用与 CLI/API 相同的核心契约，并显示 policy decision、影响 scope、revision、审批状态与 rollback 入口。
 
-🟢 本机控制面已拆分为运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心六个一级页面。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 汇总表、Token 趋势、随区间变化的调用活动和带圆角分段与轻量涂鸦纹理的占比图；成本卡片支持通过 core pricing API 按 Provider/模型维护美元/百万 token 价格，按当前日期与 Provider 筛选计算成本，未定价事件单独计数；空日期补零，点击日期跳转调用追踪。数据仅来自 Runtime 已记录 usage，不推测未接管的外部调用。
+🟢 本机控制面已拆分为运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心六个一级页面。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 汇总表、Token 趋势、随区间变化的调用活动和带轻量涂鸦纹理的无间隔占比图；成本卡片支持通过 core pricing API 按 Provider/模型维护美元/百万 token 价格，Provider 选项合并当前配置、历史 usage 和已有价格键，模型选项合并缓存目录、默认模型、历史 usage 模型和已有价格键；按当前日期与 Provider 筛选计算成本，未定价事件单独计数；空日期补零，点击日期跳转调用追踪。数据仅来自 Runtime 已记录 usage，不推测未接管的外部调用。
 
 🟡 本地配置支持通过 core API 编辑 Provider、路由、Codex、Runtime/Provider 出站代理、Telegram Bot 和 embedding 连接；写入前展示变更预览，核心服务负责校验、原子写入、失败回滚和受限权限备份。Claude Code 用户级区域仍为只读。
 

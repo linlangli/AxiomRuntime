@@ -57,6 +57,30 @@ test("Web usage separates Provider daily tokens and retains activity beyond 30 r
   }
 });
 
+test("Web usage exposes every historical model for each Provider", async () => {
+  const previousHome = process.env.AI_GATEWAY_HOME;
+  const previousCodexHome = process.env.CODEX_HOME;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-web-models-test-"));
+  process.env.AI_GATEWAY_HOME = root;
+  process.env.CODEX_HOME = path.join(root, "codex");
+  try {
+    await appendUsageEvent({ provider: "first", tool: "codex", model: "gpt-new", source: "proxy", inputTokens: 10, outputTokens: 5, totalTokens: 15, createdAt: "2026-10-15T10:00:00.000Z" });
+    await appendUsageEvent({ provider: "first", tool: "codex", model: "gpt-old", source: "proxy", inputTokens: 2, outputTokens: 3, totalTokens: 5, createdAt: "2026-10-14T10:00:00.000Z" });
+    await appendUsageEvent({ provider: "first", tool: "codex", model: "gpt-new", source: "proxy", inputTokens: 4, outputTokens: 1, totalTokens: 5, createdAt: "2026-10-16T10:00:00.000Z" });
+    const { usage } = await getWebDashboard();
+    assert.deepEqual(usage.providers[0].models, [
+      { model: "gpt-new", totalTokens: 20, lastUsedAt: "2026-10-16T10:00:00.000Z" },
+      { model: "gpt-old", totalTokens: 5, lastUsedAt: "2026-10-14T10:00:00.000Z" }
+    ]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    if (previousHome === undefined) delete process.env.AI_GATEWAY_HOME;
+    else process.env.AI_GATEWAY_HOME = previousHome;
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+  }
+});
+
 test("local Web serves the panel, protects mutations, and redacts secrets", async () => {
   const previousHome = process.env.AI_GATEWAY_HOME;
   const previousCodexHome = process.env.CODEX_HOME;

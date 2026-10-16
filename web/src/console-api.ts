@@ -65,7 +65,10 @@ export interface Dashboard {
   generatedAt: string; configRoot: string; providers: ProviderStatus[]
   usage: {
     totalTokens: number; estimatedCostUsd: number; unpricedEvents: number; daily: DailyUsage[]
-    providers: Array<{ provider: string; totalTokens: number; estimatedCostUsd: number; unpricedEvents: number; daily: DailyUsage[] }>
+    providers: Array<{
+      provider: string; totalTokens: number; estimatedCostUsd: number; unpricedEvents: number
+      models: Array<{ model: string; totalTokens: number; lastUsedAt: string }>; daily: DailyUsage[]
+    }>
   }
   pricing: Record<string, ModelPrice>
   logs: LogItem[]; sessions: SessionItem[]

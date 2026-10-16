@@ -583,7 +583,7 @@ Web 控制面的「本地配置」提供「服务配置、模型路由、工具�
 
 保存开放配置并创建凭证后，在运行 Runtime 的机器执行 `npm run server`；默认监听 `127.0.0.1:8080`，可用 `AI_GATEWAY_SERVER_HOST` / `AI_GATEWAY_SERVER_PORT` 修改。首次启用开放配置需重启已运行的 API 服务，之后能力关闭与凭证撤销逐请求生效。旧的 `AI_GATEWAY_SERVER_TOKEN` / `AI_GATEWAY_SERVER_TOKEN_FILE` 仍支持，但也受全局开放能力范围限制。反代片段中的上游地址从反代服务器视角填写；Runtime 在另一台电脑时先建立 VPN 或隧道。单个 Provider／模型限制、限流额度与组织权限仍未实现。
 
-「用量统计」支持最近 7/30/70 个 UTC 自然日和 Provider 筛选。趋势图可切换总量/输入/输出；调用活动采用随筛选区间变化的方格；Provider 占比使用带圆角分段、轻量纹理和可切换图例的环形图。成本卡片右上角的设置按钮可以按 Provider/模型编辑输入、输出和可选 Cache Read 价格（美元/百万 token），保存后当前区间立即重算；未配置价格的事件会单独提示且不计入成本。点击趋势或活动日期进入「调用追踪」的日期过滤。图表只反映 Runtime 已记录的 usage，不包含未经过 Runtime 的直接调用。「调用追踪」分为调用链路、会话记录、运行日志；链路详情按事件时间展示 Provider、切换方向、状态、原因、耗时和 traceId。
+「用量统计」支持最近 7/30/70 个 UTC 自然日和 Provider 筛选。趋势图可切换总量/输入/输出；调用活动采用随筛选区间变化并铺满卡片宽度的方格；Provider 占比使用无间隔分段、轻量纹理和可切换图例的环形图。成本卡片右上角的设置按钮可以按 Provider/模型编辑输入、输出和可选 Cache Read 价格（美元/百万 token）。Provider 下拉会识别当前所有配置、历史 usage 和已有价格键，模型下拉会列出 Provider 缓存目录、默认模型、历史 usage 模型和已有价格键，保存后当前区间立即重算；未配置价格的事件会单独提示且不计入成本。点击趋势或活动日期进入「调用追踪」的日期过滤。图表只反映 Runtime 已记录的 usage，不包含未经过 Runtime 的直接调用。「调用追踪」分为调用链路、会话记录、运行日志；链路详情按事件时间展示 Provider、切换方向、状态、原因、耗时和 traceId。
 
 公网门户 `https://axiom.offerpilot.life/` 是独立部署的静态介绍页，不连接本机配置、不提供远程控制，也不包含在 npm 包内。默认分支的 GitLab CI 会先构建 `web/dist/portal/`，再用受限的 `axiom-portal-deploy` SSH 账号上传不可变 release、原子切换 `current` symlink，并用线上首页内容做健康检查；失败会自动恢复上一 release。部署账号只能写 `/srv/axiomruntime-portal`，SSH 主机指纹和私钥通过受保护的 `portal-production` CI variables 注入，私钥不进仓库。服务器证书和 Nginx SNI 分流属于一次性运维配置。门户发布需要先把改动合并到默认分支。
 
