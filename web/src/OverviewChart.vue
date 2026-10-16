@@ -20,13 +20,14 @@ const selectedTotal = computed(() => providerRows.value.reduce((sum, row) => leg
 watch(() => props.usage.providers.map(provider => provider.provider).join('|'), () => { legendPage.value = 0; legendSelected.value = {} })
 const fullNumber = (value: number) => new Intl.NumberFormat('zh-CN').format(value)
 const compactNumber = (value: number) => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
-const activityWindowDays = computed(() => Math.max(1, props.windowDays ?? 70))
+const selectedWindowDays = computed(() => Math.max(1, props.windowDays ?? 70))
+const activityWindowDays = computed(() => Math.max(70, selectedWindowDays.value))
 const dates = computed(() => {
   const end = new Date(props.generatedAt)
   end.setUTCHours(0, 0, 0, 0)
   return Array.from({ length: activityWindowDays.value }, (_, index) => new Date(end.getTime() - (activityWindowDays.value - index - 1) * 86400000).toISOString().slice(0, 10))
 })
-const trendDates = computed(() => dates.value.slice(-(props.windowDays ?? 30)))
+const trendDates = computed(() => dates.value.slice(-selectedWindowDays.value))
 const providerRows = computed(() => props.usage.providers.filter(provider => provider.totalTokens > 0).map((provider, index) => ({
   ...provider,
   color: colors[index % colors.length]
@@ -52,7 +53,7 @@ const providerOption = computed(() => ({
   legend: { show: false, selected: legendSelected.value },
   series: [{
     type: 'pie', radius: ['49%', '80%'], center: ['50%', '50%'], padAngle: 0,
-    itemStyle: { borderRadius: 0, borderColor: 'transparent', borderWidth: 0, decal: { symbol: 'rect', dashArrayX: [1, 0], dashArrayY: [1, 7], rotation: -.65, color: 'rgba(63,49,37,.12)' } },
+    itemStyle: { borderRadius: 7, borderColor: 'transparent', borderWidth: 0, decal: { symbol: 'rect', dashArrayX: [1, 0], dashArrayY: [1, 7], rotation: -.65, color: 'rgba(63,49,37,.12)' } },
     label: { show: false }, labelLine: { show: false },
     emphasis: { scaleSize: 5, label: { show: false } },
     data: providerRows.value.map(provider => ({ name: provider.provider, value: provider.totalTokens, itemStyle: { color: provider.color } }))
@@ -60,7 +61,12 @@ const providerOption = computed(() => ({
 }))
 const activityDays = computed(() => {
   const byDate = new Map(props.usage.daily.map(day => [day.date, day.totalTokens]))
-  return dates.value.map(date => ({ date, total: byDate.get(date) ?? 0 }))
+  const firstSelectedIndex = dates.value.length - selectedWindowDays.value
+  return dates.value.map((date, index) => ({
+    date,
+    inRange: index >= firstSelectedIndex,
+    total: index >= firstSelectedIndex ? byDate.get(date) ?? 0 : 0
+  }))
 })
 const activityTotal = computed(() => activityDays.value.reduce((total, day) => total + day.total, 0))
 const activeDays = computed(() => activityDays.value.filter(day => day.total > 0).length)
@@ -97,12 +103,13 @@ function onTrendClick(event: { dataIndex?: number }) {
     <div v-else class="chart-empty">暂无用量数据。</div>
   </section>
   <section v-else class="card overview-chart activity-card">
-    <div class="card-head"><div><h2>调用活动</h2><p>最近 {{ activityWindowDays }} 天 · {{ activeDays }} 天有调用 · UTC</p></div><span class="chip">{{ compactNumber(activityTotal) }} Token</span></div>
+    <div class="card-head"><div><h2>调用活动</h2><p>最近 {{ selectedWindowDays }} 天 · {{ activeDays }} 天有调用 · UTC</p></div><span class="chip">{{ compactNumber(activityTotal) }} Token</span></div>
     <div class="activity-body"><div class="activity-calendar" :style="{ '--weeks': activityColumns }">
-      <div class="activity-axis" :style="{ gridTemplateColumns: `repeat(${activityColumns}, minmax(0, 1fr))` }"><span v-for="tick in activityTicks" :key="tick.column" :style="{ gridColumn: tick.column + 1 }">{{ tick.label }}</span></div>
+      <div class="activity-axis"><span v-for="tick in activityTicks" :key="tick.column" :style="{ gridColumn: tick.column + 1 }">{{ tick.label }}</span></div>
       <div class="activity-weekdays"><span v-for="weekday in ['一', '二', '三', '四', '五', '六', '日']" :key="weekday">{{ weekday }}</span></div>
-      <div class="activity-cells" :style="{ gridTemplateColumns: `repeat(${activityColumns}, minmax(0, 1fr))` }"><template v-for="(day, index) in calendarCells" :key="day?.date ?? `padding-${index}`"><button v-if="day" :title="`${day.date} · ${fullNumber(day.total)} Token`" :aria-label="`${day.date}，${fullNumber(day.total)} Token，查看当天日志`" :style="{ background: activityColor(day.total) }" @click="emit('selectDay', day.date)"></button><span v-else class="activity-padding"></span></template></div>
+      <div class="activity-cells"><template v-for="(day, index) in calendarCells" :key="day?.date ?? `padding-${index}`"><button v-if="day?.inRange" :title="`${day.date} · ${fullNumber(day.total)} Token`" :aria-label="`${day.date}，${fullNumber(day.total)} Token，查看当天日志`" :style="{ background: activityColor(day.total) }" @click="emit('selectDay', day.date)"></button><span v-else class="activity-padding" :class="{ 'activity-outside': day }" :title="day ? `${day.date} · 当前区间外` : undefined"></span></template></div>
     </div></div>
+    <div v-if="selectedWindowDays < activityWindowDays" class="activity-context">展示最近 {{ activityWindowDays }} 天日历 · 淡灰格为所选区间外</div>
     <div class="activity-footer"><span>点击日期查看日志</span><div class="activity-scale"><span>少</span><i v-for="color in activityColors" :key="color" :style="{ background: color }"></i><span>多</span></div></div>
   </section>
 </template>
@@ -122,13 +129,15 @@ function onTrendClick(event: { dataIndex?: number }) {
 .donut-total strong { color: #76664e; font-size: 30px; font-weight: 550; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
 .donut-total span { color: #b0a18a; font-size: 10px; }
 .activity-body { flex: 1; min-height: 380px; display: grid; place-items: center; overflow-x: auto; padding: 8px 0; }
-.activity-calendar { display: grid; grid-template-columns: 20px minmax(0, 1fr); grid-template-rows: 20px auto; column-gap: 11px; row-gap: 9px; width: 100%; min-width: 0; }
-.activity-axis { grid-column: 2; display: grid; gap: 7px; color: #b0a087; font-size: 10px; }
+.activity-calendar { --activity-cell: 22px; --activity-gap: 5px; display: grid; grid-template-columns: 20px max-content; grid-template-rows: 20px auto; column-gap: 11px; row-gap: 9px; width: max-content; margin: auto; }
+.activity-axis { grid-column: 2; display: grid; grid-template-columns: repeat(var(--weeks), var(--activity-cell)); gap: var(--activity-gap); color: #b0a087; font-size: 10px; }
 .activity-axis span { white-space: nowrap; }
-.activity-weekdays { display: grid; grid-template-rows: repeat(7, minmax(0, 1fr)); gap: 7px; color: #b0a087; font-size: 10px; align-items: center; text-align: center; }
-.activity-cells { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, minmax(0, 1fr)); gap: 7px; min-width: 0; }
-.activity-cells button, .activity-padding { width: min(100%, 84px); justify-self: center; aspect-ratio: 1; padding: 0; border: 1px solid #8274520b; border-radius: 4px 6px 3px 5px; }
-.activity-padding { background: #eeede6; }
+.activity-weekdays { display: grid; grid-template-rows: repeat(7, var(--activity-cell)); gap: var(--activity-gap); color: #b0a087; font-size: 10px; align-items: center; text-align: center; }
+.activity-cells { display: grid; grid-auto-flow: column; grid-template-columns: repeat(var(--weeks), var(--activity-cell)); grid-template-rows: repeat(7, var(--activity-cell)); gap: var(--activity-gap); }
+.activity-cells button, .activity-padding { width: var(--activity-cell); height: var(--activity-cell); padding: 0; border: 1px solid #82745214; border-radius: 3px 4px 2px 4px; }
+.activity-padding { visibility: hidden; }
+.activity-outside { visibility: visible; background: #eeede6; opacity: .45; }
+.activity-context { color: #b0a087; font-size: 10px; text-align: center; }
 .activity-cells button { transition: box-shadow .15s, transform .15s; }
 .activity-cells button:hover, .activity-cells button:focus-visible { box-shadow: inset 0 0 0 2px #7f9e5e; transform: rotate(-4deg); outline: 0; }
 .activity-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 20px; color: #b0a087; font-size: 10px; }
@@ -149,5 +158,6 @@ function onTrendClick(event: { dataIndex?: number }) {
   .chart-empty { min-height: 300px; }
   .distribution-card, .activity-card { min-height: 440px; }
   .activity-body { min-height: 330px; }
+  .activity-calendar { --activity-cell: 17px; --activity-gap: 3px; }
 }
 </style>

@@ -100,7 +100,7 @@ src/
 | `core/contracts`、`core/transport-proxy`、`core/policy`、`core/learning`、`core/auth-session`、`core/skills`、`plugins/` | 🔴 目录不存在 |
 | 本机 Web adapter（`src/web`、`src/core/web`） | 🟡 `ai web` 已实现基础控制面；企业治理与完整实时 trace 仍规划中 |
 
-本机控制面由 `src/core/web/dashboard-service.ts` 和 `src/core/web/local-settings.ts` 从现有 usage ledger、配置服务和 `service-exposure.json` 投影数据，不创建第二份 usage ledger。Web 现在提供六个一级页面：运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 分日成本、成本卡片内按 Provider/模型编辑 `model-pricing.json`；价格配置的 Provider 合并现有配置、usage 历史和价格键，模型合并缓存目录、默认模型、usage 历史模型和已有价格键，避免历史调用无法配置价格；占比图不绘制分段间隔，调用活动使用当前筛选区间并按卡片宽度布局；调用追踪按 `traceId` 聚合事件、会话和日志；本地配置通过 core API 编辑 Provider、路由、Codex、出站代理、Telegram、embedding，并提供受限权限的配置备份与恢复。敏感值只在表单提交时接收，状态接口不回显。
+本机控制面由 `src/core/web/dashboard-service.ts` 和 `src/core/web/local-settings.ts` 从现有 usage ledger、配置服务和 `service-exposure.json` 投影数据，不创建第二份 usage ledger。Web 现在提供六个一级页面：运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 分日成本、成本卡片内按 Provider/模型编辑 `model-pricing.json`；价格配置通过完整下拉列表选择 Provider，合并现有配置、usage 历史和价格键，模型下拉合并缓存目录、默认模型、usage 历史模型和已有价格键并支持手动输入；切换 Provider 会刷新模型和价格，空目录清除上一个 Provider 的模型；占比图使用无间隔分段、圆角和轻量涂鸦纹理，调用活动按 GitHub 式周列 × 7 天排列并使用固定小方格，短区间补充浅色日历上下文但只统计当前筛选区间；调用追踪按 `traceId` 聚合事件、会话和日志；本地配置通过 core API 编辑 Provider、路由、Codex、出站代理、Telegram、embedding，并提供受限权限的配置备份与恢复。敏感值只在表单提交时接收，状态接口不回显。
 
 `service-exposure.json` 是对外能力授权的控制面配置。它维护公网入口、Runtime 上游地址、能力白名单和一次性显示的调用凭证摘要；反向代理与 TLS 仍属于部署环境。Runtime server 可启用该配置，逐请求同时检查凭证能力和全局开放能力，能力关闭或凭证撤销立即拒绝请求。Web 只生成 Nginx 片段和接入示例，不自动写远程服务器。
 
