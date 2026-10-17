@@ -386,6 +386,7 @@ Model / provider 延迟**不纳入**本地 Transport overhead，但必须分别�
 | 常驻服务绑定 | 宿主机 loopback |
 | 模型请求最大 body | 16 MiB |
 | upstream headers 超时 | 45 秒 |
+| Provider 熔断 | 仅自动降级开启时启用；关闭时每次重试实际访问选定 Provider，不因既有熔断或健康错误缓存跳过；运行失败不打开持久化 circuit。传输策略在 execution 启动时确定 |
 | Agent Run 并发 | 2 |
 | Agent Run 超时 | 10 分钟 |
 

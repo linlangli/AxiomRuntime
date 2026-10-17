@@ -481,7 +481,7 @@ Streaming Responses 请求先尝试原生 Responses，只有当上游**明确**�
 - 拥有 execution-scoped 上游 dispatcher，**禁用**上游 keep-alive 复用
 - 丢弃调用方提供的 `content-length`，从最终转发 body 重算
 - Transport Proxy 对有效输出前、可安全重放的模型请求可在当前 Provider 原地重试，再按候选链轮转；辅助请求不参与重试或轮转。有效输出后不自动重放
-- 强制 45 秒上游响应头截止。连续两次 header 超时会打开 execution-local 短路：后续 Codex 重连立即得到超时结果，让 Telegram 执行适配器轮转到下一个 provider。**该熔断只作用于一次 execution，不能单独改变全局 provider 健康状态**
+- 强制 45 秒上游响应头截止。仅在启动 execution 时 `runtime.json.failoverDisabled !== true` 才启用连续两次 header 超时的 execution-local 短路：后续 Codex 重连立即得到超时结果，让 Telegram 执行适配器轮转到下一个 provider。**该熔断只作用于一次 execution，不能单独改变全局 provider 健康状态**。关闭自动降级时，每次重试均转发上游；候选解析不依据已有熔断或健康错误缓存跳过选定 Provider，运行失败仍记录健康信息但不打开持久化 circuit。现有 execution 保持启动时的传输策略，开关变更后需重启会话
 
 ### 模式独立性
 

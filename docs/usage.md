@@ -195,7 +195,7 @@ ai last                                # 沿用上次的工具、服务商和模
 - 不指定模型 → 用该服务商的默认 `model`
 - 显式指定服务商 → 不先刷新全部 Provider，直接使用该 Provider 的已缓存模型并实际尝试；即使健康缓存暂时为 `error`，也不会在请求前静默跳过
 - 当前服务商不可用 → 按 `level` 顺序自动降级
-- 全局一键关闭自动降级用 `ai failover off`；关闭后只尝试选定（或默认 `level: 1`）的 Provider，失败即报错不切换。`ai failover on` 恢复；无参数 `ai failover` 查看当前状态
+- 全局一键关闭自动降级用 `ai failover off`；关闭后只尝试选定（或默认 `level: 1`）的 Provider，失败即报错不切换。`ai failover on` 恢复；无参数 `ai failover` 查看当前状态。关闭自动降级时同时停用连续响应头超时熔断，不因已有熔断或健康错误缓存跳过所选 Provider；每次 CLI 重试均实际访问上游，单次请求超时仍为 45 秒。开关在新启动的 execution 中生效，已有会话需退出后重启
 - `level: 0` → 不参与自动降级；显式指定该 Provider 时只使用它
 - Claude Code 只会选择提供 Claude 模型的 Provider；Codex 只会选择提供 Codex/OpenAI 兼容模型的 Provider，不会跨模型族切换
 - Codex 认 `gpt`、`codex`、`grok`、`o` 系列和 `openai` 开头的模型名

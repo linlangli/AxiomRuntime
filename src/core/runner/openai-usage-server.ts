@@ -46,9 +46,12 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
   const retryBackoffMs = normalizeNonNegativeTimeout(input.retryBackoffMs, DEFAULT_RETRY_BACKOFF_MS);
   // 按代理 URL 分派：Provider 级 proxyUrl 覆盖 runtime.json 全局默认。dedupeRoutes 可能重复
   // Provider，按 URL 键共享连接池；实例随 proxy.close() 统一关闭。
+  const runtimeConfig = await loadRuntimeConfig();
+  // Circuit breaking is a failover policy: single-provider retries must reach upstream.
+  const headersCircuitEnabled = runtimeConfig.failoverDisabled !== true;
   const globalProxyUrl = input.globalProxyUrl !== undefined
     ? input.globalProxyUrl
-    : (await loadRuntimeConfig()).proxyUrl ?? null;
+    : runtimeConfig.proxyUrl ?? null;
   const dispatchersByUrl = new Map<string, Dispatcher>();
   const dispatcherFor = (route: OpenAiUsageProxyRoute): Dispatcher => {
     const key = resolveProviderProxy(route.provider, globalProxyUrl) ?? "";
@@ -154,7 +157,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
           metadata: { tool: input.tool, provider: route.provider.name, model: requestModel, path: upstreamPath, route: routeIndex - activeRouteIndex + 1, attempt }
         });
 
-        if (timeoutCount >= MAX_CONSECUTIVE_HEADERS_TIMEOUTS) {
+        if (headersCircuitEnabled && timeoutCount >= MAX_CONSECUTIVE_HEADERS_TIMEOUTS) {
           // 该 Provider 已经连续超时到熔断阈值，原地重试只会再赔一个超时窗口。
           const reason = "headers_timeout_short_circuit";
           if (canFailover && await handleFailure(reason, false, true) === "failover") continue;
@@ -178,7 +181,9 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
         } catch (error) {
           const diagnostic = summarizeUpstreamError(error);
           const headersTimedOut = diagnostic.code === "UND_ERR_HEADERS_TIMEOUT";
-          consecutiveHeadersTimeouts.set(route.provider.name, headersTimedOut ? timeoutCount + 1 : 0);
+          if (headersCircuitEnabled) {
+            consecutiveHeadersTimeouts.set(route.provider.name, headersTimedOut ? timeoutCount + 1 : 0);
+          }
           const reason = headersTimedOut ? "headers_timeout" : diagnostic.code ?? "proxy_error";
           await logUpstreamError(input, route, requestModel, upstreamPath, requestBytes, requestShape, diagnostic, upstreamHeadersTimeoutMs);
           // 连接层错误（RST、拒绝连接、socket 挂断）几乎都是瞬时的，值得原地重试；

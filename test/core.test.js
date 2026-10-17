@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "../dist/core/config/json-store.js";
+import { setRuntimeFailover } from "../dist/core/config/runtime-config.js";
 import { newTraceId, readRecentLogs } from "../dist/core/logs/log-service.js";
 import { normalizeProviders, swapProviderLevel, writeProviders } from "../dist/core/config/providers-store.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
@@ -1306,46 +1307,50 @@ test("OpenAI usage proxy isolates upstream connections across caller retries", a
   });
 });
 
-test("OpenAI usage proxy bounds repeated upstream headers timeouts", async () => {
-  await withTempHome(async () => {
-    let upstreamRequests = 0;
-    const upstream = await startTestServer(async (req) => {
-      upstreamRequests += 1;
-      await readRequestBody(req);
-      // Intentionally leave the response headers pending.
-    });
-    const proxy = await startOpenAiUsageProxy({
-      provider: { name: "slow", baseUrl: upstream.url, apiKey: "secret", mode: "auto", level: 1, model: "gpt-5.6-sol" },
-      model: "gpt-5.6-sol",
-      tool: "telegram",
-      upstreamHeadersTimeoutMs: 25
-    });
+for (const failoverDisabled of [false, true]) {
+  test(`OpenAI usage proxy ${failoverDisabled ? "forwards" : "bounds"} repeated upstream headers timeouts with failover ${failoverDisabled ? "off" : "on"}`, async () => {
+    await withTempHome(async () => {
+      await setRuntimeFailover(failoverDisabled);
+      let upstreamRequests = 0;
+      const upstream = await startTestServer(async (req) => {
+        upstreamRequests += 1;
+        await readRequestBody(req);
+        // Intentionally leave the response headers pending.
+      });
+      const proxy = await startOpenAiUsageProxy({
+        provider: { name: "slow", baseUrl: upstream.url, apiKey: "secret", mode: "auto", level: 1, model: "gpt-5.6-sol" },
+        model: "gpt-5.6-sol",
+        tool: "telegram",
+        upstreamHeadersTimeoutMs: 25
+      });
 
-    try {
-      const attemptDurations = [];
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const startedAt = Date.now();
-        const response = await fetch(`${proxy.baseUrl}/responses`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: true })
-        });
-        assert.equal(response.status, 504);
-        assert.match(await response.text(), /timed out|timeout/i);
-        attemptDurations.push(Date.now() - startedAt);
+      try {
+        const attemptDurations = [];
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const startedAt = Date.now();
+          const response = await fetch(`${proxy.baseUrl}/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model: "gpt-5.6-sol", input: "hi", stream: true })
+          });
+          assert.equal(response.status, 504);
+          assert.match(await response.text(), /timed out|timeout/i);
+          attemptDurations.push(Date.now() - startedAt);
+        }
+
+        assert.equal(upstreamRequests, failoverDisabled ? 3 : 2);
+        if (!failoverDisabled) assert.ok(attemptDurations[2] < 250);
+        assert.equal(proxy.getMetrics().failureCount, 3);
+        assert.equal(proxy.getMetrics().upstreamStatusCounts.headers_timeout, failoverDisabled ? 3 : 2);
+        assert.equal(proxy.getMetrics().upstreamStatusCounts.headers_timeout_short_circuit ?? 0, failoverDisabled ? 0 : 1);
+      } finally {
+        await proxy.close();
+        await upstream.close();
       }
-
-      assert.equal(upstreamRequests, 2);
-      assert.ok(attemptDurations[2] < 250);
-      assert.equal(proxy.getMetrics().failureCount, 3);
-      assert.equal(proxy.getMetrics().upstreamStatusCounts.headers_timeout, 2);
-      assert.equal(proxy.getMetrics().upstreamStatusCounts.headers_timeout_short_circuit, 1);
-    } finally {
-      await proxy.close();
-      await upstream.close();
-    }
+    });
   });
-});
+
+}
 
 test("OpenAI usage proxy records one usage event from SSE response", async () => {
   await withTempHome(async (tempDir) => {

@@ -101,7 +101,7 @@ export async function resolveProviderCandidatesForTool(
   for (const provider of scoped) {
     const cached = cache.providers[provider.name];
     const explicitlySelected = providerName === provider.name;
-    if (!explicitlySelected && isProviderCircuitOpen(cached)) {
+    if (!failoverDisabled && !explicitlySelected && isProviderCircuitOpen(cached)) {
       await writeLog({
         level: "warn",
         category: "strategy",
@@ -115,7 +115,7 @@ export async function resolveProviderCandidatesForTool(
 
     // Runtime-opened circuits become half-open after their cooldown. A stale
     // status=error must not keep a provider disabled forever after the timer.
-    if (!explicitlySelected && cached?.status === "error" && !cached.circuitOpenUntil) {
+    if (!failoverDisabled && !explicitlySelected && cached?.status === "error" && !cached.circuitOpenUntil) {
       await writeLog({
         level: "warn",
         category: "strategy",

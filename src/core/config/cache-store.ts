@@ -1,5 +1,6 @@
 import { getCachePath } from "./paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
+import { loadRuntimeConfig } from "./runtime-config.js";
 import type { CacheFile, CliToolType, HealthStatus, ProviderCache, ProviderToolCheck } from "../types.js";
 
 const EMPTY_CACHE: CacheFile = { providers: {} };
@@ -44,6 +45,7 @@ export async function recordProviderRuntimeSuccess(providerName: string): Promis
 }
 
 export async function recordProviderRuntimeFailure(providerName: string, error: unknown): Promise<ProviderCache> {
+  const { failoverDisabled } = await loadRuntimeConfig();
   const checkedAt = new Date().toISOString();
   const lastError = summarizeHealthError(error);
   let updated: ProviderCache | null = null;
@@ -51,7 +53,7 @@ export async function recordProviderRuntimeFailure(providerName: string, error: 
     const next = normalizeCache(cache);
     const previous = next.providers[providerName] ? normalizeProviderCache(next.providers[providerName]) : undefined;
     const consecutiveFailures = (previous?.consecutiveFailures ?? 0) + 1;
-    const circuitOpenUntil = consecutiveFailures >= PROVIDER_CIRCUIT_FAILURE_THRESHOLD
+    const circuitOpenUntil = !failoverDisabled && consecutiveFailures >= PROVIDER_CIRCUIT_FAILURE_THRESHOLD
       ? new Date(Date.now() + PROVIDER_CIRCUIT_OPEN_MS).toISOString()
       : null;
     updated = {

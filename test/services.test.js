@@ -1647,6 +1647,29 @@ test("runtime provider failures open a circuit breaker after repeated errors", a
   });
 });
 
+test("failover off bypasses existing circuits and does not open new runtime circuits", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "primary", baseUrl: "https://primary.test/v1", apiKey: "p", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("primary", {
+      status: "error", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: "timeout",
+      consecutiveFailures: 3, circuitOpenUntil: new Date(Date.now() + 600_000).toISOString()
+    });
+    await setRuntimeFailover(true);
+    assert.equal((await resolveProviderForTool("codex")).provider.name, "primary");
+    for (let i = 0; i < 3; i += 1) await recordProviderRuntimeFailure("primary", "timeout");
+    const cache = await readCache();
+    assert.equal(cache.providers.primary.consecutiveFailures, 6);
+    assert.equal(cache.providers.primary.circuitOpenUntil, null);
+    assert.equal((await resolveProviderForTool("codex")).provider.name, "primary");
+    await setRuntimeFailover(false);
+    await recordProviderRuntimeFailure("primary", "timeout");
+    assert.equal(typeof (await readCache()).providers.primary.circuitOpenUntil, "string");
+    assert.deepEqual(await resolveProviderCandidatesForTool("codex"), []);
+  });
+});
+
 test("a successful probe restores the health score to full", async () => {
   await withTempHome(async () => {
     await upsertProviderCache("recovered", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
