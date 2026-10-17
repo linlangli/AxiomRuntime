@@ -106,7 +106,7 @@ async function buildPatch(
     const cache = await readCache();
     const models = cache.providers[provider.name]?.models ?? [];
     if (!models.length) {
-      throw new Error("No cached models found. Run `ai status` first.");
+      throw new Error(`No cached models found. Run \`ai models ${provider.name}\` first.`);
     }
     const model = await promptSelect(
       "Select model",

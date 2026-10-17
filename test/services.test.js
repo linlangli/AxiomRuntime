@@ -737,21 +737,33 @@ test("resolveProviderProxy prefers the provider proxy over the runtime default",
   assert.equal(resolveProviderProxy(undefined, null), null);
 });
 
-test("model discovery passes a dispatcher only when the provider has a proxy", async () => {
+test("model discovery uses a compatible fetch for the provider proxy dispatcher", async () => {
   await withTempHome(async () => {
+    const { MockAgent } = await import("undici");
+    const { getProxyDispatcher, closeProxyDispatchers } = await import("../dist/core/network/proxy.js");
+    const agent = new MockAgent();
+    agent.disableNetConnect();
+    agent.get("https://proxied.test").intercept({ path: "/v1/models", method: "GET" })
+      .reply(200, { data: [{ id: "gpt-5.5" }] }, { headers: { "content-type": "application/json" } });
+    const dispatcher = getProxyDispatcher("http://127.0.0.1:9999");
+    const originalDispatch = dispatcher.dispatch;
+    dispatcher.dispatch = agent.dispatch.bind(agent);
+    try {
+      const result = await checkProvider({ name: "proxied", baseUrl: "https://proxied.test/v1", apiKey: "k", mode: "auto", level: 1, model: "", proxyUrl: "http://127.0.0.1:9999" });
+      assert.equal(result.status, "ok");
+      assert.deepEqual(result.models, ["gpt-5.5"]);
+      agent.assertNoPendingInterceptors();
+    } finally {
+      dispatcher.dispatch = originalDispatch;
+      await agent.close();
+      await closeProxyDispatchers();
+    }
     let capturedInit;
     mockFetch((url, init) => {
       capturedInit = init;
       return jsonResponse({ data: [{ id: "gpt-5.5" }] });
     });
-    const proxied = { name: "proxied", baseUrl: "https://proxied.test/v1", apiKey: "k", mode: "auto", level: 1, model: "" };
-    proxied.proxyUrl = "http://127.0.0.1:9999";
-    await checkProvider(proxied);
-    assert.notEqual(capturedInit?.dispatcher, undefined);
-
-    capturedInit = undefined;
-    const direct = { name: "direct", baseUrl: "https://direct.test/v1", apiKey: "k", mode: "auto", level: 2, model: "" };
-    await checkProvider(direct);
+    await checkProvider({ name: "direct", baseUrl: "https://direct.test/v1", apiKey: "k", mode: "auto", level: 2, model: "" });
     assert.equal(capturedInit?.dispatcher, undefined);
   });
 });

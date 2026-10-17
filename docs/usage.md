@@ -163,6 +163,8 @@ ai provider delete 我的站
 
 可编辑字段：`name`、`baseUrl`、`apiKey`、`mode`、`level`、`model`。
 
+编辑 `model` 从目标 Provider 的模型缓存选择；若提示没有缓存，先运行 `ai models <provider>`，再重新编辑。该命令只刷新模型目录，不调用推理端点；无需刷新全部 Provider 的 `ai status`。
+
 规则：
 
 - `mode` 只能选 `ask` 或 `auto`
@@ -568,6 +570,8 @@ ai --version
 `ai help` 用系统默认程序打开独立的 `USAGE.html`。`ai web` 的「帮助中心」展示常见入口和命令，完整手册仍以 `ai help` 为准。
 
 ### 本地 Web 控制面板
+
+本地源码或 `npm link` 安装若打开后显示 `{"error":"Not found."}`，请在项目根目录执行 `npm ci --prefix web` 和 `npm run build:web:console`，然后刷新页面。控制面需要 `dist/web/control/console.html` 及其静态资源；只运行 `tsc` 不会生成这些文件。完整构建使用 `npm run build`。
 
 公网门户 [axiom.offerpilot.life](https://axiom.offerpilot.life/) 提供安装步骤、命令参考与当前能力边界，可复制安装命令。页面中的终端用量和 Telegram 对话均为示例；查看本机真实用量、日志或配置请使用下方 `ai web`。
 

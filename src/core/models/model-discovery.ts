@@ -2,7 +2,7 @@ import { isModelCompatible } from "./model-filter.js";
 import { buildProviderAuthHeaders, getProviderAuthScheme } from "../providers/provider-request-profile.js";
 import { loadRuntimeConfig } from "../config/runtime-config.js";
 import { getProxyDispatcher, resolveProviderProxy } from "../network/proxy.js";
-import type { Dispatcher } from "undici";
+import { fetch as undiciFetch, type Dispatcher } from "undici";
 import type {
   ConnectivityResult,
   Provider,
@@ -796,9 +796,16 @@ async function fetchWithTimeout(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    // init.dispatcher 是 undici fetch 的原生选项；无代理时省略，让进程全局 dispatcher 生效。
-    const probeInit = { ...init, ...(dispatcher ? { dispatcher } : {}) } as RequestInit;
-    return await fetch(url, { ...probeInit, signal: controller.signal });
+    // Explicit dispatchers must use the matching Undici fetch implementation:
+    // Node's bundled fetch may use an incompatible dispatcher handler contract.
+    if (dispatcher) {
+      return await undiciFetch(url, {
+        ...init,
+        dispatcher,
+        signal: controller.signal
+      } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
+    }
+    return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timeout);
   }

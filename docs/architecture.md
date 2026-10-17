@@ -238,6 +238,8 @@ Streaming 响应在首个文字、推理或工具参数增量前由代理暂存�
 
 `ai models [provider]` 是模型目录发现适配器，只允许通过 `checkProvider` 发起 `GET /models`，不得调用任何模型推理端点。成功后只替换目标 Provider 的 `models` 缓存，必须保留 `status`、`lastError`、`toolChecks`、熔断状态和健康分数；模型发现失败时不得清空旧目录或改变真实可用性结论。
 
+显式 Provider / Runtime 代理的模型探测使用与 `Dispatcher` 同一依赖版本的 Undici `fetch`，避免 Node 内置 `fetch` 与外部 Undici handler contract 不兼容导致 `invalid onRequestStart method`；无显式代理的探测仍使用默认 `fetch`。
+
 ### Telegram 执行流程
 
 ```mermaid
@@ -823,7 +825,8 @@ traceId 是**诊断关联键，不是审计事实**：历史日志没有该字�
 ### 构建与测试
 
 ```bash
-npm run build        # clean + tsc + chmod
+npm ci --prefix web  # 安装独立前端依赖
+npm run build        # tsc + Web console 构建 + chmod；不清空整个 dist
 npm test             # build 然后跑 node:test
 npm run dev          # 带 source map 运行 CLI
 npm run server       # 启动常驻 API
@@ -839,6 +842,8 @@ npm run build && node --test test/core.test.js
 测试使用 Node.js 内置 `node:test`，文件在 `test/*.test.js`，跑的是编译后的 `dist/`。三个测试文件分别覆盖核心逻辑、服务和 Telegram 集成。
 
 TypeScript 编译到 ES2022 + NodeNext modules。
+
+本机 Web 静态入口为 `dist/web/control/console.html`，由 `npm run build:web:console` 生成；仅运行 `tsc` 不会生成控制面静态资源，缺失时首页返回 `404` 和 `{"error":"Not found."}`。
 
 ### 文档同步
 
