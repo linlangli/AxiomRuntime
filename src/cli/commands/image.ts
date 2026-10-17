@@ -1,5 +1,5 @@
 import { readCache } from "../../core/config/cache-store.js";
-import { generateImage } from "../../core/images/image-generation-service.js";
+import { generateImage, MAX_REFERENCE_IMAGES } from "../../core/images/image-generation-service.js";
 import { listProviders, refreshAllProviders } from "../../core/providers/provider-service.js";
 import type { CacheFile, Provider } from "../../core/types.js";
 import { promptSelect, promptText } from "../prompts/prompt.js";
@@ -10,13 +10,14 @@ export type ImageCommandInput = {
   target?: string;
   prompt: string;
   imagePath?: string;
+  imagePaths?: string[];
 };
 
 export async function runImageCommand(args: string[]): Promise<void> {
   await refreshAllProviders();
   const [providers, cache] = await Promise.all([listProviders(), readCache()]);
   const input = await resolveImageCommandInput(args, providers, cache.providers);
-  if (input.imagePath) console.log("Reference image will be uploaded to one selected provider. Automatic retries and cross-provider fallback are disabled.");
+  if (input.imagePath || input.imagePaths?.length) console.log("Reference images will be uploaded to one selected provider. Automatic retries and cross-provider fallback are disabled.");
   const result = await generateImage(input);
   console.log(`Generated with ${result.provider} / ${result.model}`);
   if (result.filePath) console.log(`Image saved: ${result.filePath}`);
@@ -37,22 +38,31 @@ export async function resolveImageCommandInput(
 
   const parsed = parseImageArgs(args);
   args = parsed.args;
-  let imagePath = parsed.imagePath;
+  const imagePaths = parsed.imagePaths;
   const target = args[0]?.trim();
-  const resolvePrompt = async (promptArgs: string[]): Promise<{ prompt: string; imagePath?: string }> => {
-    if (!promptArgs.length && !imagePath) {
+  const resolvePrompt = async (promptArgs: string[]): Promise<{ prompt: string; imagePath?: string; imagePaths?: string[] }> => {
+    if (!promptArgs.length && !imagePaths.length) {
       const mode = await select("Select image mode", [
         { label: "Text to image / 文生图", value: "generate" },
         { label: "Reference local image / 参考本地图片", value: "edit" }
       ]);
       if (mode === "edit") {
-        imagePath = (await text("Local reference image path (PNG, JPEG, WebP; max 20 MiB)"))
-          .trim().replace(/^(["'])(.*)\1$/, "$2");
-        if (!imagePath) throw new Error("Local reference image path is required.");
+        while (true) {
+          const imagePath = (await text(imagePaths.length
+            ? "Next reference image path (leave empty to finish)"
+            : "Local reference image path (PNG, JPEG, WebP; max 20 MiB)"))
+            .trim().replace(/^(["'])(.*)\1$/, "$2");
+          if (!imagePath) {
+            if (!imagePaths.length) throw new Error("Local reference image path is required.");
+            break;
+          }
+          imagePaths.push(imagePath);
+          if (imagePaths.length === MAX_REFERENCE_IMAGES) break;
+        }
       }
     }
     const prompt = requirePrompt(promptArgs.join(" ").trim() || await text("Image prompt"));
-    return { prompt, ...(imagePath ? { imagePath } : {}) };
+    return { prompt, ...(imagePaths.length === 1 ? { imagePath: imagePaths[0]! } : imagePaths.length ? { imagePaths } : {}) };
   };
   const namedProvider = target ? providers.find((provider) => provider.name === target) : undefined;
   if (target && !namedProvider) {
@@ -72,23 +82,23 @@ export async function resolveImageCommandInput(
   return { provider: provider.name, model, ...await resolvePrompt(promptArgs) };
 }
 
-function parseImageArgs(input: string[]): { args: string[]; imagePath?: string } {
+function parseImageArgs(input: string[]): { args: string[]; imagePaths: string[] } {
   const args: string[] = [];
-  let imagePath: string | undefined;
+  const imagePaths: string[] = [];
   for (let index = 0; index < input.length; index += 1) {
     const argument = input[index]!;
     if (argument === "--") { args.push(...input.slice(index + 1)); break; }
     if (argument === "--image" || argument.startsWith("--image=")) {
-      if (imagePath !== undefined) throw new Error("Only one --image reference is supported.");
+      if (imagePaths.length >= MAX_REFERENCE_IMAGES) throw new Error("At most 8 reference images are supported.");
       const value = argument === "--image" ? input[++index] : argument.slice("--image=".length);
       if (!value?.trim() || value.startsWith("--")) throw new Error("--image requires a local file path.");
-      imagePath = value.trim();
+      imagePaths.push(value.trim());
     } else {
       if (argument.startsWith("--")) throw new Error(`Unknown image option: ${argument.split("=")[0]}`);
       args.push(argument);
     }
   }
-  return { args, imagePath };
+  return { args, imagePaths };
 }
 
 async function selectImageProvider(

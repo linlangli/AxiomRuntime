@@ -301,14 +301,15 @@ ai image                                                   # 交互选择 Provid
 ai image 51talk-image "一只戴墨镜的猫，数字插画"          # 使用 Provider 默认模型
 ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"  # 指定具体模型
 ai image 51talk-image "保持人物一致，改成水彩风格" --image "./参考图.png"
+ai image 51talk-image "将图1人物融入图2场景" --image "./人物.png" --image "./场景.jpg"
 ai image 51talk-image gpt-image-2 "替换背景为海边" --image "C:\My Pictures\人物.jpg"
 ```
 
 规则：
 
-- 直接运行 `ai image` 时，会依次选择 Provider、具体模型、生成方式（文生图 / 参考本地图片），参考图模式再输入本地文件路径，最后输入提示词。只有 Provider/模型、没有提示词时也会询问生成方式；已有提示词的旧用法不增加交互。交互路径可带成对引号。
-- `--image <path>` 或 `--image=<path>` 指定单张本地参考图，可放在位置参数前后；路径有空格时加引号。支持按文件内容识别的 PNG、JPEG、WebP，最大 20 MiB；不支持 GIF、目录、远程 URL、多张参考图或 mask。无效文件在图片上传前拒绝，不修改原图；输出仍为新文件。
-- 参考图模式调用 multipart `/v1/images/edits`，不是将路径拼进提示词。Provider 和模型必须支持该接口；模型列表中存在不代表支持图片编辑，服务端仍可能返回格式、尺寸或能力错误。当前不实现 Responses 图片工具等非兼容接口。
+- 直接运行 `ai image` 时，会依次选择 Provider、具体模型、生成方式（文生图 / 参考本地图片），参考图模式逐张输入本地文件路径，留空结束（达到 8 张自动结束），最后输入提示词。只有 Provider/模型、没有提示词时也会询问生成方式；已有提示词的旧用法不增加交互。交互路径可带成对引号。
+- 重复 `--image <path>` 或 `--image=<path>` 指定多张本地参考图，可放在位置参数前后，按输入顺序上传；路径有空格时加引号。最多 8 张，单张最大 20 MiB，合计最大 40 MiB。支持按文件内容识别的 PNG、JPEG、WebP；不支持 GIF、目录、远程 URL 或 mask。所有文件在任何图片上传前完成校验，不修改原图；输出仍为新文件。
+- 参考图模式调用 multipart `/v1/images/edits`，不是将路径拼进提示词。Provider 和模型必须支持该接口及所选的单图或多图编辑能力；模型列表中存在不代表支持图片编辑，服务端仍可能返回格式、尺寸或能力错误。当前不实现 Responses 图片工具等非兼容接口。
 - 参考图会上传给所选 Provider；**不会自动重试或向其他 Provider fallback**，所选 Provider 不健康时也不会偷偷换站。仅指定模型而未指定 Provider 时，按原有健康/顺序规则选择一个可用 Provider。请只选择可信服务商，失败后明确选择其他服务商重新运行。
 - 第一个参数是 Provider 名（例如 `51talk-image`）。第二个参数如果匹配该 Provider 的模型缓存，就作为具体模型；否则从第二个参数开始全部拼成提示词，并使用 Provider 默认模型。
 - Provider 和模型必须出现在模型缓存中。命令执行前会自动刷新；也可以先运行 `ai status` 检查模型列表。如果没有 Provider，先运行 `ai add`。

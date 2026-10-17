@@ -12,6 +12,8 @@ import { isRecord } from "../utils/is-record.js";
 const IMAGE_REQUEST_TIMEOUT_MS = 120_000;
 const MAX_IMAGE_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+export const MAX_REFERENCE_IMAGES = 8;
+const MAX_REFERENCE_BYTES = 40 * 1024 * 1024;
 
 export type ImageProviderCandidate = {
   provider: Provider;
@@ -84,14 +86,31 @@ export async function generateImage(input: {
   model?: string;
   prompt: string;
   outputDir?: string;
+  /** Legacy single local reference; mutually exclusive with imagePaths. */
   imagePath?: string;
+  /** Ordered local references: 1–8 files, <=20 MiB each and <=40 MiB total.
+   * Validate all files before upload; never retry or fall back with references. */
+  imagePaths?: string[];
 }): Promise<GeneratedImage> {
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error("Image prompt is required.");
-  const reference = input.imagePath !== undefined ? await readReferenceImage(input.imagePath) : undefined;
+  if (input.imagePath !== undefined && input.imagePaths !== undefined) {
+    throw new Error("Use either imagePath or imagePaths, not both.");
+  }
+  const paths = input.imagePaths ?? (input.imagePath !== undefined ? [input.imagePath] : []);
+  if (input.imagePaths && !paths.length) throw new Error("At least one reference image path is required.");
+  if (paths.length > MAX_REFERENCE_IMAGES) throw new Error("At most 8 reference images are supported.");
+  const references: ReferenceImage[] = [];
+  let totalBytes = 0;
+  for (const imagePath of paths) {
+    const reference = await readReferenceImage(imagePath);
+    totalBytes += reference.bytes.byteLength;
+    if (totalBytes > MAX_REFERENCE_BYTES) throw new Error("Reference images exceed 40 MiB in total.");
+    references.push(reference);
+  }
 
   const selection = input.target ?? { providerName: input.provider, model: input.model };
-  const candidates = await resolveImageProviderCandidates(selection, !reference);
+  const candidates = await resolveImageProviderCandidates(selection, !references.length);
   if (!candidates.length) {
     const selectionName = input.target ?? input.provider ?? input.model ?? "(unknown)";
     throw new Error(`No usable provider offers image model for ${selectionName}. Run \`ai status\` to refresh model lists.`);
@@ -100,7 +119,7 @@ export async function generateImage(input: {
   const failures: string[] = [];
   for (const candidate of candidates) {
     try {
-      const result = await generateWithProvider(candidate, prompt, input.outputDir ?? process.cwd(), reference);
+      const result = await generateWithProvider(candidate, prompt, input.outputDir ?? process.cwd(), references);
       await recordProviderRuntimeSuccess(candidate.provider.name);
       return result;
     } catch (error) {
@@ -124,7 +143,7 @@ async function generateWithProvider(
   candidate: ImageProviderCandidate,
   prompt: string,
   outputDir: string,
-  reference?: ReferenceImage
+  references: ReferenceImage[]
 ): Promise<GeneratedImage> {
   const usageProxy = await startOpenAiUsageProxy({
     provider: candidate.provider,
@@ -132,29 +151,33 @@ async function generateWithProvider(
     tool: "image",
     engine: "codex",
     upstreamHeadersTimeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
-    ...(reference ? { maxAttemptsPerRoute: 1 } : {})
+    ...(references.length ? { maxAttemptsPerRoute: 1 } : {})
   });
 
   try {
     let body: string | FormData = JSON.stringify({ model: candidate.model, prompt, n: 1 });
-    if (reference) {
+    if (references.length) {
       const form = new FormData();
       form.set("model", candidate.model);
       form.set("prompt", prompt);
       form.set("n", "1");
-      form.set("image", new Blob([reference.bytes], { type: reference.mimeType }), reference.fileName);
+      references.forEach((reference, index) => {
+        const multiple = references.length > 1;
+        const fileName = multiple ? reference.fileName.replace("reference.", `reference-${index + 1}.`) : reference.fileName;
+        form.append(multiple ? "image[]" : "image", new Blob([reference.bytes], { type: reference.mimeType }), fileName);
+      });
       body = form;
     }
-    const response = await fetchWithTimeout(`${usageProxy.baseUrl}/images/${reference ? "edits" : "generations"}`, {
+    const response = await fetchWithTimeout(`${usageProxy.baseUrl}/images/${references.length ? "edits" : "generations"}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${candidate.provider.apiKey}`,
-        ...(reference ? {} : { "content-type": "application/json" })
+        ...(references.length ? {} : { "content-type": "application/json" })
       },
       body
     });
     const text = await readBoundedResponseText(response, MAX_IMAGE_RESPONSE_BYTES);
-    if (!response.ok && reference && [404, 405, 415, 501].includes(response.status)) {
+    if (!response.ok && references.length && [404, 405, 415, 501].includes(response.status)) {
       throw new Error(`Provider does not support this image edit request (HTTP ${response.status}). Choose a provider/model supporting multipart /images/edits. The reference was not sent to fallback providers.`);
     }
     const payload = parseJsonResponse(text);

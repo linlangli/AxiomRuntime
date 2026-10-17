@@ -312,7 +312,7 @@ Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`eng
 
 ### 图片生成 🟢
 
-本地参考图通过可选 core 输入 `imagePath` 接入：CLI 支持 `--image <path>` / `--image=<path>`，无提示词的交互流程选择文生图或参考图。Core 在任何图片请求前读取普通文件，限制 20 MiB 并按内容识别 PNG/JPEG/WebP，拒绝 GIF、无效文件和目录；有界读取避免文件增长突破限制。参考图使用通用文件名，以原生 `FormData` 发送到 `/v1/images/edits`，复用同一 execution-scoped Transport Proxy 和 UsageObserver；Transport 对 multipart 字节保持原样，不用 JSON 模型重写破坏上传。图片路径、原始文件名、提示词与图片内容不进入 CLI command usage log。参考图仅尝试一个选定 Provider，禁用自动重试和跨 Provider fallback，显式 Provider 不健康时不得改选备用站。非兼容接口、多图、mask 不在本次能力范围，编辑支持由服务商实际响应决定。
+本地参考图通过可选 core 输入 `imagePaths`（有序数组）接入，兼容旧的单图 `imagePath`；两者不得同时传入，显式空数组被拒绝。CLI 支持重复 `--image <path>` / `--image=<path>`，无提示词的交互流程选择文生图或参考图，逐张输入路径、留空结束。最多 8 张、每张 20 MiB、总计 40 MiB。Core 在任何图片请求前校验全部普通文件并按内容识别 PNG/JPEG/WebP，拒绝 GIF、无效文件和目录；有界读取避免文件增长突破限制。参考图使用通用文件名，以原生 `FormData` 发送到 `/v1/images/edits`：单图保留 `image` 字段，多图按输入顺序追加 `image[]` 字段和 `reference-1.png` 等编号名称，复用同一 execution-scoped Transport Proxy 和 UsageObserver；Transport 对 multipart 字节保持原样，不用 JSON 模型重写破坏上传。图片路径、原始文件名、提示词与图片内容不进入 CLI command usage log。参考图仅尝试一个选定 Provider，禁用自动重试和跨 Provider fallback，显式 Provider 不健康时不得改选备用站。非兼容接口、mask 不在本次能力范围；单图和多图编辑支持由 Provider/模型的实际响应决定。
 
 `ai image [provider] [model] [prompt]` 是独立的 `ImageGenerationService` capability，不复用 Claude/Codex 的 Agent 模型兼容过滤。CLI 无参数时交互选择 Provider、具体模型和生成方式；指定 Provider 时，第二个参数只有匹配该 Provider 模型缓存才解释为模型，否则保持 `provider + prompt` 兼容。文生图按明确的 Provider/模型选择候选，并按健康度和 `level` 自动 fallback，通过 execution-scoped Transport Proxy 调用 OpenAI-compatible `/v1/images/generations`；参考图的选择与失败语义见上段。图片请求等待响应头上限为 120 秒，避免通用文本代理的 45 秒 headers timeout 截断正常的图片生成；仅文生图超时后继续 Provider fallback。响应校验 `b64_json`/安全的 `https` URL，并将 base64 图片以 `0600` 权限原子保存。图片请求的真实 usage 仍由唯一 UsageObserver 记录；CLI 不记录提示词到 command usage log。
 

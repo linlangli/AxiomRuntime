@@ -140,7 +140,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 |---|---|---|
 | CLI 图片生成 | 🟢 | `ai image [provider] [model] [prompt]`；支持完全交互、Provider 默认模型和显式模型 |
 | 标准 images API | 🟢 | 调用 OpenAI-compatible `/v1/images/generations` |
-| 本地参考图 | 🟢 | `--image <path>` 或交互选择参考图模式，multipart `/v1/images/edits`；单张 PNG/JPEG/WebP，≤20 MiB，按内容识别；服务商/模型须支持编辑，不支持多图、mask 或 Responses 图片工具 |
+| 本地参考图 | 🟢 | 重复 `--image <path>` 或交互逐张添加参考图，multipart `/v1/images/edits`；最多 8 张 PNG/JPEG/WebP，单张 ≤20 MiB、合计 ≤40 MiB，全部按内容校验后按序上传；服务商/模型须支持相应单图或多图编辑，不支持 mask 或 Responses 图片工具 |
 | 参考图隐私与失败边界 | 🟢 | 上传前本地校验，文件名使用通用名称；不记录图片内容、提示词和原始文件名；所选 Provider 不可用直接失败，不自动重试或跨 Provider fallback；文生图行为保持兼容 |
 | 图片安全落盘 | 🟢 | 支持 `b64_json`，限制响应/图片大小并以 `0600` 保存 |
 | URL 响应 | 🟢 | 仅输出无凭证的 `https` URL，不自动下载 |

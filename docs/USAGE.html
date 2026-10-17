@@ -686,11 +686,12 @@ ai proxy --disable</pre>
                 <pre>ai image
 ai image 51talk-image "一只戴墨镜的猫，数字插画"
 ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"
-ai image 51talk-image "保持人物一致，改成水彩风格" --image "./参考图.png"</pre>
+ai image 51talk-image "保持人物一致，改成水彩风格" --image "./参考图.png"
+ai image 51talk-image "将图1人物融入图2场景" --image "./人物.png" --image "./场景.jpg"</pre>
                 <ul>
-                  <li>直接运行 <code>ai image</code> 时，会依次选择 Provider、具体模型和生成方式（文生图 / 参考本地图片）；参考图模式输入文件路径，最后输入提示词。已有提示词的旧用法不增加交互。</li>
-                  <li><code>--image &lt;path&gt;</code> 或 <code>--image=&lt;path&gt;</code> 指定单张本地参考图，支持 PNG、JPEG、WebP，按文件内容识别，最大 20 MiB。路径有空格请加引号；不支持 GIF、URL、多图或 mask。原图不修改，结果另存新文件。</li>
-                  <li>参考图上传给所选 Provider，调用 multipart <code>/v1/images/edits</code>。Provider / 模型须支持图片编辑；模型列表存在不代表支持该接口。服务端仍可能拒绝格式、尺寸或能力。非兼容的 Responses 图片工具接口不在此功能范围。</li>
+                  <li>直接运行 <code>ai image</code> 时，会依次选择 Provider、具体模型和生成方式（文生图 / 参考本地图片）；参考图模式逐张输入文件路径，留空结束（达到 8 张自动结束），最后输入提示词。已有提示词的旧用法不增加交互。</li>
+                  <li>重复 <code>--image &lt;path&gt;</code> 或 <code>--image=&lt;path&gt;</code> 指定多张本地参考图，按输入顺序上传；最多 8 张，单张最大 20 MiB，合计最大 40 MiB。支持 PNG、JPEG、WebP，所有文件上传前按内容校验。路径有空格请加引号；不支持 GIF、URL 或 mask。原图不修改，结果另存新文件。</li>
+                  <li>参考图上传给所选 Provider，调用 multipart <code>/v1/images/edits</code>。Provider / 模型须支持相应的单图或多图编辑；模型列表存在不代表支持该接口。服务端仍可能拒绝格式、尺寸或能力。非兼容的 Responses 图片工具接口不在此功能范围。</li>
                   <li>参考图不自动重试、不向其他 Provider fallback；所选 Provider 不健康时直接失败。只指定模型时按健康/顺序选择一个可用 Provider。仅使用可信服务商；失败后明确选其他服务商重新运行。文生图保留原有 fallback。</li>
                   <li>第一个参数是 Provider 名；第二个参数匹配模型缓存时作为具体模型，否则从第二个参数开始作为提示词并使用默认模型。</li>
                   <li>命令执行前会自动刷新模型缓存；也可以先运行 <code>ai status</code> 检查。指定模型时建议给提示词加引号。</li>

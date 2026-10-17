@@ -29,9 +29,9 @@ test("image reference flags work before/after positionals and preserve quoted pa
   assert.deepEqual(input, { target: provider.model, prompt: "watercolor", imagePath: "cat.png" });
 });
 
-test("image reference options reject missing paths, duplicates and unknown flags", async () => {
-  for (const args of [["--image"], ["--image="], ["--image", "--other"], ["--image", "a.png", "--image", "b.png"], ["--unknown"]]) {
-    await assert.rejects(resolveImageCommandInput(args, [provider], cache, noPrompt, noPrompt), /requires|Only one|Unknown/);
+test("image reference options reject missing paths, excessive references and unknown flags", async () => {
+  for (const args of [["--image"], ["--image="], ["--image", "--other"], ["--unknown"]]) {
+    await assert.rejects(resolveImageCommandInput(args, [provider], cache, noPrompt, noPrompt), /requires|At most 8|Unknown/);
   }
 });
 
@@ -43,12 +43,13 @@ test("interactive reference workflow selects mode, local path and prompt", async
     return ["images", provider.model, "edit"][selections.length - 1];
   }, async (message) => {
     texts.push(message);
-    return texts.length === 1 ? '"./my cat.png"' : "watercolor";
+    return ['"./my cat.png"', "", "watercolor"][texts.length - 1];
   });
   assert.deepEqual(input, { provider: "images", model: provider.model, prompt: "watercolor", imagePath: "./my cat.png" });
   assert.equal(selections.at(-1), "Select image mode");
   assert.match(texts[0], /Local reference image path/);
-  assert.equal(texts[1], "Image prompt");
+  assert.match(texts[1], /Next reference/);
+  assert.equal(texts[2], "Image prompt");
 });
 
 test("explicit --image prompts only for missing prompt; empty interactive path is rejected", async () => {
@@ -149,7 +150,7 @@ test("unsupported edit and transient errors do not upload to fallback or retry",
       const baseUrl = `http://127.0.0.1:${upstream.address().port}/v1`;
       await writeProviders([{ ...provider, baseUrl }, { ...provider, name: "backup", baseUrl, level: 2 }]);
       for (const name of [provider.name, "backup"]) await upsertProviderCache(name, cache.images);
-      await assert.rejects(generateImage({ provider: provider.name, prompt: "edit", imagePath }), /does not support.*image edit/);
+      await assert.rejects(generateImage({ provider: provider.name, prompt: "edit", imagePaths: [imagePath, imagePath] }), /does not support.*image edit/);
       assert.equal(calls, 1);
       await assert.rejects(generateImage({ provider: provider.name, prompt: "edit", imagePath }), /edit unavailable/);
       assert.equal(calls, 2);
@@ -231,12 +232,81 @@ test("transport never retries or changes routes for multipart uploads even with 
 
 test("CLI redacts reference paths even when --image is the first or only argument", async () => {
   await withHome(async (directory) => {
-    for (const args of [["--image=private-reference.png"], ["--image", "private-reference.png", "images", "confidential prompt"]]) {
+    for (const args of [["--image=private-reference.png", "--image=private-second.png"], ["--image", "private-reference.png", "images", "confidential prompt"]]) {
       const result = spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "image", ...args], { encoding: "utf8", env: { ...process.env, AI_GATEWAY_HOME: directory } });
       assert.equal(result.status, 1);
     }
     const log = await fs.readFile(path.join(directory, ".ai-gateway.log"), "utf8");
     assert.doesNotMatch(log, /private-reference|confidential prompt/);
     assert.match(log, /image arguments redacted/);
+  });
+});
+
+
+test("multiple reference flags preserve order and enforce the count limit", async () => {
+  const input = await resolveImageCommandInput(["--image", "first.png", "images", "combine", "--image=second.jpg"], [provider], cache, noPrompt, noPrompt);
+  assert.deepEqual(input, { provider: "images", model: provider.model, prompt: "combine", imagePaths: ["first.png", "second.jpg"] });
+  await assert.rejects(resolveImageCommandInput(Array(9).fill("--image=a.png"), [provider], cache, noPrompt, noPrompt), /At most 8/);
+});
+
+test("interactive references collect multiple paths until a blank entry", async () => {
+  const answers = ["first.png", '"second picture.jpg"', "", "combine"];
+  const input = await resolveImageCommandInput(["images"], [provider], cache, async () => "edit", async () => answers.shift());
+  assert.deepEqual(input.imagePaths, ["first.png", "second picture.jpg"]);
+  assert.equal(input.prompt, "combine");
+});
+
+test("multiple references upload ordered image[] parts with generic names through the proxy", async () => {
+  await withHome(async (directory) => {
+    const sources = [path.join(directory, "private first.png"), path.join(directory, "private second.jpg")];
+    const bytes = [png, Buffer.from([0xff, 0xd8, 0xff, 0xe0])];
+    await Promise.all(sources.map((p, i) => fs.writeFile(p, bytes[i])));
+    let calls = 0;
+    const upstream = http.createServer(async (req, res) => {
+      calls++;
+      assert.equal(req.url, "/v1/images/edits");
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const form = await new Request("http://test", { method: "POST", headers: { "content-type": req.headers["content-type"] }, body: Buffer.concat(chunks) }).formData();
+      assert.equal(form.get("image"), null);
+      const images = form.getAll("image[]");
+      assert.equal(images.length, 2);
+      assert.deepEqual(images.map(i => [i.name, i.type]), [["reference-1.png", "image/png"], ["reference-2.jpg", "image/jpeg"]]);
+      for (let i = 0; i < images.length; i++) assert.deepEqual(Buffer.from(await images[i].arrayBuffer()), bytes[i]);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ url: "https://images.test/result.png" }] }));
+    });
+    await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+    try {
+      await writeProviders([{ ...provider, baseUrl: `http://127.0.0.1:${upstream.address().port}/v1` }]);
+      await upsertProviderCache(provider.name, cache.images);
+      const result = await generateImage({ provider: provider.name, prompt: "private multi prompt", imagePaths: sources });
+      assert.equal(result.url, "https://images.test/result.png");
+      assert.equal(calls, 1);
+      for (let i = 0; i < sources.length; i++) assert.deepEqual(await fs.readFile(sources[i]), bytes[i]);
+      const log = await fs.readFile(path.join(directory, ".ai-gateway.log"), "utf8");
+      assert.doesNotMatch(log, /private first|private second|private multi prompt/);
+    } finally { await new Promise(resolve => upstream.close(resolve)); }
+  });
+});
+
+test("all references are validated before any provider request, with aggregate and count limits", async () => {
+  await withHome(async (directory) => {
+    const source = path.join(directory, "large.png");
+    const file = await fs.open(source, "w");
+    await file.write(png);
+    await file.truncate(15 * 1024 * 1024);
+    await file.close();
+    let calls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => { calls++; throw new Error("Unexpected upload"); };
+    try {
+      await assert.rejects(generateImage({ provider: provider.name, prompt: "edit", imagePaths: [source, source, source] }), /40 MiB in total/);
+      await assert.rejects(generateImage({ provider: provider.name, prompt: "edit", imagePaths: Array(9).fill(source) }), /At most 8/);
+      await assert.rejects(generateImage({ provider: provider.name, prompt: "edit", imagePaths: [source, path.join(directory, "missing.png")] }), /ENOENT/);
+      await assert.rejects(generateImage({ provider: provider.name, prompt: "edit", imagePath: source, imagePaths: [source] }), /not both/);
+      await assert.rejects(generateImage({ provider: provider.name, prompt: "edit", imagePaths: [] }), /At least one/);
+      assert.equal(calls, 0);
+    } finally { globalThis.fetch = originalFetch; }
   });
 });
