@@ -88,11 +88,8 @@ export function sanitizeArgs(command: string | undefined, args: string[]): strin
   if (command === "telegram") {
     return maskTelegramConfigSecretArgs(args);
   }
-  if (command === "image" && args.some((arg) => arg === "--image" || arg.startsWith("--image="))) {
+  if (command === "image" && args.length) {
     return ["[image arguments redacted]"];
-  }
-  if (command === "image" && args.length > 1) {
-    return [args[0]!, `[prompt ${args.slice(1).join(" ").length} chars]`];
   }
   return args.map((arg, index) => {
     const previous = args[index - 1]?.toLowerCase();

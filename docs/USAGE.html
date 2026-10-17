@@ -685,14 +685,22 @@ ai proxy --disable</pre>
                 <h3>生成图片</h3>
                 <pre>ai image
 ai image 51talk-image "一只戴墨镜的猫，数字插画"
+ai image 51talk-image "生成3张咖啡店宣传图：一张1024x1024方图、一张1536x1024横图、一张1024x1536竖图，保持统一风格"
+ai image 51talk-image "咖啡店宣传海报" --count 3 --size 1024x1024
 ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"
 ai image 51talk-image "保持人物一致，改成水彩风格" --image "./参考图.png"
 ai image 51talk-image "将图1人物融入图2场景" --image "./人物.png" --image "./场景.jpg"</pre>
                 <ul>
                   <li>直接运行 <code>ai image</code> 时，会依次选择 Provider、具体模型和生成方式（文生图 / 参考本地图片）；参考图模式逐张输入文件路径，留空结束（达到 8 张自动结束），最后输入提示词。已有提示词的旧用法不增加交互。</li>
+                  <li>交互式只需在 <code>Image prompt</code> 描述明确数量和像素尺寸。支持“生成三张图片”、<code>Generate three images</code> 以及逐图尺寸列表，用逗号、顿号或分号分隔；未说明数量默认 1 张，未说明尺寸使用 Provider 默认。按明确句式解析，不调用额外模型，不保证理解任意自由表达。</li>
+                  <li><code>--count 1..8</code> / <code>--count=3</code> 指定数量，<code>--size WIDTHxHEIGHT</code> / <code>--size=auto</code> 指定尺寸，可放在位置参数前后；与提示词明确数量/尺寸冲突时报错。宽高限制 64–8192 像素，总像素 ≤16,777,216，Provider 可有更小限制。</li>
+                  <li>“多张/一套”但没有数量，或“多张不同尺寸”却没有像素尺寸，交互式按缺失字段追问数量或尺寸，保留原始提示词和参考图，已有提示词的命令行用法直接报错。场景内物体数量和引号内文字不作为输出数量，不从横竖版或宽高比猜尺寸。独立分句中的“2张图片”可被识别，“参考这几张图片”不算输出数量。数量追问直接回答 <code>2</code> 只补数量；尺寸追问按输出顺序填写 <code>2160x3840,3840x2160</code>，仅补尺寸。4K、手机或 PC 屏幕未给像素尺寸时会追问并提供示例，不自动猜测；纯数字不能替代图片描述。</li>
+                  <li>每张独立请求 <code>n: 1</code> 并传各自 <code>size</code>，顺序生成并共享整批 Transport Proxy；共同风格保留，但不保证跨图人物/版式完全一致。生成请求不原地重试；文生图自动切换受 <code>ai failover on/off</code> 控制。</li>
+                  <li>已知 DALL·E 尺寸限制在请求前校验，其他模型以上游实际响应为准，不静默换尺寸。base64 实际尺寸不符时保留文件、报告差异并标记任务失败；远程 URL 不下载，尺寸标记未验证。</li>
+                  <li>全部响应项在整批 8 张上限内保存或报告，文件名包含任务序号和请求尺寸；逐任务汇报结果，失败继续后续任务并保留已成功文件，任一任务失败退出码 1，不自动重跑整批。上游额外图片计入上限，余量耗尽不再请求。</li>
                   <li>重复 <code>--image &lt;path&gt;</code> 或 <code>--image=&lt;path&gt;</code> 指定多张本地参考图，按输入顺序上传；最多 8 张，单张最大 20 MiB，合计最大 40 MiB。支持 PNG、JPEG、WebP，所有文件上传前按内容校验。路径有空格请加引号；不支持 GIF、URL 或 mask。原图不修改，结果另存新文件。</li>
                   <li>参考图上传给所选 Provider，调用 multipart <code>/v1/images/edits</code>。Provider / 模型须支持相应的单图或多图编辑；模型列表存在不代表支持该接口。服务端仍可能拒绝格式、尺寸或能力。非兼容的 Responses 图片工具接口不在此功能范围。</li>
-                  <li>参考图不自动重试、不向其他 Provider fallback；所选 Provider 不健康时直接失败。只指定模型时按健康/顺序选择一个可用 Provider。仅使用可信服务商；失败后明确选其他服务商重新运行。文生图保留原有 fallback。</li>
+                  <li>参考图不自动重试、不向其他 Provider fallback；所选 Provider 不健康时直接失败。只指定模型时按健康/顺序选择一个可用 Provider。仅使用可信服务商；失败后明确选其他服务商重新运行。文生图仅在开启自动降级时允许 fallback。</li>
                   <li>第一个参数是 Provider 名；第二个参数匹配模型缓存时作为具体模型，否则从第二个参数开始作为提示词并使用默认模型。</li>
                   <li>命令执行前会自动刷新模型缓存；也可以先运行 <code>ai status</code> 检查。指定模型时建议给提示词加引号。</li>
                   <li><code>b64_json</code> 会以 <code>0600</code> 权限保存到当前目录并输出绝对路径；远程响应只接受无凭证的 <code>https</code> URL。</li>

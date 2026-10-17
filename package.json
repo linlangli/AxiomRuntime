@@ -54,6 +54,7 @@
     "gpt-tokenizer": "^3.4.0",
     "grammy": "^1.44.0",
     "https-proxy-agent": "^9.1.0",
+    "image-size": "2.0.4",
     "proper-lockfile": "^4.1.2",
     "undici": "^8.10.0"
   }

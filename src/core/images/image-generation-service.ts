@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { imageSize } from "image-size";
+import { loadRuntimeConfig } from "../config/runtime-config.js";
+import { planImageGeneration, validateImageModelSize, type ImagePlanInput } from "./image-generation-plan.js";
+import type { OpenAiUsageProxy } from "../runner/openai-usage-types.js";
 import { isProviderCircuitOpen, readCache, recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../config/cache-store.js";
 import { readProviders } from "../config/providers-store.js";
 import { writeLog } from "../logs/log-service.js";
@@ -28,6 +32,9 @@ export type ImageProviderSelection = {
 export type GeneratedImage = {
   provider: string;
   model: string;
+  requestedSize?: string;
+  actualSize?: string;
+  warning?: string;
   revisedPrompt?: string;
   filePath?: string;
   url?: string;
@@ -80,7 +87,7 @@ export async function resolveImageProviderCandidates(
   ];
 }
 
-export async function generateImage(input: {
+export type GenerateImageInput = {
   target?: string;
   provider?: string;
   model?: string;
@@ -91,23 +98,75 @@ export async function generateImage(input: {
   /** Ordered local references: 1–8 files, <=20 MiB each and <=40 MiB total.
    * Validate all files before upload; never retry or fall back with references. */
   imagePaths?: string[];
-}): Promise<GeneratedImage> {
+  size?: string;
+};
+
+export type ImageTaskResult = { index: number; size?: string; images: GeneratedImage[]; error?: string };
+export type ImageGenerationBatch = { tasks: ImageTaskResult[]; images: GeneratedImage[]; success: boolean };
+
+class PartialImageOutputError extends Error {
+  constructor(message: string, readonly images: GeneratedImage[]) { super(message); }
+}
+
+/** Sequential multi-output execution sharing one Transport Proxy and its authoritative UsageObserver.
+ * Each task requests n=1. Completed outputs are retained if another task fails; no batch replay.
+ * Unknown provider size constraints are validated by the upstream API, never silently substituted.
+ */
+export async function generateImages(input: GenerateImageInput & ImagePlanInput): Promise<ImageGenerationBatch> {
+  const plan = planImageGeneration(input);
+  const references = await readReferences(input);
+  const runtimeConfig = await loadRuntimeConfig();
+  const candidates = await resolveImageProviderCandidates(
+    input.target ?? { providerName: input.provider, model: input.model },
+    !references.length && !runtimeConfig.failoverDisabled
+  );
+  if (!candidates.length) throw new Error("No usable image provider. Run `ai status` to refresh model lists.");
+  for (const task of plan) validateImageModelSize(candidates[0]!.model, task.size);
+  let active = candidates[0]!;
+  const proxy = await startOpenAiUsageProxy({
+    provider: active.provider, model: active.model, tool: "image", engine: "codex",
+    fallbackRoutes: candidates.slice(1), upstreamHeadersTimeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
+    // Avoid duplicate generation after uncertain failures; safe HTTP failover remains available.
+    maxAttemptsPerRoute: 1,
+    onFailover: (event) => { active = event.to; },
+    onRouteResult: async (route, success, reason) => {
+      if (!success) await recordProviderRuntimeFailure(route.provider.name, reason ?? "image_request_failed");
+    }
+  });
+  const tasks: ImageTaskResult[] = [];
+  try {
+    for (const task of plan) {
+      const remaining = 8 - tasks.reduce((count, task) => count + task.images.length, 0);
+      if (remaining <= 0) {
+        tasks.push({ index: task.index, size: task.size, images: [], error: "Output limit reached because the provider returned extra images." });
+        continue;
+      }
+      try {
+        const images = await generateWithProvider(active, task.prompt, input.outputDir ?? process.cwd(), references, task.size, {
+          proxy, getCandidate: () => active, index: task.index, remaining
+        });
+        await recordProviderRuntimeSuccess(active.provider.name);
+        const mismatch = images.filter((image) => image.actualSize && task.size && task.size !== "auto" && image.actualSize !== task.size);
+        tasks.push({ index: task.index, size: task.size, images, ...(mismatch.length ? { error: "Provider returned a different image size; saved outputs were retained." } : {}) });
+      } catch (error) {
+        const message = summarizeError(error);
+        tasks.push({ index: task.index, size: task.size, images: error instanceof PartialImageOutputError ? error.images : [], error: message });
+        await writeLog({ category: "provider", level: "warn", action: "image_generation_task_failed",
+          message: "Image generation task failed.", metadata: { index: task.index, provider: active.provider.name, model: active.model, size: task.size } });
+      }
+    }
+    return { tasks, images: tasks.flatMap((task) => task.images), success: tasks.every((task) => !task.error) };
+  } finally {
+    await proxy.close().catch(() => undefined);
+  }
+}
+
+/** Backward-compatible single-output API; CLI batch planning lives in generateImages. */
+export async function generateImage(input: GenerateImageInput): Promise<GeneratedImage> {
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error("Image prompt is required.");
-  if (input.imagePath !== undefined && input.imagePaths !== undefined) {
-    throw new Error("Use either imagePath or imagePaths, not both.");
-  }
-  const paths = input.imagePaths ?? (input.imagePath !== undefined ? [input.imagePath] : []);
-  if (input.imagePaths && !paths.length) throw new Error("At least one reference image path is required.");
-  if (paths.length > MAX_REFERENCE_IMAGES) throw new Error("At most 8 reference images are supported.");
-  const references: ReferenceImage[] = [];
-  let totalBytes = 0;
-  for (const imagePath of paths) {
-    const reference = await readReferenceImage(imagePath);
-    totalBytes += reference.bytes.byteLength;
-    if (totalBytes > MAX_REFERENCE_BYTES) throw new Error("Reference images exceed 40 MiB in total.");
-    references.push(reference);
-  }
+  const references = await readReferences(input);
+  if (input.size) validateImageModelSize(input.model ?? "", input.size);
 
   const selection = input.target ?? { providerName: input.provider, model: input.model };
   const candidates = await resolveImageProviderCandidates(selection, !references.length);
@@ -119,9 +178,9 @@ export async function generateImage(input: {
   const failures: string[] = [];
   for (const candidate of candidates) {
     try {
-      const result = await generateWithProvider(candidate, prompt, input.outputDir ?? process.cwd(), references);
+      const result = await generateWithProvider(candidate, prompt, input.outputDir ?? process.cwd(), references, input.size);
       await recordProviderRuntimeSuccess(candidate.provider.name);
-      return result;
+      return result[0]!;
     } catch (error) {
       const message = summarizeError(error);
       failures.push(`${candidate.provider.name}: ${message}`);
@@ -139,13 +198,34 @@ export async function generateImage(input: {
   throw new Error(`Image generation failed. ${failures.join("; ")}`);
 }
 
+async function readReferences(input: GenerateImageInput): Promise<ReferenceImage[]> {
+  if (input.imagePath !== undefined && input.imagePaths !== undefined) {
+    throw new Error("Use either imagePath or imagePaths, not both.");
+  }
+  const paths = input.imagePaths ?? (input.imagePath !== undefined ? [input.imagePath] : []);
+  if (input.imagePaths && !paths.length) throw new Error("At least one reference image path is required.");
+  if (paths.length > MAX_REFERENCE_IMAGES) throw new Error("At most 8 reference images are supported.");
+  const references: ReferenceImage[] = [];
+  let totalBytes = 0;
+  for (const imagePath of paths) {
+    const reference = await readReferenceImage(imagePath);
+    totalBytes += reference.bytes.byteLength;
+    if (totalBytes > MAX_REFERENCE_BYTES) throw new Error("Reference images exceed 40 MiB in total.");
+    references.push(reference);
+  }
+
+  return references;
+}
+
 async function generateWithProvider(
   candidate: ImageProviderCandidate,
   prompt: string,
   outputDir: string,
-  references: ReferenceImage[]
-): Promise<GeneratedImage> {
-  const usageProxy = await startOpenAiUsageProxy({
+  references: ReferenceImage[],
+  size?: string,
+  shared?: { proxy: OpenAiUsageProxy; getCandidate: () => ImageProviderCandidate; index: number; remaining: number }
+): Promise<GeneratedImage[]> {
+  const usageProxy = shared?.proxy ?? await startOpenAiUsageProxy({
     provider: candidate.provider,
     model: candidate.model,
     tool: "image",
@@ -155,12 +235,13 @@ async function generateWithProvider(
   });
 
   try {
-    let body: string | FormData = JSON.stringify({ model: candidate.model, prompt, n: 1 });
+    let body: string | FormData = JSON.stringify({ model: candidate.model, prompt, n: 1, ...(size ? { size } : {}) });
     if (references.length) {
       const form = new FormData();
       form.set("model", candidate.model);
       form.set("prompt", prompt);
       form.set("n", "1");
+      if (size) form.set("size", size);
       references.forEach((reference, index) => {
         const multiple = references.length > 1;
         const fileName = multiple ? reference.fileName.replace("reference.", `reference-${index + 1}.`) : reference.fileName;
@@ -185,35 +266,53 @@ async function generateWithProvider(
       throw new Error(readProviderError(payload) ?? `Provider returned HTTP ${response.status}.`);
     }
 
-    const image = readFirstImage(payload);
-    if (!image) throw new Error("Provider response did not contain an image.");
-    const baseResult = {
-      provider: candidate.provider.name,
-      model: candidate.model,
-      ...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {})
-    };
-    if (image.base64) {
+    const images = readImages(payload);
+    if (shared && images.length > shared.remaining) throw new Error("Provider response exceeds the remaining 8-image output limit.");
+    if (!images.length) throw new Error("Provider response did not contain an image.");
+    const routed = shared?.getCandidate() ?? candidate;
+    // Validate the entire response before writing any files.
+    const decoded = images.map((image) => {
+      if (!image.base64) return { image };
       const buffer = decodeImage(image.base64);
       const extension = detectImageExtension(buffer);
-      const filePath = await writeImageFile(outputDir, buffer, extension);
-      await writeLog({
-        category: "usage",
-        action: "image_generated",
-        message: `Generated image with ${candidate.provider.name} / ${candidate.model}.`,
-        metadata: { provider: candidate.provider.name, model: candidate.model, filePath, bytes: buffer.length }
-      });
-      return { ...baseResult, filePath };
-    }
-
-    await writeLog({
-      category: "usage",
-      action: "image_generated_url",
-      message: `Generated image URL with ${candidate.provider.name} / ${candidate.model}.`,
-      metadata: { provider: candidate.provider.name, model: candidate.model, urlHost: new URL(image.url!).host }
+      let actualSize: string | undefined;
+      if (size && size !== "auto") {
+        try { const dimensions = imageSize(buffer); actualSize = `${dimensions.width}x${dimensions.height}`; }
+        catch { throw new Error("Cannot verify generated image dimensions."); }
+      }
+      return { image, buffer, extension, actualSize };
     });
-    return { ...baseResult, url: image.url };
+    const results: GeneratedImage[] = [];
+    try {
+      for (const [offset, entry] of decoded.entries()) {
+        const { image } = entry;
+        const result: GeneratedImage = {
+          provider: routed.provider.name, model: routed.model,
+          ...(size ? { requestedSize: size } : {}),
+          ...(entry.actualSize ? { actualSize: entry.actualSize } : {}),
+          ...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {})
+        };
+        if (entry.buffer && entry.extension) {
+          result.filePath = await writeImageFile(outputDir, entry.buffer, entry.extension,
+            shared ? `${shared.index}-${offset + 1}${size ? `-${size}` : ""}` : undefined);
+          if (entry.actualSize && entry.actualSize !== size) result.warning = `Requested ${size}, received ${entry.actualSize}.`;
+        } else {
+          result.url = image.url;
+          if (size && size !== "auto") result.warning = "Remote URL size is unverified; the image was not downloaded.";
+        }
+        results.push(result);
+        await writeLog({ category: "usage", action: result.filePath ? "image_generated" : "image_generated_url",
+          message: `Generated image with ${routed.provider.name} / ${routed.model}.`,
+          metadata: { provider: routed.provider.name, model: routed.model, index: shared?.index,
+            ...(result.filePath ? { filePath: result.filePath, bytes: entry.buffer?.length } : { urlHost: new URL(image.url!).host }),
+            requestedSize: size, actualSize: entry.actualSize } });
+      }
+    } catch (error) {
+      throw new PartialImageOutputError(summarizeError(error), results);
+    }
+    return results;
   } finally {
-    await usageProxy.close().catch(() => undefined);
+    if (!shared) await usageProxy.close().catch(() => undefined);
   }
 }
 
@@ -280,16 +379,17 @@ function parseJsonResponse(text: string): unknown {
   }
 }
 
-function readFirstImage(payload: unknown): { base64?: string; url?: string; revisedPrompt?: string } | null {
-  if (!isRecord(payload) || !Array.isArray(payload.data) || !isRecord(payload.data[0])) return null;
-  const item = payload.data[0];
-  const base64 = typeof item.b64_json === "string" && item.b64_json.trim() ? item.b64_json.trim() : undefined;
-  const url = typeof item.url === "string" && isSafeImageUrl(item.url) ? item.url : undefined;
-  const revisedPrompt = typeof item.revised_prompt === "string" && item.revised_prompt.trim()
-    ? item.revised_prompt.trim()
-    : undefined;
-  if (!base64 && !url) return null;
-  return { base64, url, revisedPrompt };
+function readImages(payload: unknown): { base64?: string; url?: string; revisedPrompt?: string }[] {
+  if (!isRecord(payload) || !Array.isArray(payload.data) || !payload.data.length) return [];
+  if (payload.data.length > 8) throw new Error("Provider returned more than 8 images in one response.");
+  return payload.data.map((item) => {
+    if (!isRecord(item)) throw new Error("Provider returned an invalid image item.");
+    const base64 = typeof item.b64_json === "string" && item.b64_json.trim() ? item.b64_json.trim() : undefined;
+    const url = typeof item.url === "string" && isSafeImageUrl(item.url) ? item.url : undefined;
+    const revisedPrompt = typeof item.revised_prompt === "string" && item.revised_prompt.trim() ? item.revised_prompt.trim() : undefined;
+    if (!base64 && !url) throw new Error("Provider returned an invalid image item.");
+    return { base64, url, revisedPrompt };
+  });
 }
 
 function isSafeImageUrl(value: string): boolean {
@@ -320,10 +420,10 @@ function detectImageExtension(buffer: Buffer): "png" | "jpg" | "webp" | "gif" {
   throw new Error("Provider returned an unsupported image format.");
 }
 
-async function writeImageFile(outputDir: string, buffer: Buffer, extension: string): Promise<string> {
+async function writeImageFile(outputDir: string, buffer: Buffer, extension: string, label?: string): Promise<string> {
   const resolvedDir = path.resolve(outputDir);
   await fs.mkdir(resolvedDir, { recursive: true });
-  const fileName = `axiom-image-${formatTimestamp(new Date())}-${randomUUID().slice(0, 8)}.${extension}`;
+  const fileName = `axiom-image-${formatTimestamp(new Date())}-${label ? `${label}-` : ""}${randomUUID().slice(0, 8)}.${extension}`;
   const filePath = path.join(resolvedDir, fileName);
   const temporaryPath = path.join(resolvedDir, `.${fileName}.${process.pid}.tmp`);
   try {

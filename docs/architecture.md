@@ -316,6 +316,12 @@ Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`eng
 
 `ai image [provider] [model] [prompt]` 是独立的 `ImageGenerationService` capability，不复用 Claude/Codex 的 Agent 模型兼容过滤。CLI 无参数时交互选择 Provider、具体模型和生成方式；指定 Provider 时，第二个参数只有匹配该 Provider 模型缓存才解释为模型，否则保持 `provider + prompt` 兼容。文生图按明确的 Provider/模型选择候选，并按健康度和 `level` 自动 fallback，通过 execution-scoped Transport Proxy 调用 OpenAI-compatible `/v1/images/generations`；参考图的选择与失败语义见上段。图片请求等待响应头上限为 120 秒，避免通用文本代理的 45 秒 headers timeout 截断正常的图片生成；仅文生图超时后继续 Provider fallback。响应校验 `b64_json`/安全的 `https` URL，并将 base64 图片以 `0600` 权限原子保存。图片请求的真实 usage 仍由唯一 UsageObserver 记录；CLI 不记录提示词到 command usage log。
 
+多图输出由 `src/core/images/image-generation-plan.ts` 的 `planImageGeneration()` 负责确定性规划，不引入额外 LLM 调用。它接受 `prompt`、可选 `count` / `size`，输出有序 `ImageGenerationTask[]`；识别明确中文/英文数量与像素尺寸列表，忽略引号内文字，不推断任意自然语言、宽高比或用途。默认 1 张，最多 8 张；数量/尺寸冲突和模糊多图要求抛 `ImagePlanClarificationError`，CLI 仅在交互式缺省提示词流程中按 `field`（`count` / `sizes` / `prompt`）追问：数量补充写入 `count`，尺寸按序追加到原始 prompt，只有完整描述冲突才请求重述。数字补充不得替换原始创意描述或参考图；数字不能作为独立 prompt。明确分句数量可位于句子中间，参考图数量表达不算模糊输出数量。4K/手机/PC 等未明确像素尺寸时，`sizes` 澄清携带已识别 `count`，给示例但不自动映射。参数与明确提示词不得冲突。尺寸归一化和已知 DALL·E 限制由 core 校验，未知模型尺寸能力交给上游，不静默替换。
+
+`generateImages()` 在所有参考文件和任务校验后启动一个整批共享的 Transport Proxy，按序以 `n: 1` / 每项 `size` 执行。该 API 返回 `ImageGenerationBatch`，内含 `tasks`（序号、请求尺寸、图片列表、可选错误）、扁平 `images` 与 `success`；旧 `generateImage()` 单图接口保留兼容。任务失败不重放整批，不撤销已保存文件。CLI 不原地重试图片生成，文生图请求级 fallback 受 `runtime.json.failoverDisabled` 控制，参考图无重试/轮转。路由事件更新实际 provider 标识，UsageObserver 仍是唯一用量来源；每次上游返回的整份 usage 仅记录一次，不按返回图片数重复记账。
+
+响应处理不再只读 `data[0]`，会校验并保存每个有效返回项，单响应和整批输出最多 8 张，单响应 32 MiB、单图 20 MiB；超出整批余量的响应失败，余量耗尽后不发后续请求。文件名含任务/响应项序号和请求尺寸，原子写入与 `0600` 权限不变。使用固定版本 `image-size`（2.0.4）读取 PNG/JPEG/WebP/GIF 尺寸，不自行实现通用图片解析器；明确尺寸的 base64 输出尺寸不符时保留文件、返回 warning 并将任务标记失败。远程 URL 不下载，尺寸明确标为未验证。任何任务失败使 CLI 退出码为 1；参数（包括位置参数前的 flag）统一脱敏，不记录完整提示词与原始参考路径。验证采用本地 HTTP fixtures，真实 Provider 的尺寸支持与跨图一致性不作为本地测试承诺。
+
 ### 进度流式 🟢
 
 底层管道本就是流式的（Claude `--output-format stream-json`，Codex `codex exec --json`）。

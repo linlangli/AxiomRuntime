@@ -1,5 +1,6 @@
+import { planImageGeneration, ImagePlanClarificationError, normalizeImageSize } from "../../core/images/image-generation-plan.js";
 import { readCache } from "../../core/config/cache-store.js";
-import { generateImage, MAX_REFERENCE_IMAGES } from "../../core/images/image-generation-service.js";
+import { generateImages, MAX_REFERENCE_IMAGES } from "../../core/images/image-generation-service.js";
 import { listProviders, refreshAllProviders } from "../../core/providers/provider-service.js";
 import type { CacheFile, Provider } from "../../core/types.js";
 import { promptSelect, promptText } from "../prompts/prompt.js";
@@ -9,6 +10,8 @@ export type ImageCommandInput = {
   model?: string;
   target?: string;
   prompt: string;
+  count?: number;
+  size?: string;
   imagePath?: string;
   imagePaths?: string[];
 };
@@ -18,11 +21,21 @@ export async function runImageCommand(args: string[]): Promise<void> {
   const [providers, cache] = await Promise.all([listProviders(), readCache()]);
   const input = await resolveImageCommandInput(args, providers, cache.providers);
   if (input.imagePath || input.imagePaths?.length) console.log("Reference images will be uploaded to one selected provider. Automatic retries and cross-provider fallback are disabled.");
-  const result = await generateImage(input);
-  console.log(`Generated with ${result.provider} / ${result.model}`);
-  if (result.filePath) console.log(`Image saved: ${result.filePath}`);
-  if (result.url) console.log(`Image URL: ${result.url}`);
-  if (result.revisedPrompt) console.log(`Revised prompt: ${result.revisedPrompt}`);
+  const plan = planImageGeneration(input);
+  console.log(`Generating ${plan.length} image(s): ${plan.map((task) => task.size ?? "provider default size").join(", ")}`);
+  const result = await generateImages(input);
+  for (const task of result.tasks) {
+    for (const image of task.images) {
+      console.log(`Image ${task.index}${image.actualSize ? ` (${image.actualSize})` : ""}: ${image.provider} / ${image.model}`);
+      if (image.filePath) console.log(`Image saved: ${image.filePath}`);
+      if (image.url) console.log(`Image URL: ${image.url}`);
+      if (image.warning) console.warn(image.warning);
+      if (image.revisedPrompt) console.log(`Revised prompt: ${image.revisedPrompt}`);
+    }
+    if (task.error) console.error(`Image ${task.index} failed: ${task.error}`);
+  }
+  console.log(`Saved/returned ${result.images.length} image(s); ${result.tasks.filter((task) => task.error).length} task(s) failed.`);
+  if (!result.success) process.exitCode = 1;
 }
 
 export async function resolveImageCommandInput(
@@ -40,7 +53,7 @@ export async function resolveImageCommandInput(
   args = parsed.args;
   const imagePaths = parsed.imagePaths;
   const target = args[0]?.trim();
-  const resolvePrompt = async (promptArgs: string[]): Promise<{ prompt: string; imagePath?: string; imagePaths?: string[] }> => {
+  const resolvePrompt = async (promptArgs: string[]): Promise<Pick<ImageCommandInput, "prompt" | "count" | "size" | "imagePath" | "imagePaths">> => {
     if (!promptArgs.length && !imagePaths.length) {
       const mode = await select("Select image mode", [
         { label: "Text to image / 文生图", value: "generate" },
@@ -61,8 +74,33 @@ export async function resolveImageCommandInput(
         }
       }
     }
-    const prompt = requirePrompt(promptArgs.join(" ").trim() || await text("Image prompt"));
-    return { prompt, ...(imagePaths.length === 1 ? { imagePath: imagePaths[0]! } : imagePaths.length ? { imagePaths } : {}) };
+    let originalPrompt = requirePrompt(promptArgs.join(" ").trim() || await text("Image prompt"));
+    let prompt = originalPrompt;
+    let count = parsed.count;
+    while (true) {
+      try { planImageGeneration({ prompt, count, size: parsed.size }); break; }
+      catch (error) {
+        if (!(error instanceof ImagePlanClarificationError) || promptArgs.length) throw error;
+        if (error.field === "sizes") {
+          const sizes = requirePrompt(await text(`${error.message} Output sizes (keep the original Image prompt)`));
+          if (!/\d+\s*[x×*]\s*\d+/i.test(sizes)) continue;
+          prompt = `${originalPrompt}\nOutput sizes: ${sizes}`;
+        } else if (error.field === "count") {
+          const answer = requirePrompt(await text(`${error.message} Enter a count (1–8), or a revised full Image prompt`));
+          const numeric = /^([1-8])\s*(?:张(?:图片)?|幅)?$/.exec(answer);
+          if (numeric) { count = Number(numeric[1]); prompt = originalPrompt; }
+          else if (/^\d+\s*(?:张(?:图片)?|幅)?$/.test(answer)) continue;
+          else { originalPrompt = answer; prompt = answer; }
+        } else {
+          const answer = requirePrompt(await text(`${error.message} Please restate the full Image prompt`));
+          if (/^\d+$/.test(answer)) continue;
+          originalPrompt = answer;
+          prompt = answer;
+        }
+      }
+    }
+    return { prompt, ...(count !== undefined ? { count } : {}), ...(parsed.size ? { size: parsed.size } : {}),
+      ...(imagePaths.length === 1 ? { imagePath: imagePaths[0]! } : imagePaths.length ? { imagePaths } : {}) };
   };
   const namedProvider = target ? providers.find((provider) => provider.name === target) : undefined;
   if (target && !namedProvider) {
@@ -82,13 +120,25 @@ export async function resolveImageCommandInput(
   return { provider: provider.name, model, ...await resolvePrompt(promptArgs) };
 }
 
-function parseImageArgs(input: string[]): { args: string[]; imagePaths: string[] } {
+function parseImageArgs(input: string[]): { args: string[]; imagePaths: string[]; count?: number; size?: string } {
+  let count: number | undefined;
+  let size: string | undefined;
   const args: string[] = [];
   const imagePaths: string[] = [];
   for (let index = 0; index < input.length; index += 1) {
     const argument = input[index]!;
     if (argument === "--") { args.push(...input.slice(index + 1)); break; }
-    if (argument === "--image" || argument.startsWith("--image=")) {
+    if (argument === "--count" || argument.startsWith("--count=")) {
+      if (count !== undefined) throw new Error("--count may only be supplied once.");
+      const value = argument === "--count" ? input[++index] : argument.slice("--count=".length);
+      if (!value || !/^[1-8]$/.test(value)) throw new Error("--count requires an integer from 1 to 8.");
+      count = Number(value);
+    } else if (argument === "--size" || argument.startsWith("--size=")) {
+      if (size !== undefined) throw new Error("--size may only be supplied once.");
+      const value = argument === "--size" ? input[++index] : argument.slice("--size=".length);
+      if (!value || value.startsWith("--")) throw new Error("--size requires WIDTHxHEIGHT or auto.");
+      size = normalizeImageSize(value);
+    } else if (argument === "--image" || argument.startsWith("--image=")) {
       if (imagePaths.length >= MAX_REFERENCE_IMAGES) throw new Error("At most 8 reference images are supported.");
       const value = argument === "--image" ? input[++index] : argument.slice("--image=".length);
       if (!value?.trim() || value.startsWith("--")) throw new Error("--image requires a local file path.");
@@ -98,7 +148,7 @@ function parseImageArgs(input: string[]): { args: string[]; imagePaths: string[]
       args.push(argument);
     }
   }
-  return { args, imagePaths };
+  return { args, imagePaths, count, size };
 }
 
 async function selectImageProvider(

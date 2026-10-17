@@ -139,6 +139,8 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | CLI 图片生成 | 🟢 | `ai image [provider] [model] [prompt]`；支持完全交互、Provider 默认模型和显式模型 |
+| 多图输出与混合尺寸 | 🟢 | 交互式 `Image prompt` 与命令行共用确定性规划，明确数量/像素尺寸拆成 1–8 个顺序任务；`--count` / `--size` 提供确定性参数入口，冲突报错，模糊要求交互式按缺失字段追问，补数量/尺寸不覆盖原始 prompt 或参考图；能识别句中独立分句的数量，4K/手机/PC 无像素值时追问，纯数字不作为图片描述。无额外 LLM 解析成本；任意自然语言理解、宽高比自动映射不在范围内 |
+| 批次结果与尺寸验证 | 🟢 | 每项 `n: 1`，共享单个 Transport Proxy；全部返回项在 8 张上限内保存/报告，失败保留已成功文件并继续，任一失败退出码 1。base64 实际尺寸校验，不符保存并报失败；URL 尺寸未验证。已知 DALL·E 限制预检，其他尺寸能力由 Provider 实际响应决定；不保证跨图一致性 |
 | 标准 images API | 🟢 | 调用 OpenAI-compatible `/v1/images/generations` |
 | 本地参考图 | 🟢 | 重复 `--image <path>` 或交互逐张添加参考图，multipart `/v1/images/edits`；最多 8 张 PNG/JPEG/WebP，单张 ≤20 MiB、合计 ≤40 MiB，全部按内容校验后按序上传；服务商/模型须支持相应单图或多图编辑，不支持 mask 或 Responses 图片工具 |
 | 参考图隐私与失败边界 | 🟢 | 上传前本地校验，文件名使用通用名称；不记录图片内容、提示词和原始文件名；所选 Provider 不可用直接失败，不自动重试或跨 Provider fallback；文生图行为保持兼容 |

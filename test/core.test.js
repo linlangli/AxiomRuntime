@@ -514,7 +514,7 @@ test("image command redacts its prompt from usage logs", async () => {
   assert.doesNotMatch(result.stderr, new RegExp(prompt));
   const logs = await fs.readFile(path.join(runtimeHome, ".ai-gateway.log"), "utf8");
   assert.doesNotMatch(logs, new RegExp(prompt));
-  assert.match(logs, /\[prompt 25 chars\]/);
+  assert.match(logs, /image arguments redacted/);
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
