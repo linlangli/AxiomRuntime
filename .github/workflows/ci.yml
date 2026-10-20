@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch }}
+
+env:
+  NODE_VERSION: 22.19.0
+  NPM_CONFIG_FUND: 'false'
+  NPM_CONFIG_AUDIT: 'false'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      - run: npm ci --prefer-offline
+      - run: npm --prefix web ci --prefer-offline
+      - run: npm test
+      - run: npm --prefix web run typecheck
+
+  build_portal:
+    needs: test
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm --prefix web ci --prefer-offline
+      - run: npm run build:web:portal
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: portal-${{ github.sha }}
+          path: web/dist/portal/
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy_portal:
+    needs: build_portal
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: portal-production
+      cancel-in-progress: false
+    environment:
+      name: portal-production
+      url: https://axiom.offerpilot.life/
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: portal-${{ github.sha }}
+          path: web/dist/portal/
+      - run: bash scripts/deploy-portal.sh
+        env:
+          PORTAL_SSH_HOST: ${{ vars.PORTAL_SSH_HOST }}
+          PORTAL_SSH_USER: ${{ vars.PORTAL_SSH_USER || 'axiom-portal-deploy' }}
+          PORTAL_SSH_PRIVATE_KEY_B64: ${{ secrets.PORTAL_SSH_PRIVATE_KEY_B64 }}
+          PORTAL_SSH_KNOWN_HOSTS: ${{ secrets.PORTAL_SSH_KNOWN_HOSTS }}
+          PORTAL_DEPLOY_ROOT: ${{ vars.PORTAL_DEPLOY_ROOT || '/srv/axiomruntime-portal' }}
+          PORTAL_HEALTH_URL: ${{ vars.PORTAL_HEALTH_URL || 'https://axiom.offerpilot.life/' }}

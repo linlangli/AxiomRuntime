@@ -466,11 +466,18 @@ ai setup</pre>
             <p>如果 npm 显示 <code>EBADENGINE</code>，请先升级 Node.js 再重新安装，不要继续使用警告状态下安装的 CLI。</p>
             <p><code>ai --version</code> 无副作用地验证安装；<code>ai setup</code> 初始化 Runtime，并可在确认后安装缺失的 Claude Code/Codex。</p>
             <p>全局安装可以由 root 完成，但日常执行和常驻服务应使用专用非 root 用户。root 下请求 Claude <code>auto</code>/<code>bypassPermissions</code> 时，Runtime 会安全约束为默认权限并告警，不会传递 <code>--dangerously-skip-permissions</code>。</p>
-            <pre>brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
+            <pre>brew tap linlangli/axiom https://github.com/linlangli/AxiomRuntime.git
 brew install linlangli/axiom/axiomruntime
 ai --version
 ai setup</pre>
-            <p>Homebrew Formula 复用同版本 npm tarball并校验 SHA256，固定使用 Homebrew <code>node@22</code>。非 GitHub Tap 首次添加时需提供公开 Git URL。</p>
+            <p>Homebrew Formula 复用同版本 npm tarball并校验 SHA256，固定使用 Homebrew <code>node@22</code>。Tap 名保留 <code>linlangli/axiom</code>，首次添加时必须提供实际的 GitHub URL。已有旧 GitLab Tap 的用户先更新 remote：</p>
+            <pre>git -C "$(brew --repo linlangli/axiom)" remote set-url origin https://github.com/linlangli/AxiomRuntime.git
+brew update</pre>
+            <h3>维护者发布与 CI 配置</h3>
+            <p>源码仓库为 <a href="https://github.com/linlangli/AxiomRuntime">linlangli/AxiomRuntime</a>。原 <code>.gitlab-ci.yml</code> 保留；GitHub 托管 runner 负责测试、门户构建与 SSH 部署，无需在生产服务器安装 Actions runner。branch push 和 PR 执行完整测试及前端类型检查，默认分支测试成功后部署门户；<code>v*</code> tag 单独触发 npm 发布。</p>
+            <p>在 Settings → Environments 中配置 <code>portal-production</code>，仅允许 <code>main</code> branch。Variables 包含必填的 <code>PORTAL_SSH_HOST</code>；可选的 <code>PORTAL_SSH_USER</code>、<code>PORTAL_DEPLOY_ROOT</code>、<code>PORTAL_HEALTH_URL</code> 分别默认 <code>axiom-portal-deploy</code>、<code>/srv/axiomruntime-portal</code>、<code>https://axiom.offerpilot.life/</code>。Secrets 包含 <code>PORTAL_SSH_PRIVATE_KEY_B64</code> 和已核对主机公钥的 <code>PORTAL_SSH_KNOWN_HOSTS</code>。部署按顺序执行，健康检查失败恢复上一 release。</p>
+            <p><code>npm-production</code> 仅允许 <code>v*</code> tag，无需 npm Secret。在 npm 包 <code>@offerpilot/axiomruntime</code> 的 Settings → Trusted Publisher 创建 GitHub Actions connection：owner <code>linlangli</code>、repository <code>AxiomRuntime</code>、workflow filename <code>publish.yml</code>、environment <code>npm-production</code>，仅启用 <code>Allow npm publish</code>。GitHub 通过 OIDC 获取短期凭证并生成 provenance；workflow 使用 <code>npm@11.11.0</code>，只有 npm job 有 <code>id-token: write</code>。GitLab variables 不随 Git 迁移，门户 SSH 凭证需重新注入；原 GitLab CI 继续使用原有 <code>NPM_TOKEN</code>。</p>
+            <p>双击 <code>发布.command</code> 或执行 <code>npm run release</code> 打开发布助手。助手使用 <code>gh</code> 检查登录及发布 workflow，在临时目录合并远端 <code>main</code>，安装根目录与前端依赖并运行完整测试，确认后推送 release commit 与 tag，等待 <code>Publish npm</code> 结果。npm 信任连接必须提前配置，助手不能通过 GitHub API 读取 npm 端状态。如果 npm 显示 <code>Pending validation</code>，须在页面给定截止时间前完成一次获准的新版本发布；仅保存连接不代表发布认证已经验证。tag 提交必须属于默认分支，版本必须与 <code>package.json.version</code> 一致。Homebrew 单独同步 npm <code>latest</code> 的 tarball 与 SHA256。Git 历史迁移应先备份本机 refs；未提交修改、GitLab Issues、CI variables 和 artifacts 不包含在 Git push 中。</p>
           </div>
         </section>
 

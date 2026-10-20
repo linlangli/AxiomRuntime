@@ -3,7 +3,7 @@ import { ArrowRight, Check, Copy, GitBranch, Layers3, Menu, Orbit, ShieldCheck, 
 import { ref } from 'vue'
 import { version } from '../../package.json'
 
-const source = 'https://gitlab.com/linlangli/axiom'
+const source = 'https://github.com/linlangli/AxiomRuntime'
 const manual = `${source}/-/blob/develop/docs/usage.md`
 const install = 'npm install --global @offerpilot/axiomruntime'
 const menuOpen = ref(false)

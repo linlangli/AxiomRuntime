@@ -52,12 +52,12 @@ ai --version
 ### Homebrew 安装
 
 ```bash
-brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
+brew tap linlangli/axiom https://github.com/linlangli/AxiomRuntime.git
 brew install linlangli/axiom/axiomruntime
 ai --version
 ```
 
-Homebrew 用的是同版本的 npm tarball，校验 SHA256 后装到隔离目录，并固定使用 Homebrew 的 `node@22`。Tap 不在 GitHub，所以第一次 `brew tap` 必须带上后面那个 Git URL。
+Homebrew 用的是同版本的 npm tarball，校验 SHA256 后装到隔离目录，并固定使用 Homebrew 的 `node@22`。Tap 名仍为 `linlangli/axiom`，第一次 `brew tap` 必须带上实际的 GitHub 仓库 URL。已经添加旧 GitLab Tap 的用户，执行 `git -C "$(brew --repo linlangli/axiom)" remote set-url origin https://github.com/linlangli/AxiomRuntime.git` 后再运行 `brew update`。
 
 ### 关于 root
 
@@ -606,7 +606,20 @@ Web 控制面的「本地配置」提供「服务配置、模型路由、工具�
 - **工具会话**：最近 30 次工具启动与退出，展示工具、初始模型/Provider、启动时间、运行时长、退出结果与退出码。未记录结束时间显示「尚无退出记录」，不能视为进程存活。仅当日志明确记录与本地会话相同的 `sessionId` 时提供关联调用入口；不按时间或 Provider 猜测关联，也不展示聊天内容。
 - **系统日志**：按「模型请求 / 服务检查 / 配置变更 / 系统运行」分类，支持级别、Provider、分类、日期和搜索筛选。事件先显示中文说明，展开查看脱敏后的 `action`、`level`、`traceId` 等原始字段；存在明确调用关联时可直接打开调用详情。没有 `traceId` 的事件仅保留在日志中，不生成调用记录。
 
-公网门户 `https://axiom.offerpilot.life/` 是独立部署的静态介绍页，不连接本机配置、不提供远程控制，也不包含在 npm 包内。默认分支的 GitLab CI 会先构建 `web/dist/portal/`，再用受限的 `axiom-portal-deploy` SSH 账号上传不可变 release、原子切换 `current` symlink，并用线上首页内容做健康检查；失败会自动恢复上一 release。部署账号只能写 `/srv/axiomruntime-portal`，SSH 主机指纹和私钥通过受保护的 `portal-production` CI variables 注入，私钥不进仓库。服务器证书和 Nginx SNI 分流属于一次性运维配置。门户发布需要先把改动合并到默认分支。
+公网门户 `https://axiom.offerpilot.life/` 是独立部署的静态介绍页，不连接本机配置、不提供远程控制，也不包含在 npm 包内。默认分支的 GitHub Actions 会先测试并构建 `web/dist/portal/`，再用受限的 `axiom-portal-deploy` SSH 账号上传不可变 release、原子切换 `current` symlink，并用线上首页内容做健康检查；失败会自动恢复上一 release。SSH 主机公钥和私钥通过 `portal-production` Environment Secrets 注入，私钥不进仓库。服务器证书和 Nginx SNI 分流属于一次性运维配置。门户发布需要先把改动合并到默认分支；原 GitLab CI 文件保留。
+
+### 维护者发布与 CI 配置
+
+源码仓库为 `https://github.com/linlangli/AxiomRuntime`。GitHub 托管 runner 执行测试、门户构建与 SSH 部署，无需在服务器安装 Actions runner。branch push 和 PR 执行 `npm test` 与 `npm --prefix web run typecheck`；默认分支 push 在测试成功后发布门户，`v*` tag push 单独触发 npm 发布。
+
+在仓库 Settings → Environments 创建并配置：
+
+- `portal-production`：只允许 `main` branch。Variables 添加 `PORTAL_SSH_HOST`；`PORTAL_SSH_USER`、`PORTAL_DEPLOY_ROOT`、`PORTAL_HEALTH_URL` 可选，默认依次为 `axiom-portal-deploy`、`/srv/axiomruntime-portal`、`https://axiom.offerpilot.life/`。Secrets 添加 `PORTAL_SSH_PRIVATE_KEY_B64` 和 `PORTAL_SSH_KNOWN_HOSTS`。使用专用部署账号和已核对的主机公钥。
+- `npm-production`：只允许 `v*` tag，无需添加 npm Secret。在 npm 包 `@offerpilot/axiomruntime` 的 Settings → Trusted Publisher 创建 GitHub Actions connection，填写 owner `linlangli`、repository `AxiomRuntime`、workflow filename `publish.yml`、environment `npm-production`，只启用 `Allow npm publish`。如果显示 `Pending validation`，须在页面给定截止时间前完成一次获准的新版本发布；仅保存连接不代表发布认证已经验证。
+
+GitLab 中的变量不会自动复制；账号无法访问时，部署 SSH key 可重新生成。GitHub npm 发版通过 OIDC 获取短期凭证并生成 provenance，无需迁移或保存 `NPM_TOKEN`。workflow 使用支持 OIDC 的 `npm@11.11.0`，仅 npm job 有 `id-token: write` 权限。保留的 GitLab CI 仍使用原有 `NPM_TOKEN`。
+
+macOS 双击 `发布.command`，或运行 `npm run release` 打开发布助手。助手使用 GitHub CLI `gh` 检查登录和发布 workflow，在临时目录合并远端 `main`、安装根目录与 `web` 依赖、验证版本并运行完整测试，经确认后推送 release commit 与 tag，等待 `Publish npm` Actions 结果。npm Trusted Publisher 必须提前配置；助手不能通过 GitHub API 读取 npm 端信任状态。tag 提交必须包含在默认分支中，tag 版本必须等于 `package.json.version`。Homebrew 发布仍单独从 npm `latest` tarball 计算 SHA256，不重复发布 npm。迁移已有 Git 历史时先备份本机 refs；未提交修改和 GitLab Issues、CI variables、artifacts 不属于 Git push 的内容。
 
 ---
 

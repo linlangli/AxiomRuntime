@@ -3,8 +3,28 @@ import test from "node:test";
 import {
   buildHomebrewFormula,
   nextVersion,
+  readGitHubRepository,
   readHomebrewFormula
 } from "../scripts/release-support.js";
+
+test("发布助手识别 GitHub SSH 和 HTTPS origin，拒绝其他主机", () => {
+  for (const remoteUrl of [
+    "git@github.com:linlangli/AxiomRuntime.git",
+    "https://github.com/linlangli/AxiomRuntime.git",
+    "https://github.com/linlangli/AxiomRuntime/",
+    "ssh://git@github.com/linlangli/AxiomRuntime.git"
+  ]) {
+    assert.equal(readGitHubRepository(remoteUrl), "linlangli/AxiomRuntime");
+  }
+  for (const remoteUrl of [
+    "git@gitlab.com:linlangli/axiom.git",
+    "https://github.com.example.test/linlangli/AxiomRuntime.git",
+    "https://github.com/linlangli/AxiomRuntime/extra",
+    "https://user:token@github.com/linlangli/AxiomRuntime.git"
+  ]) {
+    assert.equal(readGitHubRepository(remoteUrl), null);
+  }
+});
 
 test("发布助手计算 patch、minor 和 major 版本", () => {
   assert.equal(nextVersion("0.0.1", "patch"), "0.0.2");
@@ -25,7 +45,7 @@ test("Homebrew Formula 只更新发布字段并保留安装逻辑", () => {
     ""
   ].join("\n");
   const release = {
-    homepage: "https://gitlab.com/linlangli/axiom",
+    homepage: "https://github.com/linlangli/AxiomRuntime",
     tarballUrl: "https://registry.npmjs.org/@offerpilot/axiomruntime/-/axiomruntime-0.1.0.tgz",
     sha256: "abc123"
   };
@@ -39,7 +59,7 @@ test("Homebrew Formula 只更新发布字段并保留安装逻辑", () => {
 test("Homebrew Formula 缺少受管字段时拒绝发布", () => {
   assert.throws(
     () => buildHomebrewFormula("class Axiomruntime < Formula\nend\n", {
-      homepage: "https://gitlab.com/linlangli/axiom",
+      homepage: "https://github.com/linlangli/AxiomRuntime",
       tarballUrl: "https://registry.npmjs.org/package.tgz",
       sha256: "abc123"
     }),

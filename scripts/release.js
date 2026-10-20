@@ -12,6 +12,7 @@ import {
   commandExists,
   fetchNpmRelease,
   nextVersion,
+  readGitHubRepository,
   readHomebrewFormula,
   runCommand,
   versionExistsOnNpm
@@ -20,10 +21,10 @@ import {
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packagePath = path.join(projectRoot, "package.json");
 const formulaRelativePath = path.join("Formula", "axiomruntime.rb");
-const gitlabProjectUrl = "https://gitlab.com/linlangli/axiom";
-const npmTokenUrl = "https://www.npmjs.com/settings/offerpilot/tokens";
-const gitlabVariablesUrl = `${gitlabProjectUrl}/-/settings/ci_cd`;
-const gitlabSshKeysUrl = "https://gitlab.com/-/user_settings/ssh_keys";
+const githubRepository = "linlangli/AxiomRuntime";
+const githubProjectUrl = `https://github.com/${githubRepository}`;
+const npmTrustedPublisherUrl = "https://www.npmjs.com/package/@offerpilot/axiomruntime/access";
+const githubSshKeysUrl = "https://github.com/settings/keys";
 const nodeDownloadUrl = "https://nodejs.org/zh-cn/download";
 const rl = readline.createInterface({ input, output });
 
@@ -72,7 +73,7 @@ async function publishNpm() {
   console.log("\n[1/5] 检查 npm 发布条件");
   await ensureBaseTools();
   await ensureCleanWorkingTree();
-  await ensureGitLabReadyForNpm();
+  await ensureGitHubReadyForNpm();
 
   const sourceBranch = await captureCommand("git", ["branch", "--show-current"], { cwd: projectRoot });
   const sourceCommit = await captureCommand("git", ["rev-parse", "HEAD"], { cwd: projectRoot });
@@ -126,7 +127,9 @@ async function publishNpm() {
     }
     await ensureRemoteTagAbsent(`v${releaseVersion}`);
     await runCommand("npm", ["ci", "--prefer-offline"], { cwd: temporaryDirectory });
+    await runCommand("npm", ["--prefix", "web", "ci", "--prefer-offline"], { cwd: temporaryDirectory });
     await runCommand("npm", ["test"], { cwd: temporaryDirectory });
+    await runCommand("npm", ["--prefix", "web", "run", "typecheck"], { cwd: temporaryDirectory });
     await runCommand("npm", ["pack", "--dry-run"], { cwd: temporaryDirectory });
 
     console.log("\n[4/5] 创建 release commit 和 tag");
@@ -135,14 +138,15 @@ async function publishNpm() {
     await runCommand("git", ["tag", `v${releaseVersion}`], { cwd: temporaryDirectory });
     await runCommand("git", ["status", "--short", "--branch"], { cwd: temporaryDirectory });
 
-    if (!await confirm(`校验全部通过。确认推送 main 和 v${releaseVersion}，触发 GitLab npm 发布？`)) {
+    if (!await confirm(`校验全部通过。确认推送 main 和 v${releaseVersion}，触发 GitHub Actions npm 发布？`)) {
       console.log("已取消推送；临时发布内容不会影响仓库。");
       return;
     }
 
     console.log("\n[5/5] 推送并启动 npm 发布流水线");
     await runCommand("git", ["push", "--atomic", "origin", "HEAD:main", `refs/tags/v${releaseVersion}`], { cwd: temporaryDirectory });
-    const pipelineUrl = await waitForGitLabPipeline(`v${releaseVersion}`);
+    const releaseCommit = await captureCommand("git", ["rev-parse", "HEAD"], { cwd: temporaryDirectory });
+    const pipelineUrl = await waitForGitHubWorkflow(`v${releaseVersion}`, releaseCommit);
     console.log(`npm ${releaseVersion} 已发布成功：${pipelineUrl}`);
     console.log("如需同步 Homebrew，再次打开本助手并选择 Homebrew；助手会自动读取 npm Registry 的最新版本。");
   } finally {
@@ -165,16 +169,15 @@ async function publishHomebrew() {
     await ensureRemotePushAccess(temporaryDirectory);
     const formulaPath = path.join(temporaryDirectory, formulaRelativePath);
     const currentFormula = await fs.readFile(formulaPath, "utf8");
-    const currentRelease = readHomebrewFormula(currentFormula);
     const expectedFormula = buildHomebrewFormula(currentFormula, {
-      homepage: gitlabProjectUrl,
+      homepage: githubProjectUrl,
       tarballUrl: npmRelease.tarballUrl,
       sha256: npmRelease.sha256
     });
 
     console.log(`npm 最新版本：${packageJson.name}@${npmRelease.version}`);
     console.log(`npm SHA256：${npmRelease.sha256}`);
-    if (currentRelease.tarballUrl === npmRelease.tarballUrl && currentRelease.sha256 === npmRelease.sha256) {
+    if (currentFormula === expectedFormula) {
       console.log("Homebrew Tap 已经发布此版本，无需重复操作。");
       return;
     }
@@ -198,7 +201,7 @@ async function publishHomebrew() {
     await runCommand("git", ["commit", "-m", `chore(release): 发布 Homebrew v${npmRelease.version}`], { cwd: temporaryDirectory });
     await runCommand("git", ["push", "origin", "HEAD:main"], { cwd: temporaryDirectory });
     console.log(`Homebrew ${npmRelease.version} 已发布。`);
-    console.log("安装入口：brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git");
+    console.log(`安装入口：brew tap linlangli/axiom ${githubProjectUrl}.git`);
     console.log("然后执行：brew install linlangli/axiom/axiomruntime");
   } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
@@ -214,15 +217,16 @@ async function checkReleaseStatus() {
   const npmRelease = await fetchNpmRelease(packageJson.name, "latest");
   const remoteFormula = remoteMain ? await readRemoteFormula().catch(() => "") : "";
   const homebrewRelease = readHomebrewFormula(remoteFormula);
-  const glabReady = commandExists("glab") && await commandSucceeds("glab", ["auth", "status"], projectRoot);
-  const variables = glabReady
-    ? await captureCommand("glab", ["variable", "list"], { cwd: projectRoot }).catch(() => "")
-    : "";
+  const githubReady = commandExists("gh") && await commandSucceeds("gh", ["auth", "status"], projectRoot);
+  const workflowReady = githubReady && await commandSucceeds("gh", [
+    "api", `repos/${githubRepository}/actions/workflows/publish.yml`
+  ], projectRoot);
 
   console.log(`\nGit 工作区：${status ? "有未提交修改，发布 npm 前需要先提交" : "干净"}`);
   console.log(`远端 main：${remoteMain ? "可访问" : "不可访问"}`);
-  console.log(`GitLab 登录：${glabReady ? "已就绪" : "未就绪"}`);
-  console.log(`NPM_TOKEN：${/^NPM_TOKEN\s/m.test(variables) ? "已配置" : "未确认或未配置"}`);
+  console.log(`GitHub 登录：${githubReady ? "已就绪" : "未就绪"}`);
+  console.log(`GitHub npm workflow：${workflowReady ? "已配置" : "未确认或未配置"}`);
+  console.log(`npm 发布认证：GitHub OIDC，无需 NPM_TOKEN；Trusted Publisher 设置：${npmTrustedPublisherUrl}`);
   console.log(`npm 最新版本：${npmRelease.version}`);
   console.log(`Homebrew Tap：${!remoteFormula
     ? "无法读取"
@@ -230,8 +234,7 @@ async function checkReleaseStatus() {
       ? `已发布 ${npmRelease.version}`
       : `未同步 npm ${npmRelease.version}`}`);
 
-  if (!glabReady) await guideGitLabLogin();
-  if (glabReady && !/^NPM_TOKEN\s/m.test(variables)) await guideNpmToken();
+  if (!githubReady) await guideGitHubLogin();
   if (!remoteMain) await guideGitRemoteAccess();
 }
 
@@ -255,6 +258,10 @@ async function ensureBaseTools() {
     if (await confirm("Node.js 版本过低。现在打开下载页面？")) await openUrl(nodeDownloadUrl);
     throw new Error(`当前 Node.js 为 ${process.versions.node}，需要 22.19.0 或更高版本。`);
   }
+  const originUrl = await captureCommand("git", ["remote", "get-url", "--push", "origin"], { cwd: projectRoot });
+  if (readGitHubRepository(originUrl)?.toLowerCase() !== githubRepository.toLowerCase()) {
+    throw new Error(`请先把 origin 指向 git@github.com:${githubRepository}.git，并迁移 main 分支与 tags。`);
+  }
 }
 
 async function guideBaseTools(missing) {
@@ -271,7 +278,7 @@ async function cloneRemoteMain(originUrl, temporaryDirectory) {
     await runCommand("git", ["clone", "--quiet", "--branch", "main", "--single-branch", originUrl, temporaryDirectory], { cwd: projectRoot });
   } catch {
     await guideGitRemoteAccess();
-    throw new Error("无法读取 GitLab main 分支。请完成远端访问设置后重新打开发布助手。");
+    throw new Error("无法读取 GitHub main 分支。请完成远端访问设置后重新打开发布助手。");
   }
 }
 
@@ -280,96 +287,100 @@ async function ensureRemotePushAccess(cwd) {
     await runCommand("git", ["push", "--dry-run", "origin", "HEAD:main"], { cwd });
   } catch {
     await guideGitRemoteAccess();
-    throw new Error("当前 Git 身份没有推送 main 的权限。请完成 GitLab SSH 设置后重试。");
+    throw new Error("当前 Git 身份没有推送 main 的权限。请完成 GitHub SSH 设置后重试。");
   }
 }
 
 async function ensureRemoteTagAbsent(tag) {
   const existing = await captureCommand("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`], { cwd: projectRoot });
   if (!existing) return;
-  const pipelinesUrl = `${gitlabProjectUrl}/-/pipelines?scope=tags`;
-  if (await confirm(`${tag} 已存在，但 npm 中没有对应版本。现在打开 GitLab 流水线检查失败原因？`)) {
+  const pipelinesUrl = `${githubProjectUrl}/actions/workflows/publish.yml`;
+  if (await confirm(`${tag} 已存在，但 npm 中没有对应版本。现在打开 GitHub Actions 检查失败原因？`)) {
     await openUrl(pipelinesUrl);
   }
   throw new Error(`${tag} 已存在，不能重复创建。请先处理已有 tag 的 npm 发布流水线。`);
 }
 
 async function guideGitRemoteAccess() {
-  console.log("\n需要可读写 GitLab 仓库的 Git 身份。发布助手不会要求你输入或保存私钥。");
-  if (await confirm("现在打开 GitLab SSH Keys 设置页面？")) await openUrl(gitlabSshKeysUrl);
+  console.log("\n需要可读写 GitHub 仓库的 Git 身份。发布助手不会要求你输入或保存私钥。");
+  if (await confirm("现在打开 GitHub SSH Keys 设置页面？")) await openUrl(githubSshKeysUrl);
 }
 
-async function waitForGitLabPipeline(tag) {
-  console.log("正在等待 GitLab 返回 npm 发布结果...");
+async function waitForGitHubWorkflow(tag, commit) {
+  console.log("正在等待 GitHub Actions 返回 npm 发布结果...");
   let lastStatus = "";
   for (let attempt = 0; attempt < 240; attempt += 1) {
-    const output = await captureCommand("glab", [
-      "ci",
+    const output = await captureCommand("gh", [
+      "run",
       "list",
-      "--ref",
+      "--repo",
+      githubRepository,
+      "--workflow",
+      "publish.yml",
+      "--branch",
       tag,
-      "--per-page",
+      "--commit",
+      commit,
+      "--event",
+      "push",
+      "--limit",
       "1",
-      "--output",
-      "json"
+      "--json",
+      "status,conclusion,url"
     ], { cwd: projectRoot }).catch(() => "[]");
     const pipelines = JSON.parse(output || "[]");
     const pipeline = pipelines[0];
     if (!pipeline) {
       if (attempt === 0) console.log("流水线正在创建...");
     } else {
-      if (pipeline.status !== lastStatus) {
-        console.log(`GitLab 流水线状态：${pipeline.status}`);
-        lastStatus = pipeline.status;
+      const status = pipeline.conclusion || pipeline.status;
+      if (status !== lastStatus) {
+        console.log(`GitHub Actions 状态：${status}`);
+        lastStatus = status;
       }
-      if (pipeline.status === "success") return pipeline.web_url;
-      if (["failed", "canceled", "skipped"].includes(pipeline.status)) {
-        throw new Error(`npm 发布流水线 ${pipeline.status}：${pipeline.web_url}`);
+      if (pipeline.status === "completed") {
+        if (pipeline.conclusion === "success") return pipeline.url;
+        throw new Error(`npm 发布流水线 ${status}：${pipeline.url}`);
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
-  throw new Error(`等待 npm 发布超时，请打开 GitLab 查看：${gitlabProjectUrl}/-/pipelines?scope=tags`);
+  throw new Error(`等待 npm 发布超时，请打开 GitHub Actions 查看：${githubProjectUrl}/actions/workflows/publish.yml`);
 }
 
-async function ensureGitLabReadyForNpm() {
-  if (!commandExists("glab")) {
-    await guideGlabInstall();
-    throw new Error("GitLab CLI 尚未就绪。安装完成后重新打开发布助手。");
+async function ensureGitHubReadyForNpm() {
+  if (!commandExists("gh")) {
+    await guideGhInstall();
+    throw new Error("GitHub CLI 尚未就绪。安装完成后重新打开发布助手。");
   }
-  if (!await commandSucceeds("glab", ["auth", "status"], projectRoot)) {
-    await guideGitLabLogin();
-    throw new Error("GitLab 尚未登录。登录完成后重新打开发布助手。");
+  if (!await commandSucceeds("gh", ["auth", "status"], projectRoot)) {
+    await guideGitHubLogin();
+    throw new Error("GitHub 尚未登录。登录完成后重新打开发布助手。");
   }
-  const variables = await captureCommand("glab", ["variable", "list"], { cwd: projectRoot });
-  if (!/^NPM_TOKEN\s/m.test(variables)) {
-    await guideNpmToken();
-    throw new Error("GitLab CI 缺少 NPM_TOKEN。配置完成后重新打开发布助手。");
+  const workflow = JSON.parse(await captureCommand("gh", [
+    "api", `repos/${githubRepository}/actions/workflows/publish.yml`
+  ], { cwd: projectRoot }));
+  if (workflow.state !== "active") {
+    throw new Error(`请先启用 GitHub Actions publish.yml：${githubProjectUrl}/actions/workflows/publish.yml`);
   }
+  console.log(`npm 使用 GitHub OIDC；Trusted Publisher 必须匹配 ${githubRepository} / publish.yml / npm-production。`);
+  console.log(`npm 设置：${npmTrustedPublisherUrl}`);
 }
 
-async function guideGlabInstall() {
-  console.log("\n需要 GitLab CLI 来检查登录和发布变量。");
-  if (process.platform === "darwin" && commandExists("brew") && await confirm("现在自动安装 GitLab CLI？")) {
-    await runCommand("brew", ["install", "glab"], { cwd: projectRoot });
+async function guideGhInstall() {
+  console.log("\n需要 GitHub CLI 来检查登录、发布 workflow 和 Actions 结果。");
+  if (process.platform === "darwin" && commandExists("brew") && await confirm("现在自动安装 GitHub CLI？")) {
+    await runCommand("brew", ["install", "gh"], { cwd: projectRoot });
     return;
   }
-  console.log("请安装 GitLab CLI：https://gitlab.com/gitlab-org/cli");
+  console.log("请安装 GitHub CLI：https://cli.github.com/");
 }
 
-async function guideGitLabLogin() {
-  console.log("\n需要登录 GitLab。发布助手可以替你启动登录向导，无需记命令。");
-  if (commandExists("glab") && await confirm("现在启动 GitLab 登录向导？")) {
-    await runCommand("glab", ["auth", "login"], { cwd: projectRoot });
+async function guideGitHubLogin() {
+  console.log("\n需要登录有仓库权限的 GitHub 账号。发布助手可以替你启动登录向导。");
+  if (commandExists("gh") && await confirm("现在启动 GitHub 登录向导？")) {
+    await runCommand("gh", ["auth", "login", "--hostname", "github.com"], { cwd: projectRoot });
   }
-}
-
-async function guideNpmToken() {
-  console.log("\n需要先创建 npm Automation Token，并保存为 GitLab CI 变量 NPM_TOKEN。");
-  if (await confirm("现在打开 npm Token 页面和 GitLab CI 变量页面？")) {
-    await Promise.all([openUrl(npmTokenUrl), openUrl(gitlabVariablesUrl)]);
-  }
-  console.log("在 npm 创建 Automation Token；然后在 GitLab 新建名为 NPM_TOKEN 的 masked 变量。完成后重新打开发布助手。");
 }
 
 async function chooseNpmVersion(currentVersion, currentPublished) {

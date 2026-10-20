@@ -18,7 +18,7 @@ async function main() {
   const release = await fetchNpmRelease(packageJson.name, packageJson.version);
   const currentFormula = await fs.readFile(formulaPath, "utf8");
   const expectedFormula = buildHomebrewFormula(currentFormula, {
-    homepage: "https://gitlab.com/linlangli/axiom",
+    homepage: "https://github.com/linlangli/AxiomRuntime",
     tarballUrl: release.tarballUrl,
     sha256: release.sha256
   });

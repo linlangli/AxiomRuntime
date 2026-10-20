@@ -828,7 +828,47 @@ traceId 是**诊断关联键，不是审计事实**：历史日志没有该字�
 - **优先在类型化 adapter 后采用成熟库**，而不是重新实现通用引擎
 - JSON 存储使用**临时文件 + 原子重命名**，避免并发进程损坏
 - `providers.json` 是稳定、人类可编辑的；内部运行状态放在独立文件
-- Node.js 最低版本在 `package.json`、`.gitlab-ci.yml` 和文档间**保持同步**
+- Node.js 最低版本在 `package.json`、`.gitlab-ci.yml`、`.github/workflows/*.yml` 和文档间**保持同步**
+
+### GitHub Actions 与仓库迁移
+
+主仓库为 `https://github.com/linlangli/AxiomRuntime`。`.gitlab-ci.yml` 保留，GitHub 使用独立 workflow：
+
+| 文件 | 触发 | 验证与副作用 |
+|---|---|---|
+| `.github/workflows/ci.yml` | branch push、`pull_request`、`workflow_dispatch` | Node.js `22.19.0`，安装根目录与 `web` 依赖，执行 `npm test` 与前端 `typecheck` |
+| `ci.yml` 的 `build_portal` / `deploy_portal` | 仅默认分支 push，且测试成功 | 上传保留 7 天的静态 artifact；`portal-production` 串行部署，失败恢复上一 release |
+| `.github/workflows/publish.yml` | `v*` tag push | tag 提交必须属于默认分支，版本必须等于 `package.json.version`；完整测试、前端类型检查与 `npm pack --dry-run` 后发布 npm |
+
+使用 GitHub 托管的 `ubuntu-latest` runner；当前流水线不需要在生产服务器安装 Actions runner。默认 `GITHUB_TOKEN` 仅有 `contents: read`，只有 npm 发布 job 额外申请 `id-token: write` 以交换短期 npm 发布凭证；checkout 不持久化 Git 凭证，第三方 Actions 固定完整 commit SHA。PR 不进入部署或 npm 发布 job。默认分支流水线不自动取消，避免中断正在切换门户的 SSH 部署；跨 workflow 的门户部署由独立 concurrency group 串行化。GitLab 与 GitHub 的并发组互不共享，迁移后部署提交应只推送到选定的主仓库。
+
+变量必须显式迁移，Git push 不包含 GitLab CI/CD variables：
+
+| 名称 | GitHub 存放位置 | 用途 |
+|---|---|---|
+| `PORTAL_SSH_HOST` | `portal-production` Environment Variable，必填 | SSH 主机，例如 `154.201.73.41` |
+| `PORTAL_SSH_USER` | 同上，可选 | 默认 `axiom-portal-deploy`，禁止注入 root 私钥 |
+| `PORTAL_DEPLOY_ROOT` | 同上，可选 | 默认 `/srv/axiomruntime-portal` |
+| `PORTAL_HEALTH_URL` | 同上，可选 | 默认 `https://axiom.offerpilot.life/` |
+| `PORTAL_SSH_PRIVATE_KEY_B64` | `portal-production` Environment Secret，必填 | 专用部署私钥的单行 base64；base64 不是加密 |
+| `PORTAL_SSH_KNOWN_HOSTS` | 同上，必填 | 经可信 SSH 连接核对的主机公钥；保留 `StrictHostKeyChecking=yes` |
+
+GitHub npm 发布使用 OIDC Trusted Publisher，不读取 `NPM_TOKEN`。在 npm 包 `@offerpilot/axiomruntime` 的 Settings 配置 GitHub Actions connection：owner `linlangli`、repository `AxiomRuntime`、workflow filename `publish.yml`、environment `npm-production`，仅启用 `Allow npm publish`，不授权独立 `npm dist-tag` 管理。workflow 固定升级到支持 OIDC 的 `npm@11.11.0`，执行带 provenance 的发布；不保存长期 npm token。npm 新连接可能显示 `Pending validation`，维护者须在页面指定截止时间前完成一次获准的新版本发布，才算验证信任关系；超时后重新核对连接状态。原 GitLab CI 仍按既有 `NPM_TOKEN` 变量工作，该凭证不属于 GitHub 迁移前置条件。
+
+Environment 必须限制部署 ref：`portal-production` 只允许 `main` branch，`npm-production` 只允许 `v*` tag；默认分支改名时同步修改 Environment branch policy。密钥仅在使用它的 step 中通过 `env` 注入。GitHub 自动提供 `GITHUB_SHA`、`GITHUB_RUN_ID`、`GITHUB_RUN_ATTEMPT`；门户 release 使用 `<sha>-<run_id>-<attempt>`，重跑不会撞目录。原 GitLab `CI_COMMIT_SHA` / `CI_JOB_ID` 仍支持原有 `<sha>-<job_id>` 格式。服务器继续使用现有静态目录、Nginx 和最小权限 SSH 账号；`deploy/remote-deploy.sh` 的 Runtime Docker 部署不属于现有 CI 自动发布范围。
+
+无法登录 GitLab 时，可从本机完整 Git object database 迁移已保存的 branches/tags。先备份，再保留 GitLab remote 并更换 `origin`，对空 GitHub 仓库显式推送所需 refs，避免 `--mirror` 的删除语义：
+
+```bash
+git bundle create ../AxiomRuntime-before-github.bundle --all
+git remote add gitlab "$(git remote get-url origin)"
+git remote set-url origin git@github.com:linlangli/AxiomRuntime.git
+git push -u origin main develop feature/review
+git push origin --tags
+gh repo edit linlangli/AxiomRuntime --default-branch main
+```
+
+这组命令针对尚未切换 remote 的首次迁移。备份和 push 只包含已提交对象；工作区修改必须另行保留并在提交后推送。只能恢复本机已有的 refs，GitLab 独有且从未 fetch 的提交、Issues/Merge Requests、CI 日志、artifacts、变量和 Registry 不会随 Git 迁移。迁移历史 tags 前可暂时关闭 GitHub Actions，导入完成并配置好部署 Secrets 后再启用，避免意外重发历史 npm 版本。现有 npm 包与版本保持不变；`scripts/release.js` 使用 `gh` 检查发布 workflow、定位当前 tag/commit 的 `publish.yml` run，并等待明确的成功结论。发布前要求 `origin` 指向该 GitHub 仓库；Homebrew 继续使用原 Tap 名 `linlangli/axiom`，通过显式 GitHub URL 获取 Formula。
 
 ### 构建与测试
 

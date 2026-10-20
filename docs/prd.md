@@ -432,7 +432,9 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 
 🟡 对外服务支持配置 API 上游/公网入口、选择已实现能力、创建可撤销的能力凭证、生成 Nginx 片段和调用示例。Runtime server 可按请求检查全局能力白名单与凭证能力；反代/TLS 部署、Provider/模型级额度与组织权限仍未实现。
 
-🟢 公网门户 `axiom.offerpilot.life` 已部署为独立静态站点；门户构建不进入 npm 包，也不读取本机控制面。默认分支的 GitLab CI 使用受保护的 `portal-production` 环境变量，通过最小权限 SSH 账号发布不可变 release，健康检查失败自动 rollback。证书续期、Nginx SNI 分流和服务器初始化属于部署前置运维步骤。
+🟢 公网门户 `axiom.offerpilot.life` 已部署为独立静态站点；门户构建不进入 npm 包，也不读取本机控制面。GitHub Actions 在默认分支测试成功后构建门户，通过 `portal-production` Environment 的 Variables/Secrets 和最小权限 SSH 账号发布不可变 release，健康检查失败自动 rollback；原 `.gitlab-ci.yml` 保留。证书续期、Nginx SNI 分流和服务器初始化属于部署前置运维步骤。
+
+仓库迁移交付门槛：GitHub `linlangli/AxiomRuntime` 保留本机已有的 branch/tag 历史，PR 测试不使用部署 Secrets；门户 Environment 只接受 `main` branch，npm Environment 只接受 `v*` tag。npm 发布必须校验默认分支包含该提交、tag 与包版本一致，并通过完整测试和前端类型检查；使用 npm OIDC Trusted Publisher，绑定该仓库、`publish.yml` 与 `npm-production`，无需长期 `NPM_TOKEN`。GitLab CI/CD variables 不会自动迁移，SSH 专用凭证必须重新注入。使用 GitHub 托管 runner，无生产服务器 runner 依赖；线上首次 Actions 运行成功才算迁移验收通过，npm 实际发布需在下次明确授权的新版本发版时验证，不为验收重发历史版本。npm 新连接若显示 `Pending validation`，维护者须在页面截止时间前完成授权发布，否则重新核对信任连接。维护者负责推送 workflow、配置部署 Secrets 与 npm 信任连接并完成首次运行；未完成项属于迁移运维 gate，不改变既有 Runtime 能力状态。
 
 | 模块 | 内容 |
 |---|---|

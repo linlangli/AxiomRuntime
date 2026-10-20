@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-for variable in PORTAL_SSH_HOST PORTAL_SSH_USER PORTAL_SSH_PRIVATE_KEY_B64 PORTAL_SSH_KNOWN_HOSTS CI_COMMIT_SHA CI_JOB_ID; do
+deploy_commit_sha="${CI_COMMIT_SHA:-${GITHUB_SHA:-}}"
+deploy_job_id="${CI_JOB_ID:-${GITHUB_RUN_ID:-}}"
+
+for variable in PORTAL_SSH_HOST PORTAL_SSH_USER PORTAL_SSH_PRIVATE_KEY_B64 PORTAL_SSH_KNOWN_HOSTS deploy_commit_sha deploy_job_id; do
   if [[ -z "${!variable:-}" ]]; then
     echo "$variable is required" >&2
     exit 1
@@ -15,8 +18,11 @@ fi
 
 deploy_root="${PORTAL_DEPLOY_ROOT:-/srv/axiomruntime-portal}"
 health_url="${PORTAL_HEALTH_URL:-https://axiom.offerpilot.life/}"
-release="${CI_COMMIT_SHA}-${CI_JOB_ID}"
-if [[ ! "$deploy_root" =~ ^/[A-Za-z0-9/_-]+$ || "$deploy_root" == "/" || ! "$release" =~ ^[0-9a-f]{40}-[0-9]+$ ]]; then
+release="${deploy_commit_sha}-${deploy_job_id}"
+if [[ -z "${CI_JOB_ID:-}" && -n "${GITHUB_RUN_ID:-}" ]]; then
+  release+="-${GITHUB_RUN_ATTEMPT:-1}"
+fi
+if [[ ! "$deploy_root" =~ ^/[A-Za-z0-9/_-]+$ || "$deploy_root" == "/" || ! "$release" =~ ^[0-9a-f]{40}-[0-9]+(-[0-9]+)?$ ]]; then
   echo "Invalid deployment path or commit SHA" >&2
   exit 1
 fi
