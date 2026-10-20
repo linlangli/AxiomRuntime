@@ -68,6 +68,10 @@ export interface SessionItem {
   id: string; tool: string; provider: string; model: string; startedAt: string; endedAt: string | null
   status: string; exitCode: number | null; fallbackFrom: string | null
 }
+export interface CodexUsageStatus {
+  enabled: boolean; enabledAt: string | null; codexHome: string; providerMappings: Record<string, string>
+  lastSyncAt: string | null; lastError: string | null; unmappedProviderIds: string[]; invalidEvents: number
+}
 export interface Dashboard {
   generatedAt: string; configRoot: string; providers: ProviderStatus[]
   usage: {
@@ -81,4 +85,5 @@ export interface Dashboard {
   calls: CallItem[]; logs: LogItem[]; sessions: SessionItem[]
   codex: { providerId: string; model: string | null; proxy: string | null; authConfigured: boolean; configPresent: boolean; configPath: string; authPath: string }
   settings: LocalSettings
+  codexUsage: CodexUsageStatus
 }

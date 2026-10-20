@@ -9,16 +9,21 @@ import {
 import { listProviders } from "../../core/providers/provider-service.js";
 import type { CacheFile, Provider } from "../../core/types.js";
 import { promptSelect, promptText } from "../prompts/prompt.js";
+import { configureCodexAppUsage, getCodexAppUsageConfig, syncCodexAppUsage } from "../../core/usage/codex-app-usage.js";
 
 type CodexSetMode = "chatgpt" | "provider" | "proxy";
 
-const SET_CODEX_USAGE = "Usage: ai set codex [chatgpt | provider [name] [model-id] | proxy <host:port|url|off>]";
+const SET_CODEX_USAGE = "Usage: ai set codex [chatgpt | provider [name] [model-id] | proxy <host:port|url|off> | usage <on|off|status|map <codex-provider-id> <provider-name>>]";
 
 export async function runSetCommand(args: string[]): Promise<void> {
   const [targetArg, modeArg, providerNameArg, modelArg, ...extra] = args;
   const target = targetArg ?? "codex";
   if (target !== "codex") {
     throw new Error(SET_CODEX_USAGE);
+  }
+  if (modeArg === "usage") {
+    await setCodexUsage(args.slice(2));
+    return;
   }
   if (extra.length) {
     throw new Error(SET_CODEX_USAGE);
@@ -76,6 +81,18 @@ export async function runSetCommand(args: string[]): Promise<void> {
       restartScheduled: result.restart.scheduled
     }
   });
+}
+
+async function setCodexUsage(args: string[]): Promise<void> {
+  const [mode, identifier, provider, ...extra] = args;
+  if (extra.length || !["on", "off", "status", "map"].includes(mode ?? "") || (mode === "map" ? !identifier || !provider : args.length !== 1)) throw new Error(SET_CODEX_USAGE);
+  if (mode !== "status") {
+    if (mode === "map") {
+      const config = await getCodexAppUsageConfig();
+      await configureCodexAppUsage({ ...config, providerMappings: { ...config.providerMappings, [identifier!]: provider! } });
+    } else await configureCodexAppUsage({ enabled: mode === "on" });
+  }
+  console.log(JSON.stringify(await syncCodexAppUsage({ force: true }), null, 2));
 }
 
 async function getMode(value?: string): Promise<CodexSetMode> {

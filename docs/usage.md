@@ -377,6 +377,23 @@ ai set codex proxy off              # 清除
 
 macOS 会同步当前登录会话的 launchd 环境，让重启后的 Codex App 也能继承代理。同步失败会回滚配置且不重启。注销或重启 macOS 后需要重新执行本命令。
 
+### 统计 Codex App 的 Token
+
+```bash
+ai set codex usage on                 # 开启本机 App 用量采集
+ai set codex usage status             # 同步并查看状态和未匹配的 Provider ID
+ai set codex usage map openai 我的站    # 将原生 Provider ID 显式归属到已配置的服务商
+ai set codex usage off                # 停止采集，保留已有统计
+```
+
+也可进入 `ai web` →「本地配置 → 工具配置 → Codex App 用量采集」，编辑开关、本机 Codex 目录和 Provider 对应关系。默认目录为 `CODEX_HOME`，未设置时为 `~/.codex`。同名 Provider 和 Runtime 生成的 Provider ID 自动匹配；自定义 ID 或 ChatGPT 登录的 `openai` 无法确定归属时，先选择已有服务商再保存，不会猜测记账。映射后的用量与 Runtime 原有用量合并，模型自动进入该 Provider 的价格设置列表。
+
+默认关闭，从启用时开始统计真实 Token。刷新面板或执行 `ai status` / `ai set codex usage status` 时增量同步，打开面板后约每 15 秒刷新；不需要重启 Codex App。首次启用前与关闭期间的用量不补录，已有聊天的新用量仍可采集；未知 Provider 在完成映射后补计本次启用以来的相关记录。更换 Codex 目录会重新设置采集起点。关闭采集不会删除已入账数据。
+
+采集只读本机 `sessions` 和 `archived_sessions` 的 Codex Desktop 会话记录，不保存提示词、回复、附件或密钥，不修改登录和网络配置。缓存输入属于输入 Token，reasoning 属于输出 Token，均不重复相加；重复事件、文件重读和进程重启不会重复记账。`ai use codex` / `ai proxy codex` 的代理会话及独立 CLI、SDK 会话排除。成本仍由「用量统计」中的 Provider/模型价格估算，ChatGPT 订阅用量的估算不代表额外账单。
+
+此功能适配 Codex 本地内部 JSONL 格式，并非稳定的公开 API；云端任务与未标记桌面身份的记录不在范围内。格式变化、非法或回退的计数会跳过并在工具配置页提示；目录不可读时保留账本并提示检查设置。采集配置和游标不属于 Web 配置快照，恢复快照不会回退采集起点或自动开启采集。
+
 ---
 
 ## 8. Telegram Bot
@@ -590,13 +607,13 @@ ai web
 
 命令启动仅监听 `127.0.0.1` 的临时端口并打开浏览器；终端保持运行，按 `Ctrl+C` 关闭。打开链接含一次运行有效的访问 token；不要把链接发给别人。控制面板可查看 Provider 健康缓存、真实用量趋势、最近日志与会话，添加/编辑/删除或检查 Provider，也可执行与 `ai set codex` 等价的持久配置操作。添加或改动 Provider 地址、API Key 会先进行真实探测，可能产生少量 Token。
 
-Web 控制面的「本地配置」提供「服务配置、模型路由、工具配置、网络代理、消息接入、记忆设置、配置维护」七个二级分类。可以在浏览器编辑 Provider、自动切换、Codex 持久配置、Runtime/Provider 出站代理、具名 Telegram Bot 和 embedding 连接；提交前会展示变更预览，写入前自动创建本机快照，失败由 core 保留旧配置。Claude Code 用户级区域只读，复制 `ai use claude` 在终端执行。Codex App/CLI 在同一 `CODEX_HOME` 下共享用户级配置；旧聊天不会迁移，请新建聊天。配置维护可恢复最近 20 个受限权限快照，但不包含用量账本、数据库或 Codex 用户配置。
+Web 控制面的「本地配置」提供「服务配置、模型路由、工具配置、网络代理、消息接入、记忆设置、配置维护」七个二级分类。可以在浏览器编辑 Provider、自动切换、Codex 持久配置、Runtime/Provider 出站代理、具名 Telegram Bot 和 embedding 连接；提交前会展示变更预览，受管配置写入前自动创建本机快照，失败由 core 保留旧配置。Claude Code 用户级区域只读，复制 `ai use claude` 在终端执行。Codex App/CLI 在同一 `CODEX_HOME` 下共享用户级配置；旧聊天不会迁移，请新建聊天。配置维护可恢复最近 20 个受限权限快照，但不包含用量账本、数据库、Codex 用户配置或 Codex App 采集设置与游标。
 
 「对外服务」提供「反代接入、能力开放、访问控制、接入测试」四个二级分类。页面编辑 API 上游和公网 HTTPS 入口，按接口能力勾选开放项，为每个调用方创建独立凭证并可撤销，凭证只在创建时显示一次，落盘只保留摘要。它会生成 Nginx 片段和 curl 示例；Web 不会写远程服务器，也不会把本机管理页面暴露出去。启动 API 服务时可使用这份能力配置，逐请求检查全局开放能力和凭证权限。
 
 保存开放配置并创建凭证后，在运行 Runtime 的机器执行 `npm run server`；默认监听 `127.0.0.1:8080`，可用 `AI_GATEWAY_SERVER_HOST` / `AI_GATEWAY_SERVER_PORT` 修改。首次启用开放配置需重启已运行的 API 服务，之后能力关闭与凭证撤销逐请求生效。旧的 `AI_GATEWAY_SERVER_TOKEN` / `AI_GATEWAY_SERVER_TOKEN_FILE` 仍支持，但也受全局开放能力范围限制。反代片段中的上游地址从反代服务器视角填写；Runtime 在另一台电脑时先建立 VPN 或隧道。单个 Provider／模型限制、限流额度与组织权限仍未实现。
 
-「用量统计」支持最近 7/30/70 个 UTC 自然日和 Provider 筛选。趋势图可切换总量/输入/输出；调用活动采用 GitHub 式按周排列的 7 天小方格，短区间保留浅色日历上下文，不拉伸方格或改变排列语义，统计数字只来自当前筛选区间；Provider 占比使用圆角、无间隔分段、轻量涂鸦纹理和可切换图例的环形图。成本卡片右上角的设置按钮可以按 Provider/模型编辑输入、输出和可选 Cache Read 价格（美元/百万 token）。Provider 下拉完整列出当前所有配置、历史 usage 和已有价格键，直接选择即可切换；模型下拉列出对应 Provider 缓存目录、默认模型、历史 usage 模型和已有价格键，也可选择「手动输入模型…」填写模型 ID。切换 Provider 会更新模型和价格，保存后当前区间立即重算；未配置价格的事件会单独提示且不计入成本。点击趋势或活动日期进入「运行记录 → 调用记录」，保留 UTC 日期筛选。图表只反映 Runtime 已记录的 usage，不包含未经过 Runtime 的直接调用。
+「用量统计」支持最近 7/30/70 个 UTC 自然日和 Provider 筛选。趋势图可切换总量/输入/输出；调用活动采用 GitHub 式按周排列的 7 天小方格，短区间保留浅色日历上下文，不拉伸方格或改变排列语义，统计数字只来自当前筛选区间；Provider 占比使用圆角、无间隔分段、轻量涂鸦纹理和可切换图例的环形图。成本卡片右上角的设置按钮可以按 Provider/模型编辑输入、输出和可选 Cache Read 价格（美元/百万 token）。Provider 下拉完整列出当前所有配置、历史 usage 和已有价格键，直接选择即可切换；模型下拉列出对应 Provider 缓存目录、默认模型、历史 usage 模型和已有价格键，也可选择「手动输入模型…」填写模型 ID。切换 Provider 会更新模型和价格，保存后当前区间立即重算；未配置价格的事件会单独提示且不计入成本。点击趋势或活动日期进入「运行记录 → 调用记录」，保留 UTC 日期筛选。图表包括 Runtime 代理用量及显式启用采集后的 Codex App 本机用量，均按实际 Provider/模型汇总，不推测其他未采集的直接调用。App 用量不会创建 Runtime 调用链路或工具会话记录。
 
 升级后若仍有旧版 `ai web` 进程运行，请在原终端按 `Ctrl+C`，重新运行 `ai web` 打开新版页面；旧数据无需迁移。新版界面遇到旧服务响应时会提示重启，避免使用缺失字段。
 
@@ -675,6 +692,8 @@ AI_GATEWAY_HOME=/path/to/config ai provider list
 ```text
 ~/.ai-gateway/.ai-cache.json        模型缓存和健康状态
 ~/.ai-gateway/usage.json            用量账本
+~/.ai-gateway/codex-usage.json      Codex App 采集设置
+~/.ai-gateway/codex-usage-state.json Codex App 增量采集游标（无对话正文）
 ~/.ai-gateway/sessions.json         会话记录
 ~/.ai-gateway/memory.json           记忆检索的 embedding 配置
 ~/.ai-gateway/memory.sqlite         Telegram 记忆库
@@ -705,7 +724,7 @@ Node.js 版本低于 22.19.0。升级后重新安装，别忽略警告。
 按顺序查：`ai telegram status --bot <名字>` → `ai telegram logs --bot <名字>` → 确认 `allowedUserIds` 里有你的 ID → 确认能连上 `api.telegram.org`（可能需要 `proxyUrl`）。
 
 **`ai status` 里的 token 统计不全**
-统计从「安装了支持统一代理的版本之后」产生的新请求开始生效。旧版本里没走代理的历史**不会**被扫描补录 —— 这是刻意的，避免把 token 归错服务商或重复计数。
+Runtime 代理用量从安装了支持统一代理的版本之后的新请求开始生效；Codex App 用量从显式开启采集后开始生效。首次开启前和关闭期间的历史不会补录，避免把 Token 归错服务商或重复计数。
 
 **用量按什么聚合**
 按服务商的精确名称。同一服务商下不同模型会合并展示，但每条事件仍保留实际模型。不同服务商名称不合并。

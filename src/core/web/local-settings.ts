@@ -11,6 +11,7 @@ import { listProviders, setProviderProxy } from "../providers/provider-service.j
 import { clearMemoryEmbeddingConfig, getMemoryEmbeddingConfig, setMemoryEmbeddingConfig } from "../memory/memory-config.js";
 import { checkMemoryEmbeddingConfig, checkAndRecordMemoryEmbeddingConfig } from "../memory/embedding-check.js";
 import { writeLog } from "../logs/log-service.js";
+import { configureCodexAppUsage, syncCodexAppUsage } from "../usage/codex-app-usage.js";
 
 const MANAGED_FILES = ["runtime.json", "providers.json", "memory.json", "model-pricing.json", "telegram.json", "service-exposure.json"];
 const BOT_NAME = /^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$/;
@@ -34,6 +35,11 @@ export async function getLocalSettings() {
 
 export async function applyLocalSettings(input: Record<string, unknown>) {
   const action = input.action;
+  if (action === "codex-usage") {
+    await configureCodexAppUsage(input);
+    const status = await syncCodexAppUsage({ force: true });
+    return { effect: status.lastError ?? (status.enabled ? "Codex App 用量采集已开启，按 Provider 统计启用后的用量，无需重启 App。" : "Codex App 用量采集已关闭，已有统计保留。") };
+  }
   if (action === "backup") return createSettingsBackup();
   if (action === "restore") {
     await restoreSettingsBackup(stringValue(input.id));

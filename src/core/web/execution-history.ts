@@ -9,7 +9,7 @@ const checks = new Set(["provider_health_check", "provider_model_discovery", "pr
 
 function historyCategory(event: LogEvent): HistoryCategory {
   if (checks.has(event.action)) return "check";
-  if (/^(web_settings_|web_model_pricing_|codex_provider_set$|codex_proxy_set$)/.test(event.action)) return "config";
+  if (/^(web_settings_|web_model_pricing_|codex_provider_set$|codex_proxy_set$|codex_usage_configured$)/.test(event.action)) return "config";
   if (successes.has(event.action) || failures.has(event.action) || switches.has(event.action) ||
       /^(provider_resolved|provider_retry$|provider_failover_|fallback_skip_provider$|failover_disabled$|tool_start$|tool_spawn$|claude_start$|codex_start$|openai_usage_proxy_|runtime_server_request_settled$|image_generat)/.test(event.action)) return "model";
   return "system";

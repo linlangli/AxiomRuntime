@@ -446,6 +446,7 @@
         <a class="nav-link" href="#install"><span>安装</span><span class="nav-count">npm</span></a>
         <a class="nav-link" href="#commands"><span>命令索引</span><span class="nav-count">常用入口</span></a>
         <a class="nav-link" href="#use"><span>使用模型</span><span class="nav-count">use / last</span></a>
+        <a class="nav-link" href="#codex-usage"><span>App 用量</span><span class="nav-count">Codex</span></a>
         <a class="nav-link" href="#providers"><span>Provider</span><span class="nav-count">add / edit / delete</span></a>
         <a class="nav-link" href="#memory"><span>Memory</span><span class="nav-count">embedding</span></a>
         <a class="nav-link" href="#telegram"><span>Telegram</span><span class="nav-count">Bot</span></a>
@@ -567,6 +568,12 @@ brew update</pre>
                 <td><code class="cmd">ai set codex chatgpt</code><br /><code class="cmd">ai set codex provider 51talk-cq gpt-5.6-sol</code><br /><code class="cmd">ai set codex provider 51talk-cq</code><br /><code class="cmd">ai set codex provider</code><br /><code class="cmd">ai set codex proxy 127.0.0.1:7890</code></td>
                 <td>持久切换 Codex App 的 ChatGPT 账号、已添加 provider 或 HTTP proxy。</td>
                 <td>一致更新配置与必要环境，成功后重启 app。</td>
+              </tr>
+              <tr data-search="set codex usage token provider map app 采集 统计 对应关系">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai set codex usage on</code><br /><code class="cmd">ai set codex usage off</code><br /><code class="cmd">ai set codex usage status</code><br /><code class="cmd">ai set codex usage map openai 我的站</code></td>
+                <td>只读采集本机 Codex App 的真实 Token，按 Provider 和模型汇入现有用量统计。</td>
+                <td>默认关闭，从启用时起统计。未知 Provider 需显式映射；不补录首次启用前或关闭期间的历史，无需重启 App。Web 的「本地配置 → 工具配置」也可设置目录和对应关系。</td>
               </tr>
               <tr data-search="last resume previous selection">
                 <td><span class="group-label">使用</span></td>
@@ -756,6 +763,28 @@ ai set codex proxy off</pre>
                   <li>成功后 macOS 会重启 <code>Codex.app</code> 或当前名称的 <code>ChatGPT.app</code>，并清理重启进程继承的 <code>OPENAI_API_KEY</code>，确保客户端读取刚写入的 <code>auth.json</code>；无法自动重启时按提示手动操作。</li>
                   <li><code>proxy</code> 把裸 <code>host:port</code> 规范化为 HTTP origin，只更新 <code>shell_environment_policy.set</code> 的大小写 HTTP(S)/ALL proxy keys；<code>off</code> 清除这些 managed keys，不修改 <code>auth.json</code>。</li>
                   <li>Proxy URL 禁止包含账号密码、path、query 或 fragment，command usage log 会整体脱敏。macOS 会同步当前登录会话的 user launchd environment；失败时恢复原 config 且不重启，注销或重启 macOS 后需重新运行本命令。</li>
+                </ul>
+              </div>
+            </details>
+          </section>
+
+          <section class="panel" id="codex-usage">
+            <h2>Codex App 用量采集</h2>
+            <details open>
+              <summary>按 Provider 统计本机 App 的 Token</summary>
+              <div class="detail-body">
+                <pre>ai set codex usage on
+ai set codex usage status
+ai set codex usage map openai 我的站
+ai set codex usage off</pre>
+                <p>也可在 Web「本地配置 → 工具配置 → Codex App 用量采集」编辑开关、Codex 本机目录和 Provider 对应关系。默认目录为 <code>CODEX_HOME</code>，未设置时为 <code>~/.codex</code>。同名 Provider 与 Runtime 生成的 ID 自动匹配；自定义 ID、ChatGPT 登录的 <code>openai</code> 等无法确定归属时，选择已配置的服务商后保存。</p>
+                <ul>
+                  <li>默认关闭，从启用时开始。刷新面板或执行 <code>ai status</code> / <code>ai set codex usage status</code> 时同步；面板打开时约每 15 秒刷新，无需重启 App。首次启用前和关闭期间的历史不补录，更换目录重新设置采集起点，关闭后已有统计保留。</li>
+                  <li>只读 <code>sessions</code> 和 <code>archived_sessions</code> 中带 Codex Desktop 身份的本机会话记录，以实际 <code>model_provider</code> 和模型入账。未知 ID 暂不计入，映射后补计本次启用以来的相关记录；不按当前配置猜测旧会话归属。</li>
+                  <li>合并到原有 Provider 图表、周用量和模型价格列表。Cache Read 已含在输入，reasoning 已含在输出，不重复计数；费用按 Provider/模型配置估算，ChatGPT 订阅的估算不代表额外账单。</li>
+                  <li>重复事件、并发同步、文件重读和游标恢复不会重复记账。Runtime 代理会话、独立 CLI 与 SDK 会话排除；不修改 Codex 登录、网络配置，不保存提示词、回复、附件或密钥。</li>
+                  <li>这是对 Codex 内部 JSONL 格式的适配，并非稳定公开 API；格式变化可能暂停采集，非法或回退的计数跳过并显示诊断，目录不可读时保留原账本。云端任务和未带桌面身份的记录不在范围内。</li>
+                  <li><code>codex-usage.json</code> 保存采集设置，<code>codex-usage-state.json</code> 保存增量游标，不进入 Web 配置快照，恢复快照不会自动启用采集或回退采集起点。</li>
                 </ul>
               </div>
             </details>

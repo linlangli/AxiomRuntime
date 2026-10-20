@@ -124,6 +124,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | 真实用量采集 | 🟢 | execution-scoped 本地代理，解析真实响应 |
+| Codex App 本机用量 | 🟢 | 显式开启后只读桌面会话真实 Token，按实际 Provider/模型归属，复用唯一账本；内部 JSONL 格式适配，云端任务不覆盖 |
 | Anthropic + OpenAI 双协议 | 🟢 | Claude 走 `/v1/messages`，Codex 走 OpenAI 兼容 `/v1` |
 | streaming 用量合并 | 🟢 | input/cache/output 在同一响应内合并 |
 | 服务商返回成本优先 | 🟢 | 有 `cost_usd` 用真实值 |
@@ -422,7 +423,7 @@ ai web    # 启动本机基础控制面板
 
 Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大版，**不拥有独立业务逻辑**。所有写操作调用与 CLI/API 相同的核心契约，并显示 policy decision、影响 scope、revision、审批状态与 rollback 入口。
 
-🟢 本机控制面已拆分为运行总览、用量统计、本地配置、运行记录、对外服务、帮助中心六个一级页面。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 汇总表、Token 趋势、GitHub 式周列 × 7 天小方格调用活动和带圆角轻量涂鸦纹理的占比图；短区间保留至少 70 天日历上下文，区间外日期以淡灰格标识，不作为零用量计入统计。成本卡片支持通过 core pricing API 按 Provider/模型维护美元/百万 token 价格，Provider 完整下拉列表合并当前配置、历史 usage 和已有价格键，模型下拉合并缓存目录、默认模型、历史 usage 模型和已有价格键，并支持手动输入模型；切换 Provider 时刷新对应模型和价格，空模型目录清除上一 Provider 的模型；按当前日期与 Provider 筛选计算成本，未定价事件单独计数；区间内空日期补零，点击日期跳转运行记录。数据仅来自 Runtime 已记录 usage，不推测未接管的外部调用。
+🟢 本机控制面已拆分为运行总览、用量统计、本地配置、运行记录、对外服务、帮助中心六个一级页面。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 汇总表、Token 趋势、GitHub 式周列 × 7 天小方格调用活动和带圆角轻量涂鸦纹理的占比图；短区间保留至少 70 天日历上下文，区间外日期以淡灰格标识，不作为零用量计入统计。成本卡片支持通过 core pricing API 按 Provider/模型维护美元/百万 token 价格，Provider 完整下拉列表合并当前配置、历史 usage 和已有价格键，模型下拉合并缓存目录、默认模型、历史 usage 模型和已有价格键，并支持手动输入模型；切换 Provider 时刷新对应模型和价格，空模型目录清除上一 Provider 的模型；按当前日期与 Provider 筛选计算成本，未定价事件单独计数；区间内空日期补零，点击日期跳转运行记录。数据来自唯一 usage 账本，包括 Runtime 代理和显式启用后的 Codex App 本机采集；不推测其他未采集的外部调用。App 采集不生成 Runtime 调用链路或工具会话。
 
 🟢 运行记录分为调用记录、工具会话、系统日志。调用列表按执行归组，侧边详情展示结果、Provider 过程与中文时间线；同 Provider 重试与跨 Provider 切换分开计数，缺少终止事件显示结果未知，结果 Provider 仅取明确终止证据。工具会话显示初始配置、起止、时长和退出码，调用关联只接受明确且匹配的 `sessionId`。系统日志按模型请求/服务检查/配置变更/系统运行分类，支持级别、Provider、分类和搜索筛选。当前数据范围为最近 300 条日志和 30 次工具会话，不推算逐调用用量。
 
@@ -495,6 +496,8 @@ ai log --print --trace trc_70d90ad64d1846bf   # 只打印该链路的各跳，�
 ### 8.2 Codex App 可视化配置（R0 设计基线）🔴
 
 “本地配置 / 工具配置”页把已实现的 `ai set codex` core integration service 呈现为可查看、可确认、可回滚的 Web 管理操作。页面说明 Codex App、CLI 与 IDE extension 在同一 `CODEX_HOME` 下共享用户级 `config.toml`，同时区分 CLI `-c` 的进程级临时覆盖。页面读取并展示当前 `model_provider`、model、proxy、`config.toml` / `auth.json` 托管状态，但 API Key 只显示 configured/missing，不回显明文。
+
+🟢 本机用量采集设置已交付：Web「本地配置 → 工具配置」和 `ai set codex usage on|off|status|map <codex-provider-id> <provider-name>` 共用 core API，可编辑采集开关、Codex 目录和 Provider 映射。默认关闭；启用后在 dashboard 刷新或 `ai status` 时同步真实计数，按 Provider/模型汇入现有图表、价格估算与周用量。验收覆盖自动匹配与未知 ID 显式归属、映射后补计本次启用以来的记录、Cache Read 不重复计数、CLI/SDK 与 Runtime 代理排除、并发/文件重读/归档/游标恢复去重、关闭后保留数据且重新启用不补计关闭期间，以及异常格式或目录不可读时主面板继续可用。采集不保存对话和凭证，不修改 Codex 原生配置，不要求重启 App；内部 JSONL 格式兼容与云端运行仍是明确边界。
 
 设置区必须覆盖三种与 CLI 等价的模式：`chatgpt`、`provider [name] [model]`、`proxy <endpoint|off>`。提交前显示等价 CLI 命令、目标配置 diff、重启需求、备份与失败回滚语义；提交后显示 operation progress 和最终 restart 状态。Web 不自行拼装或写入 TOML/JSON，所有读写复用同一 core integration API。
 

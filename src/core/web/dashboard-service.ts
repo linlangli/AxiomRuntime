@@ -10,8 +10,10 @@ import { estimateTokenCostUsd, readModelPricing } from "../usage/pricing.js";
 import { getConfigRoot } from "../config/paths.js";
 import { getLocalSettings } from "./local-settings.js";
 import { projectHistoryLogs, summarizeCalls } from "./execution-history.js";
+import { syncCodexAppUsage } from "../usage/codex-app-usage.js";
 
 export async function getWebDashboard() {
+  const codexUsage = await syncCodexAppUsage();
   const [statuses, cache, usage, logs, sessions, pricing, codex, settings] = await Promise.all([
     getProviderStatuses(), readCache(), readUsage(), readRecentLogs(300), listRecentSessions(30), readModelPricing(), readCodexConfigSummary(), getLocalSettings()
   ]);
@@ -99,7 +101,7 @@ export async function getWebDashboard() {
     logs: safeLogs.reverse(),
     sessions: sessions.map(({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom }) =>
       ({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom })),
-    codex, settings
+    codex, codexUsage, settings
   };
 }
 

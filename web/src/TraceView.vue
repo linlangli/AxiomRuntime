@@ -59,7 +59,7 @@ const actionLabels: Record<string, string> = {
   openai_usage_proxy_responses_chat_fallback: '切换兼容协议后重试', usage_proxy_close_failed: '用量代理关闭异常',
   provider_health_check: '检查服务连接', provider_model_discovery: '获取模型目录', provider_model_probe: '探测模型可用性',
   deep_fallback: '深度检查切换候选', token_usage_recorded: '记录检查用量',
-  web_settings_updated: '更新本地配置', web_settings_restored: '恢复本地配置', codex_provider_set: '更新 Codex 模型配置', codex_proxy_set: '更新 Codex 代理配置',
+  web_settings_updated: '更新本地配置', web_settings_restored: '恢复本地配置', codex_provider_set: '更新 Codex 模型配置', codex_proxy_set: '更新 Codex 代理配置', codex_usage_configured: '更新 Codex 用量采集',
   web_model_pricing_updated: '更新模型价格', web_model_pricing_removed: '移除模型价格', command_start: '执行 CLI 命令', command_error: 'CLI 命令执行异常',
   claude_start: '启动 Claude 任务', codex_start: '启动 Codex 任务', codex_session_detected: '识别 Codex 会话',
   claude_permission_constrained: '应用 Claude 权限限制', image_generated: '图像生成完成', image_generated_url: '图像链接生成完成', image_generation_provider_failed: '图像 Provider 执行失败',

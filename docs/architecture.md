@@ -312,6 +312,12 @@ Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`eng
 - Telegram 把同一批 proxy records 投影到 `SessionManager.recordProviderUsage()`，**不产生第二份 token 账本**
 - Claude JSON stream 的 `cost_usd` 在 provider 返回时作为该 session 的实际成本；不估算、不补写 token
 
+🟢 `src/core/usage/codex-app-usage.ts` 是 UsageObserver 用量域的本机观测适配器。显式启用后，只读 `CODEX_HOME/sessions` 与 `archived_sessions` 的 JSONL，从 `session_meta` 的 `originator = "Codex Desktop"`、`model_provider` 和 `turn_context.model` 确认归属，消费 `event_msg/token_count` 的真实累积增量；首次观测使用 `last_token_usage`，排除启用前和会话创建前的继承记录。Cache Read 已包含在 input，reasoning 已包含在 output，不重复相加。计数回退、非法计数和无法识别的记录跳过并展示诊断计数，不估算 Token。
+
+Provider 优先取显式 `providerMappings`，其次匹配 Runtime Provider 精确名称或 `providerIdForName()` 生成的 ID；歧义与未知 ID 暂不入账，在 Web 提示映射，映射后仅重读本次启用以来的相关记录。`ai_gateway_selected`、CLI 和 SDK originator 被排除，避免重计 Transport Proxy 已观测的请求。事件携带 `source = "codex_app"`，以 Codex 目录、原生 session ID、事件时间及累积用量生成稳定 `id`，经 `appendUsageEvents()` 在现有 `usage.json` 内加锁去重。先写唯一账本、再提交文件游标，因此重放或游标损坏恢复不会重复记账。不创建 listener、forwarder、第二份账本或对话存储。
+
+`codex-usage.json` 保存开关、启用时间、目录和 Provider 映射，`codex-usage-state.json` 只保存文件路径摘要、游标、检查点及归属/计数元数据，均使用受限权限原子写入。两者不参与 Web 配置快照恢复，避免恢复旧快照时重新启用采集或回退采集起点。单次扫描读取最多 8 MiB、单行最多 1 MiB，跳过符号链接；刷新 dashboard 或查询每周 Provider 用量触发同步，关闭期间不补录。同步失败只反馈状态，保留账本并允许主页面继续使用。原生 JSONL 不是 Codex 的稳定公开接口，格式变化可能暂停该适配；云端任务和未带上述桌面身份的记录不在范围内。CLI 与 Web 只调用共享 core 配置 API，Web 保持既有 Host、Origin 和 token 检查，不修改 Codex 配置、凭证或登录状态。
+
 ### 图片生成 🟢
 
 本地参考图通过可选 core 输入 `imagePaths`（有序数组）接入，兼容旧的单图 `imagePath`；两者不得同时传入，显式空数组被拒绝。CLI 支持重复 `--image <path>` / `--image=<path>`，无提示词的交互流程选择文生图或参考图，逐张输入路径、留空结束。最多 8 张、每张 20 MiB、总计 40 MiB。Core 在任何图片请求前校验全部普通文件并按内容识别 PNG/JPEG/WebP，拒绝 GIF、无效文件和目录；有界读取避免文件增长突破限制。参考图使用通用文件名，以原生 `FormData` 发送到 `/v1/images/edits`：单图保留 `image` 字段，多图按输入顺序追加 `image[]` 字段和 `reference-1.png` 等编号名称，复用同一 execution-scoped Transport Proxy 和 UsageObserver；Transport 对 multipart 字节保持原样，不用 JSON 模型重写破坏上传。图片路径、原始文件名、提示词与图片内容不进入 CLI command usage log。参考图仅尝试一个选定 Provider，禁用自动重试和跨 Provider fallback，显式 Provider 不健康时不得改选备用站。非兼容接口、mask 不在本次能力范围；单图和多图编辑支持由 Provider/模型的实际响应决定。

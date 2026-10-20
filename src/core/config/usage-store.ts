@@ -8,9 +8,24 @@ export async function readUsage(): Promise<UsageFile> {
 }
 
 export async function appendUsageEvent(event: UsageEvent): Promise<void> {
-  await updateJsonFile<UsageFile>(getUsagePath(), { events: [] }, (usage) => ({
-    events: [...normalizeUsageFile(usage).events, event]
-  }));
+  await appendUsageEvents([event]);
+}
+
+export async function appendUsageEvents(events: UsageEvent[]): Promise<number> {
+  if (!events.length) return 0;
+  let appended = 0;
+  await updateJsonFile<UsageFile>(getUsagePath(), { events: [] }, (usage) => {
+    const existing = normalizeUsageFile(usage).events;
+    const identities = new Set(existing.flatMap(event => event.id ? [event.id] : []));
+    const additions = events.filter(event => {
+      if (event.id && identities.has(event.id)) return false;
+      if (event.id) identities.add(event.id);
+      return true;
+    });
+    appended = additions.length;
+    return { events: [...existing, ...additions] };
+  });
+  return appended;
 }
 
 export async function ensureUsageFile(): Promise<void> {
