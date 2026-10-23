@@ -90,6 +90,12 @@ test("settings and service mutations keep local Web host, origin and token prote
   const headers = { authorization: `Bearer ${address.hash.slice(8)}`, origin: address.origin, "content-type": "application/json" };
   const send = (endpoint, body, requestHeaders = headers) => fetch(`${address.origin}${endpoint}`, { method: "POST", headers: requestHeaders, body: JSON.stringify(body) });
   try {
+    assert.equal((await send("/api/exposure/service", { action: "start" }, { ...headers, authorization: "Bearer invalid" })).status, 401);
+    assert.equal((await send("/api/exposure/tunnel", { action: "start" }, { ...headers, authorization: "Bearer invalid" })).status, 401);
+    assert.equal((await send("/api/exposure/tunnel", { action: "start" }, { ...headers, origin: "https://other.example" })).status, 403);
+    assert.equal((await send("/api/exposure/tunnel", { action: "unknown" })).status, 400);
+    assert.equal((await send("/api/exposure/service", { action: "start" }, { ...headers, origin: "https://other.example" })).status, 403);
+    assert.equal((await send("/api/exposure/service", { action: "unknown" })).status, 400);
     assert.equal((await send("/api/settings", { action: "failover", enabled: false })).status, 200);
     assert.equal((await send("/api/settings", { action: "failover", enabled: true }, { ...headers, origin: "https://other.example" })).status, 403);
     assert.equal((await send("/api/exposure", { publicBaseUrl: "", upstreamUrl: "http://127.0.0.1:8080", capabilities: ["models"] })).status, 200);

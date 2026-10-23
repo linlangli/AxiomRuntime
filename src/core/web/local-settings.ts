@@ -12,8 +12,9 @@ import { clearMemoryEmbeddingConfig, getMemoryEmbeddingConfig, setMemoryEmbeddin
 import { checkMemoryEmbeddingConfig, checkAndRecordMemoryEmbeddingConfig } from "../memory/embedding-check.js";
 import { writeLog } from "../logs/log-service.js";
 import { configureCodexAppUsage, syncCodexAppUsage } from "../usage/codex-app-usage.js";
+import { isBotRunning } from "../../telegram/bot-registry.js";
 
-const MANAGED_FILES = ["runtime.json", "providers.json", "memory.json", "model-pricing.json", "telegram.json", "service-exposure.json"];
+const MANAGED_FILES = ["runtime.json", "providers.json", "memory.json", "model-pricing.json", "telegram.json", "service-exposure.json", "ssh-tunnel.json"];
 const BOT_NAME = /^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$/;
 const BACKUP_ID = /^[a-f0-9-]{36}$/;
 
@@ -23,7 +24,7 @@ export async function getLocalSettings() {
   ]);
   const bots = await Promise.all(botNames.map(async name => {
     const { token, ...config } = await loadBotConfig(name);
-    return { name, ...config, tokenConfigured: Boolean(token) };
+    return { name, ...config, tokenConfigured: Boolean(token), ...isBotRunning(name) };
   }));
   const safeEmbedding = embedding ? {
     name: embedding.name, baseUrl: embedding.baseUrl, model: embedding.model, providerType: embedding.providerType,
@@ -136,6 +137,11 @@ async function restoreSettingsBackup(id: string) {
   if (!BACKUP_ID.test(id)) throw new SettingsInputError("备份编号无效。");
   const backup = await readJsonFile<{ files: Record<string, unknown> } | null>(path.join(backupDirectory(), `${id}.json`), null);
   if (!backup?.files || Object.keys(backup.files).some(name => !MANAGED_FILES.includes(name) && !/^telegram\/bots\/[a-z0-9][a-z0-9_-]{0,31}\.json$/.test(name))) throw new SettingsInputError("备份不存在或内容无效。");
+  if ("ssh-tunnel.json" in backup.files) {
+    const { createSshTunnelManager } = await import("../services/ssh-tunnel.js");
+    const state = await createSshTunnelManager().status();
+    if (state.running || state.autostart) throw new SettingsInputError("恢复 SSH 配置前请先断开隧道并关闭隧道自启。");
+  }
   await withJsonFileLock(path.join(getConfigRoot(), ".web-restore"), async () => {
     const previous = await createSettingsBackup();
     const before = await readJsonFile<{ files: Record<string, unknown> }>(path.join(backupDirectory(), `${previous.id}.json`), { files: {} });

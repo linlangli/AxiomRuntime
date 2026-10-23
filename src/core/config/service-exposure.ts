@@ -9,11 +9,16 @@ export const SERVICE_CAPABILITIES = [
   { id: "chat", name: "对话补全", method: "POST", path: "/v1/chat/completions" },
   { id: "responses", name: "Responses", method: "POST", path: "/v1/responses" },
   { id: "embeddings", name: "向量接口", method: "POST", path: "/v1/embeddings" },
-  { id: "agent", name: "Agent 执行", method: "POST", path: "/v1/agent/runs" }
+  { id: "images", name: "图片生成", method: "POST", path: "/v1/images/generations" },
+  { id: "image_edits", name: "图片编辑", method: "POST", path: "/v1/images/edits" },
+  { id: "agent", name: "Agent 执行", method: "POST", path: "/v1/agent/runs" },
+  { id: "tools", name: "工具执行", method: "POST", path: "/v1/tools/execute" }
 ] as const;
 export type ServiceCapability = typeof SERVICE_CAPABILITIES[number]["id"];
-export type ServiceCredential = { id: string; name: string; tokenHash: string; capabilities: ServiceCapability[]; createdAt: string };
+export type CredentialPolicy = { providers?: string[]; models?: string[]; expiresAt?: string; requestsPerMinute?: number; requestQuota?: number };
+export type ServiceCredential = { id: string; name: string; tokenHash: string; capabilities: ServiceCapability[]; createdAt: string; policy?: CredentialPolicy };
 export type ServiceExposureConfig = {
+  connectionMode?: "local" | "ssh";
   publicBaseUrl: string;
   upstreamUrl: string;
   capabilities: ServiceCapability[];
@@ -52,20 +57,21 @@ export async function loadServiceExposure(): Promise<ServiceExposureConfig> {
   });
 }
 
-export async function saveServiceExposure(input: { publicBaseUrl: unknown; upstreamUrl: unknown; capabilities: unknown }): Promise<void> {
+export async function saveServiceExposure(input: { publicBaseUrl: unknown; upstreamUrl?: unknown; capabilities: unknown; connectionMode?: unknown }): Promise<void> {
   const publicBaseUrl = validateServiceUrl(input.publicBaseUrl, true);
-  const upstreamUrl = validateServiceUrl(input.upstreamUrl);
+  if (input.connectionMode !== undefined && input.connectionMode !== "ssh" && input.connectionMode !== "local") throw new SettingsInputError("请选择同机反代或 SSH 隧道。");
+  const upstreamUrl = input.connectionMode === undefined ? validateServiceUrl(input.upstreamUrl) : input.connectionMode === "ssh" ? "http://127.0.0.1:18080" : "http://127.0.0.1:8080";
   const capabilities = validateCapabilities(input.capabilities);
-  await updateExposure(current => ({ ...current, publicBaseUrl, upstreamUrl, capabilities }));
+  await updateExposure(current => ({ ...current, ...(input.connectionMode === undefined ? {} : { connectionMode: input.connectionMode as "local" | "ssh" }), publicBaseUrl, upstreamUrl, capabilities }));
 }
 
-export async function createServiceCredential(name: unknown, input: unknown) {
+export async function createServiceCredential(name: unknown, input: unknown, policyInput: unknown = {}) {
   if (typeof name !== "string" || !name.trim() || name.length > 80) throw new SettingsInputError("凭证名称需要 1–80 个字符。");
   const capabilities = validateCapabilities(input);
   if (!capabilities.length) throw new SettingsInputError("请至少选择一项凭证权限。");
   const token = `axm_${crypto.randomBytes(32).toString("hex")}`;
   const credential: ServiceCredential = {
-    id: crypto.randomUUID(), name: name.trim(), tokenHash: hashToken(token), capabilities, createdAt: new Date().toISOString()
+    id: crypto.randomUUID(), name: name.trim(), tokenHash: hashToken(token), capabilities, createdAt: new Date().toISOString(), policy: validateCredentialPolicy(policyInput)
   };
   await updateExposure(current => {
     if (current.credentials.length >= 50) throw new SettingsInputError("最多保存 50 个访问凭证。");
@@ -80,12 +86,46 @@ export async function revokeServiceCredential(id: string): Promise<void> {
 }
 
 export function authorizeServiceCredential(config: ServiceExposureConfig, token: string): ServiceCapability[] | null {
+  return findServiceCredential(config, token)?.capabilities ?? null;
+}
+
+export function findServiceCredential(config: ServiceExposureConfig, token: string): ServiceCredential | null {
   const digest = Buffer.from(hashToken(token), "hex");
   const credential = config.credentials.find(item => {
     const expected = Buffer.from(item.tokenHash, "hex");
     return expected.length === digest.length && crypto.timingSafeEqual(expected, digest);
   });
-  return credential?.capabilities ?? null;
+  return credential && (!credential.policy?.expiresAt || Date.parse(credential.policy.expiresAt) > Date.now()) ? credential : null;
+}
+
+export function validateCredentialPolicy(value: unknown): CredentialPolicy {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new SettingsInputError("凭证策略格式无效。");
+  const input = value as Record<string, unknown>;
+  const policy: CredentialPolicy = {};
+  for (const key of ["providers", "models"] as const) {
+    if (input[key] === undefined) continue;
+    if (!Array.isArray(input[key]) || input[key].length > 100 || input[key].some(item => typeof item !== "string" || !item.trim() || item.length > 200)) throw new SettingsInputError("Provider/模型白名单无效。");
+    policy[key] = [...new Set(input[key] as string[])];
+  }
+  for (const key of ["requestsPerMinute", "requestQuota"] as const) {
+    if (input[key] === undefined) continue;
+    if (!Number.isSafeInteger(input[key]) || Number(input[key]) < 1) throw new SettingsInputError("限流与请求额度必须为正整数。");
+    policy[key] = Number(input[key]);
+  }
+  if (input.expiresAt) {
+    if (typeof input.expiresAt !== "string" || !Number.isFinite(Date.parse(input.expiresAt)) || Date.parse(input.expiresAt) <= Date.now()) throw new SettingsInputError("有效期必须是未来时间。");
+    policy.expiresAt = new Date(input.expiresAt).toISOString();
+  }
+  return policy;
+}
+
+export async function rotateServiceCredential(id: string) {
+  const token = `axm_${crypto.randomBytes(32).toString("hex")}`;
+  await updateExposure(current => {
+    if (!current.credentials.some(item => item.id === id)) throw new SettingsInputError("凭证不存在。");
+    return { ...current, credentials: current.credentials.map(item => item.id === id ? { ...item, tokenHash: hashToken(token) } : item) };
+  });
+  return { token };
 }
 
 export function serviceExposureSummary(config: ServiceExposureConfig) {
@@ -95,7 +135,7 @@ export function serviceExposureSummary(config: ServiceExposureConfig) {
 export async function checkServiceConnection(target: unknown) {
   if (target !== "upstream" && target !== "public") throw new SettingsInputError("请选择要测试的服务。");
   const config = await loadServiceExposure();
-  const baseUrl = target === "public" ? config.publicBaseUrl : config.upstreamUrl;
+  const baseUrl = target === "public" ? config.publicBaseUrl : "http://127.0.0.1:8080";
   if (!baseUrl) throw new SettingsInputError("请先保存服务地址。");
   const startedAt = Date.now();
   try {

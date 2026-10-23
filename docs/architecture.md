@@ -104,13 +104,21 @@ src/
 
 帮助中心的完整命令手册由 `web/src/CommandManual.vue` 在构建时导入 `docs/USAGE.html` 原文，并从手册的正文 section 和命令索引投影目录、命令、参数说明与示例，不维护第二份命令清单。独立手册的样式、脚本与搜索控件不嵌入控制面；Web 使用自己的分类、跨分类全文搜索、复制和展开交互，正文保留同一来源的完整规则。该功能仅是静态文档适配，不调用执行或配置写入 API。
 
-`service-exposure.json` 是对外能力授权的控制面配置。它维护公网入口、Runtime 上游地址、能力白名单和一次性显示的调用凭证摘要；反向代理与 TLS 仍属于部署环境。Runtime server 可启用该配置，逐请求同时检查凭证能力和全局开放能力，能力关闭或凭证撤销立即拒绝请求。Web 只生成 Nginx 片段和接入示例，不自动写远程服务器。
+`service-exposure.json` 是对外能力授权的控制面配置。它维护公网入口、Runtime 上游地址、能力白名单和一次性显示的调用凭证摘要；反向代理与 TLS 仍属于部署环境。Runtime server 可启用该配置，逐请求同时检查凭证能力和全局开放能力，能力关闭或凭证撤销立即拒绝请求。Web 生成 Nginx 片段和调用示例，SSH 模式还支持显式预览/确认后的远端部署；普通保存不修改远端。
+
+接入控制面新增 `connectionMode`：`local` 自动使用本机 `127.0.0.1:8080`；`ssh` 自动使用服务器 `127.0.0.1:18080`，Web 不再编辑上游 URL。旧配置未显式保存部署方式前保留。`core/services/ssh-tunnel.ts` 校验并保存 `ssh-tunnel.json`（仅主机、用户名、端口、私钥路径，0600）；Web 隧道 GET/PUT/POST 仍受本机 Host/Origin/token 边界保护。连接参数以 argv 传给 OpenSSH，禁用个人配置、交互密码、agent 转发与自动主机信任，强制严格 known_hosts 校验；`core/services/ssh-setup.ts` 使用系统 ssh-keyscan/ssh-keygen 扫描并展示主机指纹，只有用户独立核对并确认后才追加 known_hosts；冲突拒绝覆盖。专用密钥在本机生成且不回传私钥；可用一次性账户密码通过成熟 SSH2 客户端（ssh2）授权公钥，必须匹配已信任的主机密钥，不保存密码。隧道 worker 仅承载一个系统 SSH 子进程，复用 API 服务管理器的 launchd/systemd/Windows Task Scheduler 适配，以独立标识、锁、日志和自启状态托管，退出 Web 不清理它；断开同时关闭自启，运行或自启时修改连接配置被拒绝。远端监听仅为 loopback 18080，转到本机 API 8080；不开放管理端口，不新增协议兼容或用量记录路径。SSH 控制 socket 状态与远端健康检查分开，后者只通过固定 curl 命令验证远端 18080，不接受任意远程命令；本机 API 检查固定访问本机 8080。SSH 失败通过系统日志诊断并重启，端口冲突、主机信任、密钥代理与 curl 缺失有明确准备说明；`core/services/remote-deployment.ts` 只接受已保存主机/域名与固定 loopback 上游，生成带配置归属、flock、nginx -t 与失败恢复的站点部署计划。计划 ID 在本机服务内短时保存，执行前核对脚本与连接未变；Certbot 负责证书申请和续期，拒绝覆盖未归属当前 Runtime 的配置。失败不承诺卸载软件包、删除证书或远端事务完全回滚。
+
+`core/services/api-service.ts` 是后台 API 生命周期的共享接口，CLI `ai server` 与本机 Web `/api/exposure/service` 共用；所有写操作仍在本机 Host/Origin/token 检查之后执行。生命周期调用按配置根目录加锁，使用 launchd（macOS GUI 用户会话）、systemd 用户服务（Linux）或当前用户的 Task Scheduler 任务（Windows）托管，不自建 supervisor。服务文件仅含绝对 Node/入口路径与配置根目录，不保存明文凭证；托管入口固定 loopback `127.0.0.1:8080`，强制按开放配置鉴权且不接受旧环境变量 Token。保存策略不会启动服务；start/restart/enable 检查有效能力凭证，stop 同时禁用自启，disable 保持运行。状态查询来自系统管理器，不把健康探测当作进程归属证明。服务标识按配置路径派生；端口冲突与用户会话不可用通过系统状态/日志诊断，升级后 restart 刷新安装路径。Web 退出不影响 API；Linux linger、复杂网关/同机反代和日志轮转仍属于部署职责。Windows 使用无密码的 Interactive 用户登录任务，PowerShell 以编码参数传入，任务仅保存绝对 Node/worker 路径与配置根目录，适配需 Windows 实机验收。
+
+图片对外接口复用 Runtime server 的现有转发数据面与 UsageObserver 记录链，不启动第二个 listener 或写另一份账本。`POST /v1/images/generations`（JSON，`images`）与 `POST /v1/images/edits`（multipart，`image_edits`）分别授权，默认关闭且旧凭证不扩权。`core/images/image-api-request.ts` 校验请求，编辑只接受上传文件；`resolveImageProviderCandidates` 复用图片模型候选和健康策略，不使用面向文本工具的模型兼容过滤。HTTP 适配层保持原始 JSON/multipart 字节与 Provider 响应，图片不落盘，不开放本机文件服务。每个图片请求只尝试首个候选一次，包括 HTTP/网络失败均不自动重发；请求体有界，响应流式转发，用量捕获最多 32 MiB，超过捕获限制仍完整转发，但不能保证提取上游用量，不推算缺失值。图片连接池等待响应头至少 120 秒，可通过服务超时配置调高。
 
 公网门户是独立静态构建，不打包进入 npm，也不访问本地控制面 API。生产环境与 `app.offerpilot.life` 共用 Nginx 的 `stream` SNI 入口；`axiom.offerpilot.life` 在 `443` 被分流到独立的 `8450` TLS 站点，静态文件放在 `/srv/axiomruntime-portal/current`，由不可变 release 目录和原子 symlink 切换部署。CI 负责构建、上传、健康检查和失败回滚；证书签发和 Nginx 分流属于服务器预配置。
 
 门户呈现遵循 `docs/AxiomRuntime.pen` 的 Web Landing：终端示例、能力卡片、执行流程、安装、命令参考、Telegram 与实现状态。示例用量和对话不是实时数据；版本从 `package.json` 获取。响应式布局、键盘导航和安装命令复制仅属于静态 UI，不引入新的 core API 或配置写入。
 
 ---
+
+本机 Web 的补齐能力均通过共享 core API：`claude-settings.ts` 备份并编辑用户连接字段，`bot-service.ts` 为 Web 与具名 Bot CLI 提供同一生命周期锁，并在发送停止信号前校验进程归属标识；升级前启动且没有标识的旧 Bot 需核实 PID 并手动停止后重新启动。`history-service.ts` 从既有日志、会话和唯一 usage ledger 投影分页与 CSV/JSON 导出；轮询每 2 秒刷新，当前查询仍读取完整本机日志，不保证大规模日志性能。`service-playground.ts` 将瞬态调用凭证和请求转交现有 API，只有协议有效的公网成功调用才写入与当前开放/SSH 配置指纹绑定的验证记录。图片编辑转换为 multipart，调用输入、凭证和图片不写配置或日志。`runtime-tools.ts` 仅注册两个只读查询，不能执行任意 Shell。`credential-policy.ts` 在能力交集授权后检查有效期、Provider/模型白名单与原子请求计数；计数属于准入状态，不能充当 UsageObserver 账本，凭证轮换和快照恢复不重置计数。快照纳入 SSH 连接配置但不纳入专用私钥、known_hosts、准入计数或验证记录；恢复保留当前凭证集合。
 
 ## 4. 目标分层架构
 

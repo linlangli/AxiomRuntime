@@ -13,11 +13,11 @@ function readToken(): string | undefined {
 
 const exposure = await loadServiceExposure();
 const server = await startRuntimeServer({
-  host: process.env.AI_GATEWAY_SERVER_HOST || "127.0.0.1",
-  port: Number(process.env.AI_GATEWAY_SERVER_PORT || "8080"),
-  token: readToken(),
-  useExposureConfig: exposure.updatedAt !== null,
-  maxRequestBytes: Number(process.env.AI_GATEWAY_MAX_REQUEST_BYTES || "16777216"),
+  host: process.env.AXIOM_MANAGED_API ? "127.0.0.1" : process.env.AI_GATEWAY_SERVER_HOST || "127.0.0.1",
+  port: process.env.AXIOM_MANAGED_API ? 8080 : Number(process.env.AI_GATEWAY_SERVER_PORT || "8080"),
+  token: process.env.AXIOM_MANAGED_API ? undefined : readToken(),
+  useExposureConfig: Boolean(process.env.AXIOM_MANAGED_API) || exposure.updatedAt !== null,
+  maxRequestBytes: process.env.AI_GATEWAY_MAX_REQUEST_BYTES ? Number(process.env.AI_GATEWAY_MAX_REQUEST_BYTES) : undefined,
   upstreamHeadersTimeoutMs: Number(process.env.AI_GATEWAY_UPSTREAM_HEADERS_TIMEOUT_MS || "45000"),
   agentWorkspaceRoot: process.env.AI_GATEWAY_AGENT_WORKSPACE_ROOT,
   agentMaxConcurrentRuns: Number(process.env.AI_GATEWAY_AGENT_MAX_CONCURRENT_RUNS || "2"),

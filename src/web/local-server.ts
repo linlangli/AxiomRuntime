@@ -10,7 +10,15 @@ import { addProvider, deleteProvider, updateProvider } from "../core/providers/p
 import { writeLog } from "../core/logs/log-service.js";
 import type { Provider, ProviderMode } from "../core/types.js";
 import { applyLocalSettings, createSettingsBackup } from "../core/web/local-settings.js";
-import { SettingsInputError, saveServiceExposure, createServiceCredential, revokeServiceCredential, checkServiceConnection } from "../core/config/service-exposure.js";
+import { SettingsInputError, saveServiceExposure, createServiceCredential, revokeServiceCredential, rotateServiceCredential, checkServiceConnection } from "../core/config/service-exposure.js";
+import { applyClaudeSettings, getClaudeSettings } from "../core/web/claude-settings.js";
+import { controlBot } from "../core/services/bot-service.js";
+import { callService, serviceVerification } from "../core/web/service-playground.js";
+import { queryWebHistory, historyCsv } from "../core/web/history-service.js";
+import { prepareSsh } from "../core/services/ssh-setup.js";
+import { previewDeployment, executeDeployment } from "../core/services/remote-deployment.js";
+import { createApiServiceManager, type ApiServiceAction } from "../core/services/api-service.js";
+import { createSshTunnelManager } from "../core/services/ssh-tunnel.js";
 import { readModelPricing, removeModelPrice, upsertModelPrice } from "../core/usage/pricing.js";
 
 const ASSET_ROOT = fileURLToPath(new URL("./control/", import.meta.url));
@@ -73,6 +81,69 @@ export async function startLocalWebServer(options: { port?: number; assetRoot?: 
 }
 
 async function handleApi(request: http.IncomingMessage, response: http.ServerResponse, pathname: string): Promise<void> {
+  if (pathname === "/api/exposure/ssh-setup" && request.method === "POST") {
+    const body = await readBody(request); if (!isRecord(body)) throw new WebInputError("Invalid SSH setup.");
+    sendJson(response, 200, await prepareSsh(body)); return;
+  }
+  if (pathname === "/api/exposure/deployment" && request.method === "POST") {
+    const body = await readBody(request); if (!isRecord(body)) throw new WebInputError("Invalid deployment.");
+    if (body.action !== "preview" && body.action !== "deploy") throw new WebInputError("Invalid deployment action.");
+    sendJson(response, 200, body.action === "preview" ? await previewDeployment(body) : await executeDeployment(body)); return;
+  }
+  if (pathname === "/api/claude" && request.method === "GET") { sendJson(response, 200, await getClaudeSettings()); return; }
+  if (pathname === "/api/claude" && request.method === "POST") {
+    const body = await readBody(request); if (!isRecord(body)) throw new WebInputError("Invalid settings.");
+    sendJson(response, 200, await applyClaudeSettings(body)); return;
+  }
+  if (pathname === "/api/bots/control" && request.method === "POST") {
+    const body = await readBody(request); if (!isRecord(body)) throw new WebInputError("Invalid Bot action.");
+    if (body.action === "delete") await createSettingsBackup();
+    sendJson(response, 200, await controlBot(body.name, body.action)); return;
+  }
+  if (pathname === "/api/exposure/verification" && request.method === "GET") { sendJson(response, 200, await serviceVerification()); return; }
+  if (pathname === "/api/exposure/call" && request.method === "POST") {
+    const body = await readBody(request, 58 * 1024 * 1024); if (!isRecord(body)) throw new WebInputError("Invalid call.");
+    sendJson(response, 200, await callService(body)); return;
+  }
+  if (pathname === "/api/history" && request.method === "GET") {
+    const params = new URL(request.url!, "http://127.0.0.1").searchParams;
+    const result = await queryWebHistory(params);
+    if (params.get("format") === "csv") {
+      response.setHeader("Content-Type", "text/csv; charset=utf-8");
+      response.setHeader("Content-Disposition", `attachment; filename="axiom-${result.kind}.csv"`);
+      response.end(historyCsv(result.items));
+    } else sendJson(response, 200, result);
+    return;
+  }
+  if (pathname.startsWith("/api/exposure/credentials/") && pathname.endsWith("/rotate") && request.method === "POST") {
+    const id = pathname.slice("/api/exposure/credentials/".length, -"/rotate".length);
+    sendJson(response, 200, await rotateServiceCredential(id)); return;
+  }
+  if (pathname === "/api/exposure/tunnel" && request.method === "GET") {
+    sendJson(response, 200, await createSshTunnelManager().status());
+    return;
+  }
+  if (pathname === "/api/exposure/tunnel" && request.method === "PUT") {
+    sendJson(response, 200, await createSshTunnelManager().save(await readBody(request)));
+    return;
+  }
+  if (pathname === "/api/exposure/tunnel" && request.method === "POST") {
+    const body = await readBody(request);
+    if (!isRecord(body) || typeof body.action !== "string") throw new WebInputError("Invalid tunnel action.");
+    const tunnel = createSshTunnelManager();
+    sendJson(response, 200, body.action === "test" ? await tunnel.test() : await tunnel.control(body.action as ApiServiceAction));
+    return;
+  }
+  if (pathname === "/api/exposure/service" && request.method === "GET") {
+    sendJson(response, 200, await createApiServiceManager().status());
+    return;
+  }
+  if (pathname === "/api/exposure/service" && request.method === "POST") {
+    const body = await readBody(request);
+    if (!isRecord(body) || typeof body.action !== "string") throw new WebInputError("Invalid service action.");
+    sendJson(response, 200, await createApiServiceManager().control(body.action as ApiServiceAction));
+    return;
+  }
   if (request.method === "POST" && pathname === "/api/exposure/test") {
     const body = await readBody(request);
     if (!isRecord(body)) throw new WebInputError("Invalid test target.");
@@ -88,8 +159,12 @@ async function handleApi(request: http.IncomingMessage, response: http.ServerRes
   if (request.method === "POST" && pathname === "/api/exposure") {
     const body = await readBody(request);
     if (!isRecord(body)) throw new WebInputError("Invalid service configuration.");
+    if (body.connectionMode !== undefined && body.connectionMode !== "ssh") {
+      const tunnel = await createSshTunnelManager().status();
+      if (tunnel.running || tunnel.autostart) throw new WebInputError("请先断开隧道并关闭隧道自启，再切换部署方式。");
+    }
     await createSettingsBackup();
-    await saveServiceExposure({ publicBaseUrl: body.publicBaseUrl, upstreamUrl: body.upstreamUrl, capabilities: body.capabilities });
+    await saveServiceExposure({ publicBaseUrl: body.publicBaseUrl, upstreamUrl: body.upstreamUrl, capabilities: body.capabilities, connectionMode: body.connectionMode });
     await writeLog({ category: "provider", action: "web_service_exposure_updated", message: "Service exposure policy updated." });
     sendJson(response, 200, { effect: "开放范围已保存；API 服务启用此配置后，每个请求检查最新授权。反代与 TLS 需在服务器部署。" });
     return;
@@ -97,7 +172,7 @@ async function handleApi(request: http.IncomingMessage, response: http.ServerRes
   if (request.method === "POST" && pathname === "/api/exposure/credentials") {
     const body = await readBody(request);
     if (!isRecord(body)) throw new WebInputError("Invalid credential request.");
-    const result = await createServiceCredential(body.name, body.capabilities);
+    const result = await createServiceCredential(body.name, body.capabilities, body.policy);
     await writeLog({ category: "provider", action: "web_service_credential_created", message: "Scoped service credential created.", metadata: { credentialId: result.id } });
     sendJson(response, 200, result);
     return;
@@ -201,14 +276,14 @@ async function serveAsset(response: http.ServerResponse, root: string, pathname:
   response.end(content);
 }
 
-async function readBody(request: http.IncomingMessage): Promise<unknown> {
+async function readBody(request: http.IncomingMessage, maxBytes = 16_384): Promise<unknown> {
   if (!request.headers["content-type"]?.startsWith("application/json")) throw new WebInputError("JSON content type required.");
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.from(chunk);
     size += buffer.length;
-    if (size > 16_384) throw new WebInputError("Request body too large.", 413);
+    if (size > maxBytes) throw new WebInputError("Request body too large.", 413);
     chunks.push(buffer);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); }

@@ -550,10 +550,19 @@ ai context --print
 ### 内网 API 服务
 
 ```bash
-npm run server
+ai server start     # 后台启动，不依赖 ai web 或终端保持运行
+ai server status    # 查询系统服务状态与日志位置
+ai server restart   # 重启并刷新升级后的可执行文件路径
+ai server enable    # 开启自启并启动
+ai server disable   # 关闭自启，保持当前服务运行
+ai server stop      # 停止并关闭自启
 ```
 
-启动常驻 HTTP 服务。**必须**设置 `AI_GATEWAY_SERVER_TOKEN` 或 `AI_GATEWAY_SERVER_TOKEN_FILE`（生产环境建议用后者）。
+先在 `ai web → 对外服务` 保存开放能力并创建调用凭证，再点击「启动服务」或执行 `ai server start`。页面支持刷新状态、重启、停止和自启；保存开放配置本身不启动服务。服务由 macOS launchd 或 Linux `systemd --user` 托管，退出管理页面和终端后继续运行，异常退出由系统管理器重启。macOS 自启发生在用户登录后；Linux 无登录持续运行或开机启动需管理员为该用户启用 linger（`loginctl enable-linger USER`）。Windows 使用当前用户 Interactive Task Scheduler 登录任务，需安装 OpenSSH；Windows 适配尚待实机验收。没有用户服务管理器的 Linux 和容器不支持此托管方式，会显示限制或操作失败。
+
+托管服务按 `AI_GATEWAY_HOME` 隔离服务标识，使用当前 Node 与安装包的绝对路径，无需源码目录或 npm；固定监听 `127.0.0.1:8080`，仅使用开放能力凭证，不继承旧环境变量服务 Token。启动前至少需要一个与开放能力有交集的有效凭证。多份配置若同时运行需避免端口冲突；状态显示的是系统服务进程状态，启动失败请刷新并检查日志，健康与真实模型调用仍需另外验证。macOS 标准输出在配置目录 `api-service.log`，Linux 用返回的 `journalctl --user -u ...` 查询；生命周期操作记录在 Runtime 日志。升级或移动安装目录后执行 `ai server restart` 重建服务定义。停止会关闭自启，防止下次登录意外重新开放；关闭自启按钮则不停止当前服务。
+
+开发调试仍可在源码目录前台执行 `npm run server`，使用 `AI_GATEWAY_SERVER_TOKEN` / `AI_GATEWAY_SERVER_TOKEN_FILE` 或已配置的能力凭证；`AI_GATEWAY_SERVER_HOST` / `AI_GATEWAY_SERVER_PORT` 仅用于前台启动。先停止旧前台服务再启动托管服务，避免端口占用。
 
 可用路由：
 
@@ -562,6 +571,8 @@ npm run server
 | `POST /v1/chat/completions` | OpenAI 兼容对话 |
 | `POST /v1/responses` | OpenAI Responses 协议 |
 | `POST /v1/embeddings` | 向量化 |
+| `POST /v1/images/generations` | 图片生成，独立 `images` 权限 |
+| `POST /v1/images/edits` | 参考图编辑，独立 `image_edits` 权限 |
 | `GET /v1/models` | 模型列表 |
 | `POST /v1/agent/runs` | 需要 Claude/Codex 工具能力时用 |
 
@@ -607,11 +618,53 @@ ai web
 
 命令启动仅监听 `127.0.0.1` 的临时端口并打开浏览器；终端保持运行，按 `Ctrl+C` 关闭。打开链接含一次运行有效的访问 token；不要把链接发给别人。控制面板可查看 Provider 健康缓存、真实用量趋势、最近日志与会话，添加/编辑/删除或检查 Provider，也可执行与 `ai set codex` 等价的持久配置操作。添加或改动 Provider 地址、API Key 会先进行真实探测，可能产生少量 Token。
 
-Web 控制面的「本地配置」提供「服务配置、模型路由、工具配置、网络代理、消息接入、记忆设置、配置维护」七个二级分类。可以在浏览器编辑 Provider、自动切换、Codex 持久配置、Runtime/Provider 出站代理、具名 Telegram Bot 和 embedding 连接；提交前会展示变更预览，受管配置写入前自动创建本机快照，失败由 core 保留旧配置。Claude Code 用户级区域只读，复制 `ai use claude` 在终端执行。Codex App/CLI 在同一 `CODEX_HOME` 下共享用户级配置；旧聊天不会迁移，请新建聊天。配置维护可恢复最近 20 个受限权限快照，但不包含用量账本、数据库、Codex 用户配置或 Codex App 采集设置与游标。
+Web 控制面的「本地配置」提供「服务配置、模型路由、工具配置、网络代理、消息接入、记忆设置、配置维护」七个二级分类。可以在浏览器编辑 Provider、自动切换、Codex 持久配置、Runtime/Provider 出站代理、具名 Telegram Bot 和 embedding 连接；提交前会展示变更预览，受管配置写入前自动创建本机快照，失败由 core 保留旧配置。Claude Code 用户连接可在「工具配置」持久保存，其他设置保留，原文件先在同目录备份；退出并重新启动 Claude Code 后生效。Telegram 配置支持启动、停止、重启、删除配置（保留会话和日志），Bot 独立于 Web 运行。Codex App/CLI 在同一 `CODEX_HOME` 下共享用户级配置；旧聊天不会迁移，请新建聊天。配置维护可恢复最近 20 个受限权限快照，但不包含用量账本、数据库、Codex 用户配置或 Codex App 采集设置与游标。
 
-「对外服务」提供「反代接入、能力开放、访问控制、接入测试」四个二级分类。页面编辑 API 上游和公网 HTTPS 入口，按接口能力勾选开放项，为每个调用方创建独立凭证并可撤销，凭证只在创建时显示一次，落盘只保留摘要。它会生成 Nginx 片段和 curl 示例；Web 不会写远程服务器，也不会把本机管理页面暴露出去。启动 API 服务时可使用这份能力配置，逐请求检查全局开放能力和凭证权限。
+「对外服务」提供「反代接入、能力开放、访问控制、接入测试」四个二级分类。页面按部署方式自动生成 API 上游，用户填写公网 HTTPS 入口，按接口能力勾选开放项，为每个调用方创建独立凭证并可撤销，凭证只在创建时显示一次，落盘只保留摘要。它会生成 Nginx 片段和 curl 示例，可按已开放能力切换示例；SSH 模式下可预览并执行远端部署，普通保存不会修改服务器；本机管理页面始终不对外开放。启动 API 服务时可使用这份能力配置，逐请求检查全局开放能力和凭证权限。
 
-保存开放配置并创建凭证后，在运行 Runtime 的机器执行 `npm run server`；默认监听 `127.0.0.1:8080`，可用 `AI_GATEWAY_SERVER_HOST` / `AI_GATEWAY_SERVER_PORT` 修改。首次启用开放配置需重启已运行的 API 服务，之后能力关闭与凭证撤销逐请求生效。旧的 `AI_GATEWAY_SERVER_TOKEN` / `AI_GATEWAY_SERVER_TOKEN_FILE` 仍支持，但也受全局开放能力范围限制。反代片段中的上游地址从反代服务器视角填写；Runtime 在另一台电脑时先建立 VPN 或隧道。单个 Provider／模型限制、限流额度与组织权限仍未实现。
+旧版启动的 Bot 若缺少进程归属标识，Web 与新版具名 CLI 会拒绝向该 PID 发送停止信号。先在系统进程列表核实 Bot 的入口与 PID，再手动停止该旧进程，之后从新版启动即可使用生命周期管理；不要直接依据过期 PID 文件结束进程。
+
+#### 向服务器开放生图服务
+
+「接入测试 → 实际调用工作台」支持对话、Responses、向量、图片生成/参考图编辑、隔离工作区 Agent 和注册工具调用。先开放对应能力并创建凭证，输入凭证后选择本机 API 或已保存的公网入口；凭证与输入只用于本次请求，不持久化。图片 Base64 可预览下载，Provider URL 提供安全链接。真实模型/Agent 请求产生费用；响应限 40 MiB，超时后先检查记录再重试。公网授权调用返回符合协议的成功响应才完成第 5 步，修改能力、凭证、入口或 SSH 配置后需重新验证。
+
+`tools` 能力对应 `POST /v1/tools/execute`，当前只注册 `runtime.status` 与 `providers.list` 两个只读工具，例如请求体 `{"name":"runtime.status"}`。不接收任意 Shell 命令，不涉及记忆检索。
+
+「运行记录 → 完整历史与导出」可分页查询所有本机记录并下载 CSV/JSON；实时追踪每 2 秒刷新最新页，翻阅旧页时关闭实时追踪。用量统计页也提供完整用量导出。数据仍来自现有账本和日志，不导出 API Key、Token、提示词或对话正文；现有日志全量文件解析在超大历史规模下仍需后续存储索引优化。
+
+步骤卡片展示准备状态，点击可跳转对应配置；部署方式以选项卡片选择，下方展示连接路径与自动上游。日志、重启和停止收在「服务详情与管理」，隧道断开收在「连接日志与断开操作」，首次密钥准备说明可展开查看。SSH 连接参数进入受限配置备份，专用私钥、主机信任、凭证请求计数和部署验证证据不进入快照；恢复 SSH 配置前需断开隧道并关闭自启。窄屏下卡片与表单自动纵向排列。
+
+先配置支持目标图片模型的 Provider，并用 `ai status` 刷新模型目录。在「能力开放」启用「图片生成」（`images`），需要参考图编辑时另外启用「图片编辑」（`image_edits`）；为调用服务器创建仅包含所需能力的凭证。旧凭证不会自动获得新增能力。启动 API 服务后，在「反代接入」按引导选择部署方式、保存 HTTPS 入口并连接服务器；不要把 `ai web` 管理端口用于反代。
+
+「反代接入」按“选择能力 → 创建凭证 → 启动 API → 连接服务器 → 部署与验收”引导操作。上游无需手填：同机反代为 `http://127.0.0.1:8080`；不同电脑选 SSH 隧道，上游自动设为服务器的 `http://127.0.0.1:18080`。这里的 18080 属于服务器的 loopback，不是本机端口。端口固定，冲突会导致连接失败，需先处理占用；旧自定义上游保存新部署方式前保留，并提示替换。
+
+SSH 模式填写服务器 IPv4/域名、用户名、SSH 端口（默认 22）和本机私钥绝对路径，保存后点击「连接隧道」，不需要手动保持 `ssh -R` 终端。密钥公钥需已授权到服务器的 `authorized_keys`，可在「在 Web 中准备 SSH 连接」扫描主机指纹，独立核对后显式信任；已有冲突密钥拒绝覆盖。支持在本机生成专用 ed25519 密钥，仅回传公钥和路径。允许密码登录的服务器可使用一次性账户密码授权专用公钥，密码仅在本次 SSH2 认证中使用，不持久化；也可手动授权公钥或使用已授权的密钥。后台使用系统 OpenSSH，忽略个人 SSH 配置，强制非交互公钥认证、严格主机校验、不转发 agent。密钥有口令时须事先解锁且让用户服务能访问密钥代理；无法认证时查看隧道日志，不会弹出网页登录框。服务器需允许远程 TCP 转发；推荐专用 SSH 账户与仅监听 loopback 的转发权限，不需要开启 `GatewayPorts` 公网监听。
+
+隧道通过现有 launchd/systemd 用户服务独立托管，异常断线由系统重启；30 秒心跳、连续 3 次无响应后退出并重连。API 和隧道分别启停与自启，退出 `ai web` 不会关闭它们；需要登录后自动恢复时分别开启自启。电脑休眠、断网、SSH 主机变化和密钥代理不可用仍影响连接。修改服务器或切换同机模式前先「断开并关闭自启」。默认不自启；Windows 使用当前用户交互登录的 Task Scheduler，需安装 OpenSSH。Windows 适配通过命令编排测试，尚待 Windows 实机验收；无用户服务管理器的 Linux/容器仍不支持托管。
+
+「刷新连接状态」区分系统进程运行与 SSH 控制连接可用，不将进程运行视为隧道就绪。「验证服务器端口」通过 SSH 在服务器执行固定的 `curl --fail --silent --show-error --max-time 5 http://127.0.0.1:18080/health/live`，因此服务器需安装 curl；它不调用模型，也不传输调用凭证。「接入测试 → 检查本机 API」只访问本机 8080，「检查公网」访问保存的 HTTPS 入口。最后部署 Nginx 片段并做一次真实授权调用；仅服务器内部调用时可直接请求自动上游地址，无需公网 Nginx，但仍需调用凭证。SSH 模式可使用「接入测试 → 远端部署 Nginx 与 HTTPS」预览计划，再确认执行；需要 root SSH、systemd、有效域名指向服务器及可访问的 80/443，支持 apt/dnf 安装可选依赖。拒绝覆盖其他 Runtime 或管理员的同名配置；nginx -t 或证书申请失败会恢复原站点配置，已装软件包/证书/ACME 账户不自动删除。复杂网关、非标准端口和同机部署仍由管理员处理。
+
+```bash
+# 后台启动，也可点击 Web 中的「启动服务」
+ai server start
+
+# 调用服务器：将凭证放入本机环境变量 AXIOM_SERVICE_TOKEN
+curl https://ai.example.com/v1/images/generations \
+  -H "Authorization: Bearer $AXIOM_SERVICE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"YOUR_IMAGE_MODEL","prompt":"画一只猫","n":1,"size":"1024x1024","response_format":"b64_json"}'
+
+curl https://ai.example.com/v1/images/edits \
+  -H "Authorization: Bearer $AXIOM_SERVICE_TOKEN" \
+  -F 'model=YOUR_IMAGE_MODEL' -F 'prompt=将背景改为蓝色' \
+  -F 'image=@reference.png'
+```
+
+生成接口接收 JSON，编辑接口接收 `multipart/form-data`，必须包含 `model`、`prompt`。`n` 为 1–8 的整数；`size` 为像素尺寸（如 `1024x1024`）或 `auto`，实际支持取决于模型。可选 `response_format` 为 `url` 或 `b64_json`，支持情况由 Provider 决定。其余模型参数原样传递，不解析提示词来重写张数或尺寸。编辑接收 `image` 或重复的 `image[]` 上传字段，共 1–8 张 PNG/JPEG/WebP，每张不超过 20 MiB，含可选 `mask` 的总上传文件不超过 40 MiB；不读取 Runtime 的本地文件路径，也不下载请求中的远程图片地址。默认整个请求体上限为 42 MiB（含 multipart 开销），可通过 `AI_GATEWAY_MAX_REQUEST_BYTES` 调整，同时修改生成的 Nginx `client_max_body_size`。
+
+响应原样保留上游 `data[].url` 或 `data[].b64_json` 和用量字段，不返回本机文件路径，也不托管结果图片；调用方自行下载 URL 或解码 Base64，URL 有效期由 Provider 决定。图片请求仅向首个健康且提供该模型的候选发送一次，不重试或跨 Provider 切换；超时、断网或 5xx 后需先确认上游任务状态，再决定是否重发，避免重复计费。上游响应头等待至少 120 秒，`AI_GATEWAY_UPSTREAM_HEADERS_TIMEOUT_MS` 可调高。无凭证返回 401，无相应能力返回 403，参数无效返回 400，超出请求体限制返回 413，无可用模型返回 503，传输失败返回 502；已开始发送的响应若中断则关闭连接。健康检查不证明生图成功，需要一次真实授权调用验收。
+
+保存开放配置并创建凭证后，点击「启动服务」或执行 `ai server start`。托管 API 固定监听 `127.0.0.1:8080`；首次启用开放配置需重启旧前台 API，之后能力关闭与凭证撤销逐请求生效。前台调试模式的旧服务 Token 同样受全局能力范围限制。反代上游由同机/SSH 模式自动生成，不改变本机 API 监听地址。调用凭证支持 Provider／模型白名单、到期时间、每分钟请求数及总请求额度；401 表示无效/过期凭证，403 表示能力或模型范围不符，429 表示限流/额度耗尽。限流为 UTC 分钟窗口，请求通过能力鉴权后即占用次数，后续参数/上游失败也计数；不是 Token 或金额预算。总请求数独立持久化，重启、轮换和配置恢复不重置；Token 轮换立即使旧值失效，新值只显示一次。组织权限仍属规划。
 
 「用量统计」支持最近 7/30/70 个 UTC 自然日和 Provider 筛选。趋势图可切换总量/输入/输出；调用活动采用 GitHub 式按周排列的 7 天小方格，短区间保留浅色日历上下文，不拉伸方格或改变排列语义，统计数字只来自当前筛选区间；Provider 占比使用圆角、无间隔分段、轻量涂鸦纹理和可切换图例的环形图。成本卡片右上角的设置按钮可以按 Provider/模型编辑输入、输出和可选 Cache Read 价格（美元/百万 token）。Provider 下拉完整列出当前所有配置、历史 usage 和已有价格键，直接选择即可切换；模型下拉列出对应 Provider 缓存目录、默认模型、历史 usage 模型和已有价格键，也可选择「手动输入模型…」填写模型 ID。切换 Provider 会更新模型和价格，保存后当前区间立即重算；未配置价格的事件会单独提示且不计入成本。点击趋势或活动日期进入「运行记录 → 调用记录」，保留 UTC 日期筛选。图表包括 Runtime 代理用量及显式启用采集后的 Codex App 本机用量，均按实际 Provider/模型汇总，不推测其他未采集的直接调用。App 用量不会创建 Runtime 调用链路或工具会话记录。
 

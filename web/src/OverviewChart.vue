@@ -50,6 +50,11 @@ const trendOption = computed(() => ({
 }))
 const providerOption = computed(() => ({
   tooltip: { ...tooltip, trigger: 'item', confine: true, formatter: '{b}\n{c} Token · {d}%' },
+  title: {
+    text: compactNumber(selectedTotal.value), subtext: 'Token', left: 'center', top: 'center', itemGap: 5,
+    textStyle: { color: '#76664e', fontFamily: 'system-ui, sans-serif', fontSize: 30, fontWeight: 550 },
+    subtextStyle: { color: '#b0a18a', fontFamily: 'system-ui, sans-serif', fontSize: 10 }
+  },
   legend: { show: false, selected: legendSelected.value },
   series: [{
     type: 'pie', radius: ['49%', '80%'], center: ['50%', '50%'], padAngle: 0,
@@ -96,7 +101,7 @@ function onTrendClick(event: { dataIndex?: number }) {
   <section v-else-if="kind === 'providers'" class="card overview-chart distribution-card">
     <div class="card-head"><div><h2>Provider 用量占比 <span class="hand-tag">the whole picture</span></h2><p>{{ scopeLabel ?? '累计 Token' }} · 按服务商汇总</p></div><span class="chip">{{ providerRows.length }} 个</span></div>
     <div v-if="providerRows.length" class="distribution-body">
-      <div class="donut-canvas"><VChart :option="providerOption" autoresize /><div class="donut-total"><strong :title="fullNumber(selectedTotal)">{{ compactNumber(selectedTotal) }}</strong><span>Token</span></div></div>
+      <div class="donut-canvas"><VChart :option="providerOption" autoresize /></div>
       <div class="sketch-legend" aria-label="Provider 图例"><button v-for="row in legendRows" :key="row.provider" :aria-pressed="legendSelected[row.provider] !== false" :class="{ hidden: legendSelected[row.provider] === false }" @click="legendSelected = { ...legendSelected, [row.provider]: legendSelected[row.provider] === false }"><i :style="{ background: row.color }"></i><span>{{ row.provider }}</span><strong>{{ providerTotal ? (row.totalTokens / providerTotal * 100).toFixed(1) : '0' }}%</strong></button></div>
       <div v-if="legendPageCount > 1" class="legend-pages"><button :disabled="legendPage === 0" aria-label="图例上一页" @click="legendPage--">‹</button><span>{{ legendPage + 1 }} / {{ legendPageCount }}</span><button :disabled="legendPage >= legendPageCount - 1" aria-label="图例下一页" @click="legendPage++">›</button></div>
     </div>
@@ -125,9 +130,6 @@ function onTrendClick(event: { dataIndex?: number }) {
 .distribution-card, .activity-card { display: flex; flex-direction: column; min-height: 490px; }
 .distribution-body { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(150px, 1fr); align-items: center; gap: 16px; flex: 1; min-height: 0; }
 .donut-canvas { height: 300px; min-width: 0; position: relative; }
-.donut-total { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 5px; pointer-events: none; }
-.donut-total strong { color: #76664e; font-size: 30px; font-weight: 550; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
-.donut-total span { color: #b0a18a; font-size: 10px; }
 .activity-body { flex: 1; min-height: 380px; display: grid; place-items: center; overflow-x: auto; padding: 8px 0; }
 .activity-calendar { --activity-cell: 22px; --activity-gap: 5px; display: grid; grid-template-columns: 20px max-content; grid-template-rows: 20px auto; column-gap: 11px; row-gap: 9px; width: max-content; margin: auto; }
 .activity-axis { grid-column: 2; display: grid; grid-template-columns: repeat(var(--weeks), var(--activity-cell)); gap: var(--activity-gap); color: #b0a087; font-size: 10px; }

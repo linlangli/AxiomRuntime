@@ -21,6 +21,7 @@ import { runStatusCommand } from "./commands/status.js";
 import { runTelegramCommand } from "./commands/telegram.js";
 import { runVersionCommand } from "./commands/version.js";
 import { runWebCommand } from "./commands/web.js";
+import { runServerCommand } from "./commands/server.js";
 import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
 import { getCliCommand, registerCliCommand } from "./registry.js";
@@ -192,6 +193,7 @@ async function runProviderCommand(args: string[]): Promise<void> {
 }
 
 function registerBuiltInCommands(): void {
+  registerCliCommand({ name: "server", description: "Manage background Runtime API", interactive: false, run: runServerCommand });
   registerCliCommand({
     name: "version",
     aliases: ["--version", "-v", "-V"],

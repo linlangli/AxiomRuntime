@@ -1,11 +1,11 @@
 import { fork } from "node:child_process";
+import { controlBot } from "../../core/services/bot-service.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   getTelegramBotConfigPath,
   getTelegramBotLogPath,
-  getTelegramBotPidPath,
   getTelegramConfigPath,
   getTelegramLogPath,
   getTelegramPidPath
@@ -249,14 +249,7 @@ async function addBot(nameArg?: string): Promise<void> {
 async function removeBot(name: string): Promise<void> {
   if (!botExists(name)) throw new Error(`Bot "${name}" does not exist.`);
   const config = await loadBotConfig(name);
-  const { running, pid } = isBotRunning(name);
-  if (running && pid) {
-    process.kill(pid, "SIGTERM");
-    if (!await waitForStop(pid, 5000)) {
-      throw new Error(`Bot "${name}" did not stop within 5 seconds; its files were kept.`);
-    }
-    console.log(`Stopped bot "${name}".`);
-  }
+  await controlBot(name, "stop");
   await removeBotFiles(name, config.dbPath);
   console.log(`Bot "${name}" removed.`);
 }
@@ -296,34 +289,8 @@ async function startTelegramBot(nameArg?: string): Promise<void> {
 }
 
 async function startNamedBot(name: string): Promise<void> {
-  if (!botExists(name)) throw new Error(`Bot "${name}" does not exist.`);
-  const config = await loadBotConfig(name);
-  if (!config.token) {
-    throw new Error(`Bot "${name}": token is not configured.`);
-  }
-  if (!config.allowAllUsers && !config.allowedUserIds.length) {
-    throw new Error(`Bot "${name}": no users allowed.`);
-  }
-  const { running, pid: existingPid } = isBotRunning(name);
-  if (running) {
-    console.log(`Bot "${name}" is already running (PID: ${existingPid}).`);
-    return;
-  }
-  if (existingPid) await removePidFile(getTelegramBotPidPath(name));
-
-  const logPath = getTelegramBotLogPath(name);
-  await fs.mkdir(path.dirname(logPath), { recursive: true });
-  const entry = resolveTelegramEntryPath();
-  const child = fork(entry, [], {
-    detached: true,
-    stdio: "ignore",
-    env: { ...process.env, AI_TELEGRAM_BOT_NAME: name, AI_GATEWAY_SOURCE: "telegram-cli" }
-  });
-  child.unref();
-  if (child.connected) child.disconnect();
-  if (!child.pid) throw new Error(`Failed to start bot "${name}".`);
-  await writePidFile(getTelegramBotPidPath(name), child.pid);
-  console.log(`Bot "${name}" started (PID: ${child.pid}).`);
+  const state = await controlBot(name, "start");
+  console.log(`Bot "${name}" started or already running (PID: ${state.pid}).`);
 }
 
 async function startLegacyBot(): Promise<void> {
@@ -375,20 +342,10 @@ async function stopTelegramBot(nameArg?: string): Promise<void> {
 }
 
 async function stopNamedBot(name: string): Promise<boolean> {
-  if (!botExists(name)) throw new Error(`Bot "${name}" does not exist.${availableBotsHint()}`);
-  const { running, pid } = isBotRunning(name);
-  if (!running) {
-    if (pid) await removePidFile(getTelegramBotPidPath(name));
-    console.log(`Bot "${name}" is not running.`);
-    return false;
-  }
-  process.kill(pid!, "SIGTERM");
-  if (!await waitForStop(pid!, 5000)) {
-    throw new Error(`Bot "${name}" did not stop within 5 seconds; its PID file was kept.`);
-  }
-  await removePidFile(getTelegramBotPidPath(name));
-  console.log(`Bot "${name}" stopped.`);
-  return true;
+  const wasRunning = isBotRunning(name).running;
+  await controlBot(name, "stop");
+  console.log(`Bot "${name}" ${wasRunning ? "stopped" : "is not running"}.`);
+  return wasRunning;
 }
 
 async function stopLegacyBot(): Promise<void> {

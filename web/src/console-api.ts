@@ -52,14 +52,15 @@ export interface CallItem {
 }
 export interface ServiceCapability { id: string; name: string; method: string; path: string }
 export interface ServiceExposure {
+  connectionMode?: 'ssh' | 'local'
   publicBaseUrl: string; upstreamUrl: string; capabilities: string[]; updatedAt: string | null
-  credentials: Array<{ id: string; name: string; capabilities: string[]; createdAt: string }>
+  credentials: Array<{ id: string; name: string; capabilities: string[]; createdAt: string; policy?: { providers?: string[]; models?: string[]; expiresAt?: string; requestsPerMinute?: number; requestQuota?: number } }>
   catalog: ServiceCapability[]
 }
 export interface LocalSettings {
   runtime: { proxyUrl?: string; failoverDisabled?: boolean }
   embedding: null | { name: string; baseUrl: string; model: string; providerType: string; queryTask: string; passageTask: string; dimensions: number | null; credentialConfigured: boolean; lastCheckedAt: string | null }
-  bots: Array<{ name: string; tokenConfigured: boolean; defaultEngine: 'claude' | 'codex'; defaultCwd: string; provider?: string; model?: string; proxyUrl?: string; allowedUserIds: number[]; allowAllUsers: boolean }>
+  bots: Array<{ name: string; running: boolean; pid: number | null; tokenConfigured: boolean; defaultEngine: 'claude' | 'codex'; defaultCwd: string; provider?: string; model?: string; proxyUrl?: string; allowedUserIds: number[]; allowAllUsers: boolean }>
   exposure: ServiceExposure
   backups: Array<{ id: string; createdAt: string }>
   managedFiles: string[]

@@ -9,7 +9,11 @@ import {
   recordProviderRuntimeSuccess
 } from "../core/config/cache-store.js";
 import { loadRuntimeConfig } from "../core/config/runtime-config.js";
-import { loadServiceExposure, authorizeServiceCredential, SERVICE_CAPABILITIES } from "../core/config/service-exposure.js";
+import { resolveImageProviderCandidates } from "../core/images/image-generation-service.js";
+import { parseImageApiRequest } from "../core/images/image-api-request.js";
+import { loadServiceExposure, findServiceCredential, SERVICE_CAPABILITIES, type CredentialPolicy } from "../core/config/service-exposure.js";
+import { admitServiceRequest } from "../core/services/credential-policy.js";
+import { executeRuntimeTool } from "../core/services/runtime-tools.js";
 import { readProviders } from "../core/config/providers-store.js";
 import { writeLog } from "../core/logs/log-service.js";
 import {
@@ -36,12 +40,14 @@ import { getToolBaseUrl } from "../core/runner/tool-runner.js";
 import { createTelegramEngine } from "../telegram/engine/registry.js";
 import type { ExecutionResult } from "../telegram/engine/types.js";
 
-const DEFAULT_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
+const DEFAULT_MAX_REQUEST_BYTES = 42 * 1024 * 1024;
 const DEFAULT_HEADERS_TIMEOUT_MS = 45_000;
 const ALLOWED_PROXY_PATHS = new Set([
   "/v1/chat/completions",
   "/v1/responses",
-  "/v1/embeddings"
+  "/v1/embeddings",
+  "/v1/images/generations",
+  "/v1/images/edits"
 ]);
 
 export type RuntimeServerOptions = {
@@ -72,11 +78,11 @@ export async function startRuntimeServer(options: RuntimeServerOptions): Promise
   // 逐候选用同一 URL 的共享连接池，close() 统一关闭。
   const globalProxyUrl = (await loadRuntimeConfig()).proxyUrl ?? null;
   const dispatchersByUrl = new Map<string, Dispatcher>();
-  const dispatcherFor = (proxyUrl: string | null): Dispatcher => {
-    const key = proxyUrl ?? "";
+  const dispatcherFor = (proxyUrl: string | null, imageRequest = false): Dispatcher => {
+    const key = `${imageRequest ? "image:" : "default:"}${proxyUrl ?? ""}`;
     let dispatcher = dispatchersByUrl.get(key);
     if (!dispatcher) {
-      dispatcher = createUpstreamDispatcher(proxyUrl, { connections: 32, headersTimeout: headersTimeoutMs });
+      dispatcher = createUpstreamDispatcher(proxyUrl, { connections: 32, headersTimeout: imageRequest ? Math.max(headersTimeoutMs, 120_000) : headersTimeoutMs });
       dispatchersByUrl.set(key, dispatcher);
     }
     return dispatcher;
@@ -144,7 +150,7 @@ async function handleRequest(input: {
   useExposureConfig: boolean;
   maxRequestBytes: number;
   globalProxyUrl: string | null;
-  dispatcherFor: (proxyUrl: string | null) => Dispatcher;
+  dispatcherFor: (proxyUrl: string | null, imageRequest?: boolean) => Dispatcher;
   agentRuntime: AgentRuntimeState;
 }): Promise<void> {
   const { req, res, requestId } = input;
@@ -162,7 +168,9 @@ async function handleRequest(input: {
     return;
   }
   const exposure = input.useExposureConfig ? await loadServiceExposure() : null;
-  const credentialCapabilities = exposure ? authorizeServiceCredential(exposure, req.headers.authorization?.replace(/^Bearer /, "") ?? "") : null;
+  const credential = exposure ? findServiceCredential(exposure, req.headers.authorization?.replace(/^Bearer /, "") ?? "") : null;
+  const credentialCapabilities = credential?.capabilities;
+  const policy = credential?.policy;
   const adminAuthorized = Boolean(input.token) && isAuthorized(req.headers.authorization, input.token);
   if (!adminAuthorized && !credentialCapabilities) {
     res.setHeader("www-authenticate", "Bearer");
@@ -177,13 +185,25 @@ async function handleRequest(input: {
       return;
     }
   }
+  if (credential && !await admitServiceRequest(credential)) {
+    res.setHeader("retry-after", "60");
+    sendJson(res, 429, { error: { message: "Credential request rate or quota exceeded.", request_id: requestId } });
+    return;
+  }
+  if (req.method === "POST" && path === "/v1/tools/execute") {
+    try {
+      const body = JSON.parse((await readBoundedRequestBody(req, input.maxRequestBytes)).toString());
+      sendJson(res, 200, { result: await executeRuntimeTool(body.name, policy?.providers, policy?.models) });
+    } catch (error) { if (error instanceof RequestBodyTooLargeError) throw error; sendJson(res, 400, { error: { message: "Invalid registered tool request." } }); }
+    return;
+  }
   if (req.method === "GET" && path === "/v1/models") {
-    await sendModels(res);
+    await sendModels(res, policy);
     return;
   }
   if (req.method === "POST" && path === "/v1/agent/runs") {
     const requestBody = await readBoundedRequestBody(req, input.maxRequestBytes);
-    await runAgent(input.res, requestBody, requestId, input.agentRuntime);
+    await runAgent(input.res, requestBody, requestId, input.agentRuntime, policy);
     return;
   }
   if (req.method !== "POST" || !ALLOWED_PROXY_PATHS.has(path)) {
@@ -192,13 +212,28 @@ async function handleRequest(input: {
   }
 
   const requestBody = await readBoundedRequestBody(req, input.maxRequestBytes);
-  const requestedModel = extractModel(requestBody);
+  const imageRequest = path === "/v1/images/generations" || path === "/v1/images/edits";
+  let requestedModel: string | null;
+  try {
+    requestedModel = imageRequest
+      ? await parseImageApiRequest(requestBody, req.headers["content-type"] ?? "", path === "/v1/images/edits")
+      : extractModel(requestBody);
+  } catch {
+    sendJson(res, 400, { error: { message: "Invalid image request. Include model and prompt; edits require uploaded image files. Check n (1–8), size, response_format and Content-Type.", request_id: requestId } });
+    return;
+  }
   if (!requestedModel) {
     sendJson(res, 400, { error: { message: "Request body must include model.", request_id: requestId } });
     return;
   }
   // 解析阶段的跳过日志与后续每一跳共享 requestId，链路视图才能看到"熔断跳过"这些前置跳。
-  const candidates = await resolveProviderCandidatesForTool("codex", undefined, requestedModel, requestId);
+  if (policy?.models?.length && !policy.models.includes(requestedModel)) {
+    sendJson(res, 403, { error: { message: "Model is not authorized." } }); return;
+  }
+  const resolvedCandidates = imageRequest
+    ? await resolveImageProviderCandidates({ model: requestedModel }, false).catch(() => [])
+    : await resolveProviderCandidatesForTool("codex", undefined, requestedModel, requestId);
+  const candidates = resolvedCandidates.filter(candidate => !policy?.providers?.length || policy.providers.includes(candidate.provider.name));
   if (!candidates.length) {
     sendJson(res, 503, { error: { message: `No healthy provider offers model ${requestedModel}.`, request_id: requestId } });
     return;
@@ -210,6 +245,7 @@ async function handleRequest(input: {
     requestBody,
     requestedModel,
     candidates,
+    imageRequest,
     globalProxyUrl: input.globalProxyUrl,
     dispatcherFor: input.dispatcherFor
   });
@@ -235,7 +271,8 @@ async function runAgent(
   res: http.ServerResponse,
   body: Buffer,
   requestId: string,
-  runtime: AgentRuntimeState
+  runtime: AgentRuntimeState,
+  policy?: CredentialPolicy
 ): Promise<void> {
   const request = parseAgentRunRequest(body);
   if (!request) {
@@ -246,6 +283,9 @@ async function runAgent(
       }
     });
     return;
+  }
+  if (policy?.providers?.length && (!request.providerName || !policy.providers.includes(request.providerName)) || policy?.models?.length && (!request.modelName || !policy.models.includes(request.modelName))) {
+    sendJson(res, 403, { error: { message: "Agent requires an explicitly authorized Provider/model." } }); return;
   }
   if (runtime.activeRuns >= runtime.maxConcurrentRuns) {
     res.setHeader("retry-after", "5");
@@ -334,8 +374,9 @@ async function proxyWithFallback(input: {
   requestBody: Buffer;
   requestedModel: string;
   candidates: ResolvedRun[];
+  imageRequest?: boolean;
   globalProxyUrl: string | null;
-  dispatcherFor: (proxyUrl: string | null) => Dispatcher;
+  dispatcherFor: (proxyUrl: string | null, imageRequest?: boolean) => Dispatcher;
 }): Promise<void> {
   const records: OpenAiUsageProxyRecord[] = [];
   let lastFailure: BufferedUpstream | null = null;
@@ -343,10 +384,11 @@ async function proxyWithFallback(input: {
   for (const [index, candidate] of input.candidates.entries()) {
     const upstreamBaseUrl = getToolBaseUrl("codex", candidate.provider);
     const upstreamUrl = buildUpstreamUrl(upstreamBaseUrl, input.req.url ?? "/");
-    const dispatcher = input.dispatcherFor(resolveProviderProxy(candidate.provider, input.globalProxyUrl));
+    const dispatcher = input.dispatcherFor(resolveProviderProxy(candidate.provider, input.globalProxyUrl), input.imageRequest);
     try {
       const response = await fetch(upstreamUrl, {
         method: input.req.method,
+        redirect: input.imageRequest ? "error" : "follow",
         headers: buildUpstreamHeaders(input.req.headers, candidate.provider.apiKey, {
           authScheme: getProviderAuthScheme(candidate.provider, "openai")
         }),
@@ -402,13 +444,13 @@ async function proxyWithFallback(input: {
 
       input.res.setHeader("x-agent-router-provider", candidate.provider.name);
       writeResponseHead(input.res, response);
-      const captured = await streamResponse(response, input.res);
+      const captured = await streamResponse(response, input.res, { maxCaptureBytes: input.imageRequest ? 32 * 1024 * 1024 : undefined });
       await recordUsageFromResponse({
         text: captured.toString("utf8"),
         contentType: response.headers.get("content-type") ?? "",
         fallbackModel: input.requestedModel,
         provider: candidate.provider.name,
-        tool: "codex",
+        tool: input.imageRequest ? "image" : "codex",
         records
       });
       if (response.ok) await recordProviderRuntimeSuccess(candidate.provider.name);
@@ -420,9 +462,8 @@ async function proxyWithFallback(input: {
       await recordProviderRuntimeFailure(candidate.provider.name, error);
       await logFallback(candidate, input.requestId, error, index + 1, input.candidates.length);
       if (index === input.candidates.length - 1) {
-        sendJson(input.res, 502, {
-          error: { message: "All configured AI providers failed.", request_id: input.requestId }
-        });
+        if (input.res.headersSent) input.res.destroy();
+        else sendJson(input.res, 502, { error: { message: "All configured AI providers failed.", request_id: input.requestId } });
         await logRequestExhausted(input.requestId, input.candidates, 502);
         return;
       }
@@ -487,16 +528,17 @@ async function logRequestExhausted(
   });
 }
 
-async function sendModels(res: http.ServerResponse): Promise<void> {
+async function sendModels(res: http.ServerResponse, policy?: CredentialPolicy): Promise<void> {
   const [providers, cache] = await Promise.all([readProviders(), readCache()]);
   const ids = new Set<string>();
   for (const provider of providers) {
+    if (policy?.providers?.length && !policy.providers.includes(provider.name)) continue;
     if (provider.model) ids.add(provider.model);
     for (const model of cache.providers[provider.name]?.models ?? []) ids.add(model);
   }
   sendJson(res, 200, {
     object: "list",
-    data: [...ids].sort().map((id) => ({ id, object: "model", owned_by: "agent-router" }))
+    data: [...ids].filter(id => !policy?.models?.length || policy.models.includes(id)).sort().map((id) => ({ id, object: "model", owned_by: "agent-router" }))
   });
 }
 
