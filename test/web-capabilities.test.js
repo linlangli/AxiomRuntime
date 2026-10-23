@@ -209,9 +209,13 @@ test("SSH preparation requires confirmed host identity and pins password bootstr
   const dependencies = { home: root, run: async (command, args, input, timeout) => command === "ssh-keyscan" ? `[127.0.0.1]:${config.port} ${hostPublic}\n` : runSshCommand(command, args, input, timeout) };
   try {
     await assert.rejects(prepareSsh({ action: "trust", config, scanId: "unconfirmed" }, dependencies), /过期/);
-    const generated = await prepareSsh({ action: "keygen", config }, dependencies);
+    const generated = await prepareSsh({ action: "keygen" }, dependencies);
     assert.match(generated.publicKey, /^ssh-ed25519 /); assert.doesNotMatch(JSON.stringify(generated), /PRIVATE KEY/);
     assert.equal((await fs.stat(generated.identityFile)).mode & 0o077, 0);
+    const privateKey = await fs.readFile(generated.identityFile, "utf8");
+    const reused = await prepareSsh({ action: "keygen", config: {} }, dependencies);
+    assert.equal(reused.identityFile, generated.identityFile);
+    assert.equal(await fs.readFile(reused.identityFile, "utf8"), privateKey);
     const scan = await prepareSsh({ action: "scan", config }, dependencies);
     assert.match(scan.fingerprints, /SHA256:/);
     await assert.rejects(prepareSsh({ action: "trust", config: { ...config, host: "other.test" }, scanId: scan.scanId }, dependencies), /改变/);

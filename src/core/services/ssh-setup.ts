@@ -27,8 +27,16 @@ const scans = new Map<string, { keys: string; host: string; port: number; expire
 
 export async function prepareSsh(input: Record<string, unknown>, dependencies: { home?: string; run?: typeof runSshCommand } = {}) {
   const run = dependencies.run ?? runSshCommand;
+  if (input.action === "keygen") {
+    const identityFile = path.join(getConfigRoot(), "service-ssh-key");
+    await fs.mkdir(getConfigRoot(), { recursive: true, mode: 0o700 });
+    await withJsonFileLock(`${identityFile}.generation`, async () => {
+      if (!await fs.stat(identityFile).catch(() => null)) await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", identityFile]);
+    });
+    return { identityFile, publicKey: await fs.readFile(`${identityFile}.pub`, "utf8"), detail: "专用密钥已在本机生成。私钥不回传；请授权公钥到服务器。" };
+  }
   const raw = input.config ?? await loadSshTunnel();
-  const config = validateSshTunnel(input.action === "keygen" && raw && typeof raw === "object" ? { ...raw, identityFile: path.join(getConfigRoot(), "service-ssh-key") } : raw);
+  const config = validateSshTunnel(raw);
   const directory = path.join(dependencies.home ?? os.homedir(), ".ssh");
   const known = path.join(directory, "known_hosts");
   if (input.action === "scan") {
@@ -58,14 +66,6 @@ export async function prepareSsh(input: Record<string, unknown>, dependencies: {
     });
     scans.delete(String(input.scanId));
     return { detail: "主机指纹已保存，后续仍执行严格校验。" };
-  }
-  if (input.action === "keygen") {
-    const identityFile = path.join(getConfigRoot(), "service-ssh-key");
-    await fs.mkdir(getConfigRoot(), { recursive: true, mode: 0o700 });
-    await withJsonFileLock(`${identityFile}.generation`, async () => {
-      if (!await fs.stat(identityFile).catch(() => null)) await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", identityFile]);
-    });
-    return { identityFile, publicKey: await fs.readFile(`${identityFile}.pub`, "utf8"), detail: "专用密钥已在本机生成。私钥不回传；请授权公钥到服务器。" };
   }
   if (input.action === "diagnose") {
     const key = await fs.stat(config.identityFile).catch(() => null);
