@@ -787,8 +787,10 @@ npm run build        # clean + tsc + chmod
 npm test             # build 然后跑 node:test
 npm run dev          # 带 source map 运行 CLI
 npm run server       # 启动常驻 API
-npm link             # 全局安装为 ai 命令
+npm run link         # build 成功后 npm link，全局注册为 ai 命令
 ```
+
+`npm link` 是 npm 内置命令，本身不会构建本项目；直接使用前必须先执行 `npm run build`。源码修改后重新运行 `npm run link` 更新编译产物与全局链接。
 
 单个测试文件：
 

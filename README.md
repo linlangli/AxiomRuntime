@@ -308,8 +308,10 @@ AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 npm install
 npm run build
 npm test
-npm link
+npm run link
 ```
+
+`npm run link` 会先构建，再通过 `npm link` 将当前源码注册为全局 `ai` 命令。修改源码后重新运行即可更新。
 
 完整命令说明见：
 

@@ -49,6 +49,18 @@ ai --version
 
 如果 npm 报 `EBADENGINE`，说明 Node.js 版本不够。**先升级再装**，不要忽略这个警告继续用。
 
+### 从源码链接
+
+在仓库根目录运行：
+
+```bash
+npm install
+npm run link
+ai --version
+```
+
+`npm run link` 会先执行 `npm run build`，构建成功后再执行 `npm link`，把当前源码注册为全局 `ai` 命令。修改源码后重新运行 `npm run link` 即可更新。也可以手动运行 `npm run build` 后执行 `npm link`；`npm link` 是 npm 内置命令，本身不会构建本项目。
+
 ### Homebrew 安装
 
 ```bash

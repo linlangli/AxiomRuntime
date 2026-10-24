@@ -466,6 +466,11 @@ ai setup</pre>
             <p>如果 npm 显示 <code>EBADENGINE</code>，请先升级 Node.js 再重新安装，不要继续使用警告状态下安装的 CLI。</p>
             <p><code>ai --version</code> 无副作用地验证安装；<code>ai setup</code> 初始化 Runtime，并可在确认后安装缺失的 Claude Code/Codex。</p>
             <p>全局安装可以由 root 完成，但日常执行和常驻服务应使用专用非 root 用户。root 下请求 Claude <code>auto</code>/<code>bypassPermissions</code> 时，Runtime 会安全约束为默认权限并告警，不会传递 <code>--dangerously-skip-permissions</code>。</p>
+            <h3>从源码链接</h3>
+            <pre>npm install
+npm run link
+ai --version</pre>
+            <p>在仓库根目录运行。<code>npm run link</code> 先执行 <code>npm run build</code>，构建成功后再通过 <code>npm link</code> 将当前源码注册为全局 <code>ai</code> 命令；修改源码后重新运行即可更新。手动操作时也可先运行 <code>npm run build</code> 再执行 <code>npm link</code>；后者是 npm 内置命令，本身不会构建本项目。</p>
             <pre>brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
 brew install linlangli/axiom/axiomruntime
 ai --version
