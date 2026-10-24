@@ -1,5 +1,5 @@
 import { appendUsageEvent } from "../config/usage-store.js";
-import { writeLog } from "../logs/log-service.js";
+import { getLogContext, newTraceId, writeLog } from "../logs/log-service.js";
 import { extractTokenUsage } from "../models/model-discovery.js";
 import type { RunToolType, TokenUsage } from "../types.js";
 import { estimateTokenCostUsdFromConfig } from "../usage/pricing.js";
@@ -41,7 +41,11 @@ export async function recordUsageFromResponse(input: {
   };
   input.records.push(record);
 
+  const context = getLogContext();
   await appendUsageEvent(buildUsageEvent({
+    id: `usage_${newTraceId()}`,
+    ...(context.traceId ? { traceId: context.traceId } : {}),
+    ...(context.sessionId ? { sessionId: context.sessionId } : {}),
     provider: input.provider,
     tool: input.tool,
     model: record.model,
@@ -49,8 +53,11 @@ export async function recordUsageFromResponse(input: {
     inputTokens: record.usage.inputTokens,
     outputTokens: record.usage.outputTokens,
     totalTokens: record.usage.totalTokens,
-    cacheReadInputTokens: record.usage.cacheReadInputTokens
-  })).catch(() => undefined);
+    cacheReadInputTokens: record.usage.cacheReadInputTokens,
+    ...(record.costUsd !== undefined ? { costUsd: record.costUsd, costSource: record.costSource } : {})
+  })).catch(async () => {
+    await writeLog({ level: "error", category: "usage", action: "usage_persistence_failed", message: "Provider usage was observed but could not be persisted.", metadata: { provider: input.provider, model: record.model } });
+  });
   await writeLog({
     category: "usage",
     action: "openai_usage_proxy_recorded",

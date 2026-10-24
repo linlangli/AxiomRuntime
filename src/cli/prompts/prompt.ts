@@ -1,14 +1,20 @@
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { Writable } from "node:stream";
 
 export async function promptText(message: string, options: { defaultValue?: string; secret?: boolean } = {}): Promise<string> {
-  const rl = readline.createInterface({ input, output });
+  let muted = false;
+  const secretOutput = new Writable({ write(chunk, encoding, callback) { if (!muted) output.write(chunk, encoding); callback(); } });
+  const rl = readline.createInterface({ input, output: options.secret ? secretOutput : output, terminal: options.secret ? Boolean(input.isTTY && output.isTTY) : undefined });
   try {
-    const suffix = options.defaultValue ? ` (${options.defaultValue})` : "";
-    const answer = await rl.question(`${message}${suffix}: `);
+    const suffix = options.defaultValue && !options.secret ? ` (${options.defaultValue})` : "";
+    const pending = rl.question(`${message}${suffix}: `);
+    muted = Boolean(options.secret);
+    const answer = await pending;
     return answer.trim() || options.defaultValue || "";
   } finally {
     rl.close();
+    if (options.secret) output.write("\n");
   }
 }
 

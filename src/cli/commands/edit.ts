@@ -122,6 +122,10 @@ async function buildPatch(
     return proxyUrl ? { proxyUrl } : { proxyUrl: "" };
   }
 
+  if (field === "apiKey") {
+    const apiKey = await promptText("New API Key (blank keeps current)", { secret: true });
+    return apiKey ? { apiKey } : null;
+  }
   const value = await promptText(`New ${field}`, { defaultValue: provider[field] });
   return { [field]: value };
 }

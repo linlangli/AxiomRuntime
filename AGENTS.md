@@ -79,6 +79,10 @@ Use `rg` and direct file reads for literal text, documentation, configuration va
 
 ### Local Web Control Plane
 
+- Provider storage supports legacy plaintext arrays and version 1 keyring documents. Hydrate credentials only through shared Provider APIs. Once keyring storage is active, writes and snapshot restores must not downgrade it; locked or missing credentials fail closed. Immutable key versions remain available for snapshot recovery; only an explicit rollback may export plaintext. Memory and native CLI authentication files are outside this migration.
+- Usage/session storage may explicitly migrate to `history.sqlite`. Only the selected backend is authoritative; never dual-write JSON or silently read stale JSON when an active database is missing or corrupt. Use the mature SQLite backup API, preserve current state before restore, and require stopped writers for migration, restore, or rollback. Do not reset service admission counters or touch memory databases.
+- Model requests inherit `sessionId` and parent `executionId` but own a fresh `traceId`. Record terminal outcomes and observed usage on that request context. Never infer an actual Provider or token count from an initial selection or a missing event. New reports use exact session attribution; legacy estimates must be labeled.
+
 - Web execution must call the existing Runtime API and never introduce a second model proxy or usage ledger. Playground credentials, SSH passwords, prompts, and image bodies must not enter configuration snapshots or operational logs.
 - Credential Provider/model scopes apply before dispatch and to model catalogs. Request admission counters are durable authorization state, not usage metrics; rotation and configuration restore must not reset them. Token or monetary budgets are not implied by request quotas.
 - Remote deployments require a concrete preview and explicit execution, strict host verification, fixed loopback upstreams, configuration ownership checks, a remote lock, and Nginx validation with configuration rollback. Do not claim package or certificate rollback.

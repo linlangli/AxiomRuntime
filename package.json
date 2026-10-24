@@ -15,8 +15,9 @@
     "ai": "./dist/cli/index.js"
   },
   "scripts": {
-    "clean": "rm -rf dist",
-    "build": "tsc && npm run build:web:console && chmod +x dist/cli/index.js",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "tsc && npm run build:web:console && node -e \"require('node:fs').chmodSync('dist/cli/index.js', 0o755)\"",
+    "link": "npm run build && npm link",
     "build:web:console": "npm --prefix web run build:console",
     "build:web:portal": "npm --prefix web run build:portal",
     "dev": "node --enable-source-maps dist/cli/index.js",
@@ -26,6 +27,7 @@
     "release": "node scripts/release.js",
     "release:current": "node scripts/release.js --npm",
     "release:check": "npm test && npm pack --dry-run",
+    "smoke:package": "npm run build && node scripts/smoke-package.js",
     "homebrew:update": "node scripts/update-homebrew-formula.js --write",
     "homebrew:check": "node scripts/update-homebrew-formula.js",
     "homebrew:publish": "node scripts/release.js --homebrew",
@@ -51,6 +53,7 @@
     "typescript": "^5.8.0"
   },
   "dependencies": {
+    "@napi-rs/keyring": "2.1.2",
     "better-sqlite3": "^13.0.2",
     "gpt-tokenizer": "^3.4.0",
     "grammy": "^1.44.0",
@@ -58,6 +61,6 @@
     "image-size": "2.0.4",
     "proper-lockfile": "^4.1.2",
     "ssh2": "^1.17.0",
-    "undici": "^8.10.0"
+    "undici": "8.12.3"
   }
 }

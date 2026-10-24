@@ -5,7 +5,7 @@
 - 想了解内部设计 → [技术架构](architecture.md)
 - 想了解产品规划 → [产品需求文档](prd.md)
 
-本文只写**当前版本真正可用**的功能。规划中的能力集中放在最后一节「还没有的功能」，不会混在正文里。
+本文只写**当前源码真正可用**的功能。规划中的能力集中放在最后一节「还没有的功能」，不会混在正文里。`develop` 文档可能包含尚未发布的增量；npm 安装请按对应 release tag 核对，不能仅凭相同的 `package.json` 版本号判断功能一致。
 
 ---
 
@@ -58,6 +58,10 @@ ai --version
 ```
 
 Homebrew 用的是同版本的 npm tarball，校验 SHA256 后装到隔离目录，并固定使用 Homebrew 的 `node@22`。Tap 名仍为 `linlangli/axiom`，第一次 `brew tap` 必须带上实际的 GitHub 仓库 URL。已经添加旧 GitLab Tap 的用户，执行 `git -C "$(brew --repo linlangli/axiom)" remote set-url origin https://github.com/linlangli/AxiomRuntime.git` 后再运行 `brew update`。
+
+### 源码安装与打包验证
+
+在仓库根目录依次执行 `npm ci`、`npm ci --prefix web`、`npm run link`。`link` 先完整构建 CLI 与控制面，再全局链接 `ai`。`npm run smoke:package` 在临时目录安装真实打包产物，验证 CLI、Web 静态资源、鉴权 API 与历史迁移/备份/回滚，不修改全局链接或真实用户配置；CI 在 Linux/macOS/Windows 运行该检查，正式 npm 发布也要求通过。
 
 ### 关于 root
 
@@ -142,7 +146,7 @@ ai check 我的站       # 只检查指定 Provider
 ai status             # 联网刷新健康度 + 看用量
 ```
 
-`ai provider list` 以卡片形式展示，`level: 1` 会标注为默认服务商。API Key 显示为掩码（`sk-d****0000`）。
+`ai provider list` 以卡片形式展示，`level: 1` 会标注为默认服务商。API Key 只显示 `(configured)` / `(missing)`，不显示首末字符；编辑 Key 不预填旧值，空输入保留当前 Key，交互输入不回显。
 
 `ai models [provider]` 只调用选中 Provider 的 `GET /models`，更新该 Provider 的完整模型缓存并逐行列出模型名，不会调用任何模型做推理，因此不产生推理 Token。省略名称时进入交互选择；提供名称时精确匹配。模型发现失败时保留原缓存和真实健康状态。
 
@@ -173,7 +177,21 @@ ai provider delete 我的站
 - 改 `level` 时，当前项会显示为 `current: Provider名称`；如果目标等级被占用，两个 Provider 会**交换**等级；改为 `0` 后退出自动候选链
 - 删除会同时清理配置和模型缓存
 
-> **安全提示：`apiKey` 目前以明文保存在 `providers.json`。** 请确认该文件权限受限，且绝不提交到仓库。加密存储是规划中的能力，见第 11 节。
+### Provider 凭据保护
+
+```bash
+ai secrets status             # 查看后端、引用及明文数量，不输出 Key
+ai secrets migrate            # 显式迁移 Provider Key 和现有 Web 快照
+ai secrets rollback --yes     # 显式恢复为明文，便于迁移机器或退回旧版本
+```
+
+省略子命令的 `ai secrets` 等同 `ai secrets status`。Web 的「帮助中心 → 命令手册 → 凭据与历史」提供相同规则，命令索引中这组命令的「详细用法」直接进入该分类。
+
+旧配置兼容明文数组；迁移后 `providers.json` 使用 `{ version: 1, secretBackend: "keyring", providers: [...] }`，每项只存 `apiKeyRef`。实际 Key 使用当前用户的系统凭据库：macOS Keychain、Windows Credential Manager，或已解锁的 Linux Secret Service。无凭据服务的服务器可继续使用受限权限的旧配置。迁移先写入并读回验证，再原子替换配置；锁定或缺失时失败，不自动回退明文。新增、编辑、轮换及旧快照恢复遵守已启用的保护方式，删除全部 Provider 后仍保留该方式。
+
+迁移前停止配置写入进程。快照逐份迁移，途中失败可能已保护当前配置而仍有旧明文快照；用 `ai secrets status` 检查并重试，不承诺跨文件事务。旧凭据版本保留以支持快照恢复，不自动删除钥匙串条目。引用按 `AI_GATEWAY_HOME` 路径隔离；移动目录、迁移机器或降级旧版本前，先显式回滚并安全转移凭据。外部备份及文件系统历史不会被安全擦除。
+
+本命令仅处理 Provider；`memory.json`、Telegram Token、原生 CLI `auth.json`、Claude settings 和临时认证文件沿用现有行为，需继续限制权限。测试不会自动迁移你的真实 Key。
 
 ---
 
@@ -217,7 +235,7 @@ ai last                                # 沿用上次的工具、服务商和模
 
 默认每个 Provider 最多尝试 2 次（首次 + 1 次重试），两次之间退避 300ms，之后按次数翻倍。重试成功的请求**不计入**该 Provider 的失败次数、不扣健康分；重试全部失败时整段只记一次失败，不会因为重试而加速熔断。所以偶发的 429 或上游抖动现在大多在原地就消化掉了，你在 `ai log` 里会看到 `provider_retry` 而不是一串切换。
 
-一旦已经向 Claude Code/Codex 返回文字、推理增量或工具参数，Runtime 不会自动重放，避免重复输出或重复工具调用。此时 Runtime 只记下候选 Provider，**下一个**经过代理的请求才真正切过去。`400`、`413`、`422` 等通常由请求本身导致的错误不会跨 Provider 重试。确认动作依赖你在当前 CLI 里重新提交或重试，不会抢占原生 TUI 弹出额外的 `y/n` 输入框。
+一旦已经向 Claude Code/Codex 返回文字、推理增量或工具参数，Runtime 不会自动重放，避免重复输出或重复工具调用。此时 Runtime 只记下候选 Provider，**下一个带请求体的模型 POST（不含 multipart）**才真正切过去。`400`、`413`、`422` 等通常由请求本身导致的错误不会跨 Provider 重试。确认动作依赖你在当前 CLI 里重新提交或重试，不会抢占原生 TUI 弹出额外的 `y/n` 输入框。
 
 ### 哪些请求不会触发切换
 
@@ -231,13 +249,7 @@ ai last                                # 沿用上次的工具、服务商和模
 
 这是**端点缺失**，不是 Provider 坏了。如果把它当成模型调用失败，一次 `count_tokens` 就会连续轮转并烧穿整条候选链，同时给每个被轮到的 Provider 记一次失败、扣一次健康分——本来完全可用的 Provider 会被误标成 `error`。现在这类请求被排除在降级之外。
 
-**一处与上述描述不符的实际行为**（已核实，修复前请按实际行为理解）：
-
-| 场景 | 实际行为 |
-|---|---|
-| 处于「等待确认切换」状态时，CLI 自发的**无关请求**（包括无请求体 `GET`）先到达 | 该请求会**替你消耗掉**待确认状态并记为已确认切换，不需要你真的重新提交 |
-
-它不会造成重复输出或重复计费——切换本身仍然只对失败的尝试生效。影响是**落点可能比你预期的更早发生变化**：想确认这次请求最终由谁承接，用 `ai log --print --trace <traceId>` 看终止跳，而不是假设它还在启动时选定的 Provider 上。
+等待确认期间，`GET` 探测、空请求体、`count_tokens` 和 multipart 上传均不消费待切换状态；只有后续带请求体的模型 POST 才确认。
 
 **提示显示在哪里**：原生 CLI 的 TUI 独占终端并整屏重绘，因此 Runtime **不会**在会话期间往终端插入提示行——那会打乱 TUI 的排版。切换提示按通道分两处呈现：
 
@@ -246,7 +258,7 @@ ai last                                # 沿用上次的工具、服务商和模
 
 ### 怎么知道当前在用哪个 Provider
 
-因为上面那条限制，`ai use` **运行期间**终端里看不到当前落在哪个 Provider —— 原生 TUI 的画面归它自己，Runtime 不往里插字节。目前可用的查看方式都是**事后**的：
+原生 TUI 的实时画面由 CLI 自己管理。可在另一终端用 `ai session list`、`ai log` 或 Web 查看已持久化的成功请求落点；退出后查看切换汇总：
 
 ```bash
 # 退出 ai use 后，终端会打印本次执行的切换汇总（发生过切换才打印）
@@ -255,8 +267,8 @@ ai session list                    # 会话记录里的服务商和模型
 ai last                            # 上次选择的工具 / 服务商 / 模型
 ```
 
-> 已知限制：`ai session list` 和 `ai last` 记的是**启动时选定**的 Provider。如果执行期间发生过请求级自动切换，实际承接请求的 Provider 要用 `ai log --trace` 确认。
->
+`ai session list` 区分启动配置和最近成功请求的 `actualProvider` / `actualModel`；没有成功请求时显示未记录。`ai last` 在成功请求后更新落点，无请求成功时保留启动选择。Web 每 2 秒刷新已持久化的请求终止事件；侧栏仍代表默认 Provider。
+
 `ai web` 的侧栏显示当前**默认** Provider，「运行记录 → 调用记录」按 `traceId` 分组显示近期执行事件，结果 Provider 仅取自明确的终止事件；缺少终止事件时显示「结果未知」。工具执行可能包含多次请求，不能据此推断每次请求的实际承接者。它仍不改变原生 CLI TUI 的实时显示限制；可用 `ai log --print --trace <traceId>` 查看已记录的调用过程。
 
 ### 它对你的环境做了什么
@@ -271,7 +283,7 @@ ai last                            # 上次选择的工具 / 服务商 / 模型
 
 **权限模式**：`mode: auto` 时非 root 启动 Claude 会追加 `--dangerously-skip-permissions`；`ask` 模式不加，并在启动前确认。
 
-**用量记录**：两个引擎的模型请求都经过一个本次执行专属的本地代理转发，服务商返回的真实用量按服务商/模型写入 `usage.json`。终端交互方式完全不变。
+**用量记录**：两个引擎的模型请求都经过一个本次执行专属的本地代理转发，服务商返回的用量按实际服务商/模型写入唯一账本，默认 `usage.json`，显式迁移后为 `history.sqlite`。新请求附带 `traceId` / `sessionId`，并保留 Provider 返回的成本及来源；无成本时才按价格表估算。写入失败记录 `usage_persistence_failed`，不重放已完成的模型请求。
 
 **日志**：记录服务商、Base URL、模型、启动参数和 API Key 指纹，**不记完整 Key**。
 
@@ -489,7 +501,7 @@ ai session clear                   # 清空记录
 
 每次 `ai use` 都会记一条会话，包含工具、服务商、模型、项目路径、起止时间和退出状态。
 
-> 当前是**复用启动参数**继续，不承诺恢复 Claude/Codex 的原生聊天上下文。`ai session clear` 只清 AxiomRuntime 的记录，不删 Claude Code / Codex 自己的历史。
+续用在原项目目录启动，优先使用最近成功的 Provider / 模型。新 Claude 会话通过 `--session-id` 保存原生 ID；Codex 仅在项目、时间和 `source: "cli"` 匹配且候选唯一时关联原生 ID。记录有 `nativeSessionId` 时传递原生 `--resume` / `resume`；旧记录、无记录或歧义场景明确提示只复用启动配置。原生历史被删除或上游 CLI 不兼容时由原生工具报错。`ai session clear` 只清 Runtime 记录，不删原生历史。
 
 ### 报告
 
@@ -500,6 +512,24 @@ ai report --print <session-id>   # 直接打印到终端
 ```
 
 写入 `~/.ai-gateway/reports/<session-id>.md`，包含会话上下文、真实 token 汇总、工具和模型、服务商快照。**不写 API Key，不估算 token。**
+
+新会话报告严格按 `sessionId` 归属用量，避免并发混算；旧记录明确标注 Provider/model/时间窗口近似归属。
+
+### 历史容量与恢复
+
+```bash
+ai history status
+ai history migrate                         # 导入 JSON 用量及会话，启用 SQLite
+ai history backup                          # 返回受限权限的备份文件
+ai history restore <backup.sqlite> --yes    # 使用返回路径的文件名恢复
+ai history rollback --yes                   # 导出最新数据，恢复 JSON 后端
+```
+
+省略子命令的 `ai history` 等同 `ai history status`。`backup` 需要先启用 SQLite，返回备份文件的完整路径；`restore` 参数仅填写该路径的文件名，例如 `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.sqlite`，不要传完整路径。
+
+迁移、恢复和回滚前停止所有 Runtime CLI、API、Web 和 Bot 写入进程，且不要混用不识别 SQLite 的旧版本。迁移成功后唯一权威为 `history.sqlite`，原 JSON 保留为迁移前副本，不再双写。按现有事件 `id` 幂等导入；恢复前保留当前数据库副本，回滚先完整导出再停用数据库。数据库缺失或损坏需停止服务检查，损坏不会自动降级读旧 JSON；`ai doctor --fix` 不重置数据库。恢复只接受 `history-backups/` 内返回的文件名，覆盖备份后的历史，不恢复配置、授权计数、Telegram 或记忆数据库。
+
+SQLite 用量/会话分页按索引查询；日志分页仍扫描文件但只保留当前页，最近日志从文件尾分块读取，忽略无效行及超过 4 MiB 的单条记录。`ai log --print --trace <id>` 同时匹配请求 `traceId` 和父执行 `executionId`，不再只搜索最近 500 行。完整调用聚合、总览汇总仍读取相应历史，日志轮转和长时间容量/SLO 验收仍由部署者负责。
 
 ### 诊断
 
@@ -531,7 +561,7 @@ ai context --print
 
 日志包含使用痕迹、报错、健康检查、降级策略执行和诊断记录，文件在 `~/.ai-gateway/.ai-gateway.log`。
 
-**按调用链路查看**：HTTP 请求、Telegram Provider 尝试、一次 `ai use` 的候选解析、切换与终止事件复用入口 `traceId`。带有该 ID 的日志会在 `--print` 输出中显示 `trace:` 行，可配合 `--trace` 按顺序查看已记录的过程。历史日志及部分工具代理、任务生命周期事件缺少该字段，不会被推测关联；日志窗口内缺少终止事件时，最终结果和 Provider 可能无法确认：
+**按调用链路查看**：HTTP 请求、Telegram Provider 尝试与 `ai use` 的启动过程各自记录入口 `traceId`。工具代理中的每个新请求另外分配独立 `traceId`，通过 `executionId` 关联父执行，通过 `sessionId` 关联会话；`openai_usage_proxy_request_settled` 记录请求终止结果、耗时和落点。`--trace <id>` 同时匹配请求与父执行 ID，按时间打印完整日志文件中的匹配事件。历史日志及部分生命周期事件缺少关联时保留未知；缺少终止事件时，最终结果和 Provider 可能无法确认：
 
 ```
 1. [WARN ] strategy / fallback_skip_provider          legacy-gw 熔断中跳过
@@ -604,7 +634,7 @@ ai help          # 打开 HTML 命令手册
 ai --version
 ```
 
-`ai help` 用系统默认程序打开独立的 `USAGE.html`。`ai web` 的「帮助中心 → 命令手册」复用同一份手册内容，完整提供命令索引、安装配置、模型使用、服务管理、记忆配置、消息接入、状态诊断、会话报告和配置文件。命令索引可按分组筛选，顶部搜索覆盖所有命令、参数与详细规则；点击搜索结果可阅读完整说明。命令和整段示例均可一键复制，详细规则可展开或收起；界面沿用本地面板的纸张卡片、柔和配色与响应式目录。复制命令不会执行命令或修改配置。
+`ai help` 用系统默认程序打开独立的 `USAGE.html`。`ai web` 的「帮助中心 → 命令手册」复用同一份手册内容，完整提供命令索引、安装配置、模型使用、服务管理、记忆配置、消息接入、状态诊断、会话报告、凭据与历史和配置文件。「凭据与历史」集中说明 `ai secrets`、`ai history` 的参数、迁移前提、备份与回滚限制；`ai session resume` 和 `ai log --print --trace` 的行为分别在会话报告和状态诊断中说明。命令索引可按分组筛选，顶部搜索覆盖所有命令、参数与详细规则；点击搜索结果可阅读完整说明。命令和整段示例均可一键复制，详细规则可展开或收起；界面沿用本地面板的纸张卡片、柔和配色与响应式目录。复制命令不会执行命令或修改配置。源码更新手册后须运行 `npm run build` 并重启 `ai web`，使控制面加载重新打包的内容。
 
 ### 本地 Web 控制面板
 
@@ -630,7 +660,7 @@ Web 控制面的「本地配置」提供「服务配置、模型路由、工具�
 
 `tools` 能力对应 `POST /v1/tools/execute`，当前只注册 `runtime.status` 与 `providers.list` 两个只读工具，例如请求体 `{"name":"runtime.status"}`。不接收任意 Shell 命令，不涉及记忆检索。
 
-「运行记录 → 完整历史与导出」可分页查询所有本机记录并下载 CSV/JSON；实时追踪每 2 秒刷新最新页，翻阅旧页时关闭实时追踪。用量统计页也提供完整用量导出。数据仍来自现有账本和日志，不导出 API Key、Token、提示词或对话正文；现有日志全量文件解析在超大历史规模下仍需后续存储索引优化。
+「运行记录 → 完整历史与导出」可分页查询所有本机记录并下载 CSV/JSON；实时追踪每 2 秒刷新最新页，翻阅旧页时关闭实时追踪。用量统计页也提供完整用量导出。数据仍来自现有账本和日志，不导出 API Key、Token、提示词或对话正文；SQLite 用量/会话支持索引分页，日志页扫描文件但只保留当前页；完整调用聚合仍需扫描，超大历史尚需容量验收。
 
 「反代接入」只保留一条配置流程：选择部署位置 → 连接服务器 → 设置访问地址，每次只展开当前步骤。同机部署自动跳过 SSH。上方「接入前准备」只显示能力、凭证、API 状态，点击补齐缺项；它不是另一套配置步骤。SSH 信息准备好后点击「保存并连接服务器」，无需先单独保存。自启、端口验证与断开收在「连接管理」，首次指纹/密钥准备和终端方式按需展开。SSH 连接参数进入受限配置备份，专用私钥、主机信任、凭证请求计数和部署验证证据不进入快照；恢复 SSH 配置前需断开隧道并关闭自启。窄屏下卡片与表单自动纵向排列。
 
@@ -674,8 +704,8 @@ curl https://ai.example.com/v1/images/edits \
 
 「运行记录」分为三个页面：
 
-- **调用记录**：基于最近 300 条日志，按 `traceId` 归组执行，优先显示结果、模型、Provider 和时间；支持结果、切换、重试、Provider 和搜索筛选。点击打开侧边详情，查看结果摘要、Provider 过程、中文事件时间线和可展开的原始字段。重试与跨 Provider 切换分别计数，配对的切换计划和应用事件只计一次。缺少终止事件显示「结果未知」，不推断正在运行；结果 Provider 仅取终止事件，耗时未记录时明确显示事件跨度。一次工具执行可能包含多次请求，目前不提供逐调用 Token/成本推算。
-- **工具会话**：最近 30 次工具启动与退出，展示工具、初始模型/Provider、启动时间、运行时长、退出结果与退出码。未记录结束时间显示「尚无退出记录」，不能视为进程存活。仅当日志明确记录与本地会话相同的 `sessionId` 时提供关联调用入口；不按时间或 Provider 猜测关联，也不展示聊天内容。
+- **调用记录**：基于最近 300 条日志，按 `traceId` 归组，优先显示结果、模型、Provider 和时间；支持结果、切换、重试、Provider 和搜索筛选。点击打开侧边详情，查看结果摘要、Provider 过程、中文事件时间线和可展开的原始字段。重试与跨 Provider 切换分别计数，配对的切换计划和应用事件只计一次。新模型请求显示已观测 Token、成本及来源、终止耗时与父 `executionId`；辅助请求不进入模型调用汇总。一次工具执行可能包含多个独立请求。旧记录无用量关联时显示未知，不按时间推算。缺少终止事件显示「结果未知」，不推断正在运行；结果 Provider 仅取终止事件，耗时未记录时明确显示事件跨度。
+- **工具会话**：最近 30 次工具启动与退出，区分启动配置与最近成功请求的实际模型/Provider，展示时间、时长、退出结果与退出码。未记录结束时间显示「尚无退出记录」，不能视为进程存活。仅当日志明确记录与本地会话相同的 `sessionId` 时提供关联调用入口；不按时间或 Provider 猜测关联，也不展示聊天内容。
 - **系统日志**：按「模型请求 / 服务检查 / 配置变更 / 系统运行」分类，支持级别、Provider、分类、日期和搜索筛选。事件先显示中文说明，展开查看脱敏后的 `action`、`level`、`traceId` 等原始字段；存在明确调用关联时可直接打开调用详情。没有 `traceId` 的事件仅保留在日志中，不生成调用记录。
 
 公网门户 `https://axiom.offerpilot.life/` 是独立部署的静态介绍页，不连接本机配置、不提供远程控制，也不包含在 npm 包内。默认分支的 GitHub Actions 会先测试并构建 `web/dist/portal/`，再用受限的 `axiom-portal-deploy` SSH 账号上传不可变 release、原子切换 `current` symlink，并用线上首页内容做健康检查；失败会自动恢复上一 release。SSH 主机公钥和私钥通过 `portal-production` Environment Secrets 注入，私钥不进仓库。服务器证书和 Nginx SNI 分流属于一次性运维配置。门户发布需要先把改动合并到默认分支；原 GitLab CI 文件保留。
@@ -795,7 +825,7 @@ Runtime 代理用量从安装了支持统一代理的版本之后的新请求开
 | 自动记忆 | 普通聊天**不会**自动记录。目前只有 Telegram 的显式 `/remember` |
 | 记忆的向量检索 | 只有 embedding 配置命令；实际检索用关键词打分 |
 | 终端 `ai use` 接入记忆 | 记忆目前只在 Telegram 生效 |
-| API Key 加密存储 | 明文保存在 `providers.json` / `memory.json` |
+| 全部凭据统一托管 | Provider 可用 `ai secrets migrate`；记忆及原生 CLI 凭据尚未纳入 |
 | Skill 自动沉淀 | 未实现 |
 | 多租户 / 组织隔离 | 未实现，当前是单机单用户 |
 | 企业身份对接（OIDC/SAML/SCIM） | 未实现 |
@@ -804,7 +834,5 @@ Runtime 代理用量从安装了支持统一代理的版本之后的新请求开
 
 已知的实现差异（会逐步收敛）：
 
-- `ai provider list` 和 `ai status` 显示掩码 API Key（保留首末 4 位）。目标是只显示「已配置 / 缺失」状态，录屏分享前请注意
-- 编辑 `apiKey` 时当前值会作为输入默认值显示
 - `ai web` 的侧栏显示默认 Provider，不是请求级实时承接者；`ai use` 运行期间的准确切换结果仍需用 `ai log --trace` 核实
-- `ai session list` / `ai last` 记的是**启动时**选定的 Provider，执行期间发生的请求级自动切换不回写，实际承接者用 `ai log --trace` 确认
+- 新请求的 Web 详情展示已观测 Token、成本、耗时和落点；旧日志缺少关联时保持未知，不推算完整实时 trace

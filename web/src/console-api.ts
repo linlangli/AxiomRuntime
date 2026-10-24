@@ -43,12 +43,16 @@ export interface LogItem {
   provider: string | null; model: string | null; status: string | number | null; attempt: number | null
   durationMs: number | null; from: string | null; to: string | null; reason: string | null
   kind: 'model' | 'check' | 'config' | 'system'; tool: string | null; exitCode: number | null; sessionId: string | null
+  executionId?: string | null; outcome?: string | null
+  modelInvocation?: boolean | null
+  inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null; costSource?: string | null
 }
 export interface CallItem {
   id: string; state: 'succeeded' | 'failed' | 'unknown'; startedAt: string; lastEventAt: string; endedAt: string | null
   durationMs: number | null; observedDurationMs: number | null; provider: string | null; initialProvider: string | null
   model: string | null; tool: string | null; route: string[]; switchCount: number; retryCount: number
   sessionIds: string[]; events: LogItem[]
+  executionId?: string | null; inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null; costSource?: string | null
 }
 export interface ServiceCapability { id: string; name: string; method: string; path: string }
 export interface ServiceExposure {
@@ -68,6 +72,7 @@ export interface LocalSettings {
 export interface SessionItem {
   id: string; tool: string; provider: string; model: string; startedAt: string; endedAt: string | null
   status: string; exitCode: number | null; fallbackFrom: string | null
+  actualProvider?: string; actualModel?: string; nativeSessionId?: string; traceId?: string; resumedFrom?: string
 }
 export interface CodexUsageStatus {
   enabled: boolean; enabledAt: string | null; codexHome: string; providerMappings: Record<string, string>

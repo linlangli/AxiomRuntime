@@ -452,6 +452,7 @@
         <a class="nav-link" href="#telegram"><span>Telegram</span><span class="nav-count">Bot</span></a>
         <a class="nav-link" href="#status"><span>状态诊断</span><span class="nav-count">models / check / status</span></a>
         <a class="nav-link" href="#sessions"><span>会话报告</span><span class="nav-count">session / report</span></a>
+        <a class="nav-link" href="#storage"><span>凭据与历史</span><span class="nav-count">secrets / history</span></a>
         <a class="nav-link" href="#files"><span>配置文件</span><span class="nav-count">路径</span></a>
       </nav>
 
@@ -465,7 +466,7 @@ ai --version
 ai setup</pre>
             <p>npm 包名是 <code>@offerpilot/axiomruntime</code>，安装后注册的可执行命令是 <code>ai</code>。需要 Node.js <code>22.19.0+</code>。</p>
             <p>如果 npm 显示 <code>EBADENGINE</code>，请先升级 Node.js 再重新安装，不要继续使用警告状态下安装的 CLI。</p>
-            <p><code>ai --version</code> 无副作用地验证安装；<code>ai setup</code> 初始化 Runtime，并可在确认后安装缺失的 Claude Code/Codex。</p>
+            <p><code>ai --version</code> 无副作用地验证安装；<code>ai setup</code> 初始化 Runtime，并可在确认后安装缺失的 Claude Code/Codex。源码安装在仓库根目录依次执行 <code>npm ci</code>、<code>npm ci --prefix web</code>、<code>npm run link</code>，先构建 CLI/控制面再全局链接。<code>npm run smoke:package</code> 在临时目录安装真实 npm 包并验证 CLI、鉴权 API、历史备份/回滚、HTML/JS/CSS；不修改全局链接或用户真实配置。CI 包含 Linux/macOS/Windows matrix，正式 npm 发布也需通过。</p>
             <p>全局安装可以由 root 完成，但日常执行和常驻服务应使用专用非 root 用户。root 下请求 Claude <code>auto</code>/<code>bypassPermissions</code> 时，Runtime 会安全约束为默认权限并告警，不会传递 <code>--dangerously-skip-permissions</code>。</p>
             <pre>brew tap linlangli/axiom https://github.com/linlangli/AxiomRuntime.git
 brew install linlangli/axiom/axiomruntime
@@ -579,7 +580,7 @@ brew update</pre>
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai last</code></td>
                 <td>继续上次选择的工具、provider 和模型。</td>
-                <td></td>
+                <td>在当前目录重新启动；续用原生聊天上下文请用 <code>ai session resume &lt;session-id&gt;</code>。</td>
               </tr>
               <tr data-search="provider add create import key">
                 <td><span class="group-label">Provider</span></td>
@@ -597,7 +598,13 @@ brew update</pre>
                 <td><span class="group-label">Provider</span></td>
                 <td><code class="cmd">ai provider edit</code><br /><code class="cmd">ai provider edit 51talk</code></td>
                 <td>修改 name、baseUrl、凭证、mode、level、model；level 当前项会显示 Provider 名称；修改连接信息时先探测，失败保留原配置。</td>
-                <td>当前 apiKey 以明文保存在 providers.json，编辑时会回显当前值。SecretStore + apiKeyRef 是目标态，尚未实现。</td>
+                <td>旧明文配置兼容；<code>ai secrets migrate</code> 显式转入系统凭据库。Key 不预填、不回显，空输入保留当前值；列表只显示 configured/missing。</td>
+              </tr>
+              <tr data-guide="storage" data-search="secrets status migrate rollback keyring apiKeyRef 系统 凭据 迁移">
+                <td><span class="group-label">Provider</span></td>
+                <td><code class="cmd">ai secrets status</code><br /><code class="cmd">ai secrets migrate</code><br /><code class="cmd">ai secrets rollback --yes</code></td>
+                <td>迁移 Provider 与 Web 快照中的 Key 到当前用户系统凭据库；配置仅存 apiKeyRef。</td>
+                <td>先停配置写入。锁定或缺失时失败关闭，不降级明文；回滚显式导出明文。其他凭据、记忆和原生工具认证文件未纳入。</td>
               </tr>
               <tr data-search="provider delete remove fallback">
                 <td><span class="group-label">Provider</span></td>
@@ -641,17 +648,23 @@ brew update</pre>
                 <td>诊断并安全修复 Runtime 环境；deep 验证真实推理链路。</td>
                 <td>不修改项目源码或自动覆盖 Provider；<span class="tag warn">deep 可能消耗 token</span></td>
               </tr>
-              <tr data-search="log context project">
+              <tr data-search="log trace executionId context project 链路 日志">
                 <td><span class="group-label">诊断</span></td>
-                <td><code class="cmd">ai log</code><br /><code class="cmd">ai log --print</code><br /><code class="cmd">ai context</code></td>
+                <td><code class="cmd">ai log</code><br /><code class="cmd">ai log --print</code><br /><code class="cmd">ai log --print --trace &lt;id&gt;</code><br /><code class="cmd">ai context</code></td>
                 <td>打开日志、打印日志、生成项目上下文。</td>
-                <td></td>
+                <td><code>--trace</code> 同时匹配请求 <code>traceId</code> 与父 <code>executionId</code>，搜索完整日志文件。</td>
               </tr>
-              <tr data-search="session report clear">
+              <tr data-search="session resume nativeSessionId report clear 原生 续用">
                 <td><span class="group-label">会话</span></td>
-                <td><code class="cmd">ai session</code><br /><code class="cmd">ai session list</code><br /><code class="cmd">ai session clear</code><br /><code class="cmd">ai report</code></td>
+                <td><code class="cmd">ai session</code><br /><code class="cmd">ai session list</code><br /><code class="cmd">ai session resume &lt;session-id&gt;</code><br /><code class="cmd">ai session clear</code><br /><code class="cmd">ai report</code></td>
                 <td>管理 session 记录并生成报告。</td>
-                <td></td>
+                <td>有原生 ID 时在原项目目录续用；旧记录明确提示只复用启动配置。新报告按 <code>sessionId</code> 精确归属，旧记录标注近似范围。</td>
+              </tr>
+              <tr data-guide="storage" data-search="history status sqlite migrate backup restore rollback 历史 容量 恢复">
+                <td><span class="group-label">会话</span></td>
+                <td><code class="cmd">ai history status</code><br /><code class="cmd">ai history migrate</code><br /><code class="cmd">ai history backup</code><br /><code class="cmd">ai history restore &lt;backup.sqlite&gt; --yes</code><br /><code class="cmd">ai history rollback --yes</code></td>
+                <td>把现有用量和会话迁移至 SQLite；提供备份、恢复和 JSON 回滚。</td>
+                <td>操作前停止所有 Runtime 写入者；仅使用 history-backups 内返回的文件名恢复。迁移后只写 SQLite，旧 JSON 是迁移前副本；配置、授权计数和记忆不在备份范围。</td>
               </tr>
               <tr data-search="web dashboard panel local">
                 <td><span class="group-label">其它</span></td>
@@ -667,9 +680,10 @@ brew update</pre>
         <div class="sections">
           <section id="image-api" class="panel">
             <h2>向服务器开放图片 API</h2>
+            <p>新模型请求在「运行记录 → 调用记录」显示独立 traceId、父 executionId、已观测 Token、成本及来源和终止耗时；旧记录缺少关联时显示未知，辅助请求不进入模型调用汇总。工具会话区分启动配置与最近成功的实际 Provider/模型，信号退出按失败记录。历史存储、备份与回滚的完整命令见「凭据与历史」分类。</p>
             <h3>按引导连接服务器</h3>
             <p>「接入测试 → 实际调用工作台」支持对话、Responses、向量、图片生成/参考图上传编辑、隔离工作区 Agent，以及 <code>tools</code> 注册工具执行。凭证仅用于本次本机或公网请求，不保存；真实调用会产生费用，响应限 40 MiB。公网授权调用成功且响应符合协议才标记部署验证通过；配置变化后验证失效。当前工具只提供 <code>runtime.status</code> 与 <code>providers.list</code>，请求 <code>POST /v1/tools/execute</code>，请求体为 <code>{"name":"runtime.status"}</code>，不执行任意 Shell 命令。</p>
-            <p>「本地配置 → 工具配置」可备份并持久保存 Claude 用户连接，保留其他字段；「消息接入」支持 Bot 启动、停止、重启、删除配置（保留数据库与日志）。「运行记录」与「用量统计」提供完整历史分页、CSV/JSON 下载及每 2 秒实时刷新，内容为安全字段投影；大量历史仍需全量解析文件。SSH 连接参数进入快照，但专用私钥、主机信任、请求计数、部署验证证据不进入快照；恢复 SSH 配置前需断开隧道并关闭自启。</p>
+            <p>「本地配置 → 工具配置」可备份并持久保存 Claude 用户连接，保留其他字段；「消息接入」支持 Bot 启动、停止、重启、删除配置（保留数据库与日志）。「运行记录」与「用量统计」提供完整历史分页、CSV/JSON 下载及每 2 秒实时刷新，内容为安全字段投影；SQLite 用量/会话可索引分页，日志页仅保留当前页；完整调用聚合仍需扫描，长期容量尚待验收。SSH 连接参数进入快照，但专用私钥、主机信任、请求计数、部署验证证据不进入快照；恢复 SSH 配置前需断开隧道并关闭自启。</p>
             <p>「反代接入」只有一条配置流程：选择部署位置 → 连接服务器 → 设置访问地址，每次只显示当前步骤；同机部署自动跳过 SSH。上方「接入前准备」仅显示能力、凭证、API 状态并提供补齐入口。SSH 信息准备好后点击「保存并连接服务器」，自启、端口验证和断开收在「连接管理」，首次指纹与密钥准备可展开查看。窄屏下卡片与表单自动纵向排列。</p>
             <p>旧版启动的 Bot 若缺少进程归属标识，Web 与新版具名 CLI 会拒绝向该 PID 发送停止信号。先在系统进程列表核实 Bot 的入口与 PID，再手动停止旧进程，之后从新版启动；不要直接依据过期 PID 文件结束进程。</p>
             <p>完成「选择能力 → 创建凭证 → 启动 API」后，在「反代接入」选择部署方式。上游不需要填写：同机反代自动使用 <code>http://127.0.0.1:8080</code>；不同电脑选择 SSH 隧道，自动使用服务器的 <code>http://127.0.0.1:18080</code>。18080 是服务器的 loopback；固定端口被占用时先处理冲突。旧自定义上游保存新部署方式前保留，保存时会提示替换。</p>
@@ -766,14 +780,14 @@ ai image 51talk-image "将图1人物融入图2场景" --image "./人物.png" --i
                   <li>只有会产生补全的模型端点（<code>/v1/messages</code>、<code>/v1/chat/completions</code>、<code>/v1/completions</code>、<code>/v1/responses</code>、<code>/v1/embeddings</code>、<code>/v1/images/generations</code>、<code>/v1/images/edits</code>）的带请求体 <code>POST</code> 参与降级：在产生有效输出前遇到连接错误、认证错误、限流或上游故障时，会在同一 Claude Code/Codex 会话内切换 Provider、改写备用模型并显示提示。multipart 参考图上传是例外，不自动重试或轮转。</li>
                   <li>CLI 启动期的无请求体 <code>GET</code> 探测，以及辅助端点（多数中转站未实现的 <code>/v1/messages/count_tokens</code> 等）的 <code>404</code>，都会原样返回给 CLI，既不触发 Provider 轮转，也不计入健康分。</li>
                   <li>一次失败不会立刻换 Provider：限流（<code>429</code>）、<code>5xx</code>、连接层错误和有效输出前的流中断先在当前 Provider 原地重试（默认最多 2 次尝试，退避 300ms 起翻倍），重试额度用尽才轮转；<code>401</code>/<code>403</code>/<code>404</code> 与响应头超时是确定性失败，不重试直接换下一跳。重试成功不计失败、不扣健康分，重试全部失败整段只记一次失败。</li>
-                  <li>已经产生文字、推理或工具参数后不会静默重放；用户在当前 CLI 中重新提交或使用原生重试动作即确认切换，下一次请求使用备用 Provider。</li>
+                  <li>已经产生文字、推理或工具参数后不会静默重放；只有后续带请求体的模型 POST（不含 multipart）确认切换；GET、空请求及 count_tokens 不消耗待确认状态。</li>
                   <li>真实成功的健康检查把该 Provider 的健康分直接恢复到满分，历史误判扣分不会长期滞留。</li>
                   <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings；本次子进程会移除继承的 <code>ANTHROPIC_AUTH_TOKEN</code>，临时 settings 还会用空值遮蔽用户 settings 里的同名变量，避免与所选 Provider 的 <code>ANTHROPIC_API_KEY</code> 形成双认证。</li>
                   <li><code>ai use codex</code> 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
                   <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，非 root 执行 Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。root 下请求 <code>auto</code> 会被安全约束为默认权限，临时 settings 中继承的 bypass 配置也会被清除。</li>
                   <li>OpenAI 兼容地址用于 Codex 时会使用 <code>/v1</code>，用于 Claude 时会去掉 <code>/v1</code>。</li>
-                  <li>Claude 与 Codex 的本次子进程都会通过 execution-scoped 本地代理转发；原生终端交互不变，provider 返回的真实 usage 会按 provider/model 写入 <code>usage.json</code>。</li>
-                  <li>日志只记录 Key 指纹，不记录完整 API Key。</li>
+                  <li>Claude 与 Codex 通过唯一 execution-scoped 代理记录实际 provider/model、请求 traceId、sessionId 及已观测用量；默认账本为 usage.json，显式迁移后为 history.sqlite。Provider 返回的成本优先于价格表估算；写失败记录 usage_persistence_failed，不重放已完成请求。</li>
+                  <li>日志仅记录 SHA-256 Key 指纹，不含首末 Key 字符。会话保存最近成功 actualProvider/actualModel，Web 持久化终止事件支持逐请求耗时和观测用量；旧记录无关联时显示未知，侧栏仍代表默认 Provider。</li>
                 </ul>
               </div>
             </div>
@@ -959,7 +973,9 @@ ai status
 ai provider list
 ai log
 ai log --print
+ai log --print --trace &lt;id&gt;
 ai context</pre>
+                <p><code>--trace</code> 同时匹配请求 <code>traceId</code> 与父执行 <code>executionId</code>，按时间排列完整日志文件中的匹配事件，不限最近 500 行。每个新代理请求有独立 <code>traceId</code>，并关联父执行和 <code>sessionId</code>；终止事件 <code>openai_usage_proxy_request_settled</code> 记录请求结果、耗时及落点。旧日志缺少关联或终止证据时保留未知，不按时间猜测；内网 API 的 <code>x-request-id</code> 响应头可用于反查该请求。</p>
                 <p><code>models</code> 只对选中的 provider 调用 <code>GET /models</code>，刷新并列出完整模型目录，不调用推理端点、不产生推理 Token，也不覆盖已有真实健康状态。若 provider 不开放模型目录，<code>models</code> 会如实报告 <code>404</code>、<code>451</code> 等目录错误；这不代表缓存模型不可用，可改用 <code>check</code> 做最小真实验证。<code>check</code> 复用与 <code>status</code> 相同的真实验证规则，但只刷新一个 provider；省略名称时交互选择，提供名称时精确匹配，不会检查其他 provider。<code>status</code> 会刷新全部 provider 模型缓存，并从实际存在的 Claude/Codex 模型族中各选一个代表模型做真实调用验证；Codex 优先使用 Responses API。已通过手工模型验证但不开放模型目录的 provider 会使用缓存模型继续真实检查，不会因为 <code>GET /models</code> 返回 <code>451</code> 而直接判错。每次验证使用最短输入且输出上限为 1 token，不逐个验证全部模型，也不自动重试产生 Token 的请求。代表模型最多等待 30 秒；本地超时时上游仍可能已经处理成功，因此显示 <code>unknown</code>。验证返回的结构化 usage 会计入统一账本。</p>
               </div>
               <div class="note">
@@ -982,15 +998,37 @@ ai doctor --deep --tool claude</pre>
                 <h3>Session</h3>
                 <pre>ai session
 ai session list
+ai session resume &lt;session-id&gt;
 ai session clear</pre>
-                <p><code>session</code> 进入最近 session 选择列表；<code>session clear</code> 清空 AI Gateway 记录。</p>
+                <p>会话区分启动配置与最近成功请求的 actualProvider/actualModel；退出信号按失败记录。有 nativeSessionId 时回到原目录，通过 Claude --resume / Codex resume 续用原生上下文。Claude 新会话显式分配 ID；Codex 只关联 cwd、时间、source=cli 匹配且唯一的 metadata。旧记录或歧义明确退回启动设置；原生历史缺失由上游 CLI 报错。session clear 只清 Runtime 记录。</p>
               </div>
               <div class="note">
                 <h3>Report</h3>
                 <pre>ai report</pre>
                 <p>选择 session 生成 Markdown 报告，包含 context、真实 token、模型、provider 快照和画像信息。</p>
+                <p>新会话按 sessionId 精确归属，避免并发混算；旧记录标注 Provider/model/时间窗口近似归属。</p>
               </div>
             </div>
+          </section>
+
+          <section id="storage" class="panel">
+            <h2>凭据与历史迁移</h2>
+            <h3>Provider 系统凭据库</h3>
+            <pre>ai secrets status
+ai secrets migrate
+ai secrets rollback --yes</pre>
+            <p><code>ai secrets</code> 等同 <code>ai secrets status</code>，仅显示后端、引用和明文数量，不输出 Key。<code>migrate</code> 显式启用保护；<code>rollback --yes</code> 将当前配置和快照的 Provider Key 导出为明文，用于迁移机器或兼容旧版本。</p>
+            <p>Provider 使用系统 Keychain、Credential Manager 或 Linux Secret Service；Linux 没有已解锁凭据服务时请继续使用受限权限的旧配置。迁移先写入、读回验证，再原子替换 providers.json 为 version=1、secretBackend=keyring 的 providers 文档。引用按当前用户及 AI_GATEWAY_HOME 路径隔离；移动目录、机器或降级前先安全导出。锁定、缺失或写入失败时不降级明文。轮换、旧快照恢复及删除全部后重建均保留保护方式。旧凭据版本不自动删除，以支持快照恢复；外部备份和磁盘历史不安全擦除。</p>
+            <p>迁移前停配置写入；Web 快照逐份转换，失败可能留下未迁移快照，用 secrets status 检查并重试，不承诺跨文件事务。仅迁移 Provider，不改 memory.json、Telegram Token、原生 auth.json、Claude settings 或临时认证文件。</p>
+            <h3>用量与会话 SQLite 存储</h3>
+            <pre>ai history status
+ai history migrate
+ai history backup
+ai history restore &lt;backup.sqlite&gt; --yes
+ai history rollback --yes</pre>
+            <p><code>ai history</code> 等同 <code>ai history status</code>。先 <code>migrate</code> 启用 SQLite，再用 <code>backup</code> 创建备份；<code>restore</code> 只接受 <code>history-backups/</code> 内备份路径的文件名（如 <code>xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.sqlite</code>），不传完整路径。恢复覆盖备份后的历史；<code>rollback --yes</code> 导出最新 JSON 后停用 SQLite。历史备份不恢复配置、授权计数、Telegram 或记忆数据库。</p>
+            <p>历史迁移、恢复和回滚前停止所有 Runtime CLI/API/Web/Bot 写入，不混用旧版本。迁移后 history.sqlite 是唯一权威，usage.json/sessions.json 不双写；损坏、版本未知或启用标记存在但数据库丢失时失败关闭，doctor --fix 不重置数据库。SQLite backup API 生成受限权限副本；恢复先校验并保留当前数据库，覆盖备份后的历史；回滚先导出最新 JSON 再停用数据库。history-storage.json 记录启用状态，不属于 Web 配置快照。</p>
+            <p>SQLite 用量/会话按索引分页。日志分页扫描文件但仅保留当前页；最近日志从尾部分块读取，忽略无效行及大于 4 MiB 的单条记录。ai log --print --trace 同时关联请求与父 executionId。总览和完整调用聚合仍扫描相应历史；日志轮转、长期容量与目标平台服务验收仍需部署者完成。</p>
           </section>
 
           <section id="files" class="panel">
@@ -1002,7 +1040,7 @@ ai session clear</pre>
 ~/.ai-gateway/memory.json
 ~/.ai-gateway/model-pricing.json</pre>
                 <p><code>providers.json</code> 保存聊天 provider；<code>memory.json</code> 保存记忆检索 embedding 模型。<code>model-pricing.json</code> 保存美元 / 百万 token 的模型价格，也可以在 Web 用量统计页的成本设置中编辑；未配置价格的 usage 不计入估算成本。</p>
-                <p><strong>注意：</strong>这两个文件当前都以明文保存 <code>apiKey</code>。请限制文件权限并且不要提交到仓库。凭证改由 SecretStore 管理、配置只留 <code>apiKeyRef</code> 是目标架构，尚未实现。</p>
+                <p><strong>注意：</strong>Provider 默认兼容明文 apiKey，可通过 ai secrets migrate 显式改为 apiKeyRef；memory.json 沿用现状。请限制文件权限，不提交凭据或配置快照。</p>
               </div>
             </details>
             <details>
@@ -1011,6 +1049,9 @@ ai session clear</pre>
                 <pre>~/.ai-gateway/.ai-cache.json
 ~/.ai-gateway/usage.json
 ~/.ai-gateway/sessions.json
+~/.ai-gateway/history.sqlite
+~/.ai-gateway/history-storage.json
+~/.ai-gateway/history-backups/
 ~/.ai-gateway/telegram.json
 ~/.ai-gateway/telegram.sqlite
 ~/.ai-gateway/telegram.log

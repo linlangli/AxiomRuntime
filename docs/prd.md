@@ -68,7 +68,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 个人开发者 | 多个中转站统一管理，不手改环境变量；知道钱花在哪 | 🟢 完整满足 |
 | 移动办公开发者 | 手机上远程跑 Claude Code / Codex | 🟢 Telegram Bot |
 | 小团队技术负责人 | 内网统一 API 入口，用量归属清晰 | 🟡 有常驻 API，无组织模型 |
-| 平台/运维 | 执行可观测、失败可诊断、配置可恢复 | 🟡 有日志/doctor/report，无统一 trace |
+| 平台/运维 | 执行可观测、失败可诊断、配置可恢复 | 🟡 有 traceId 日志关联、doctor/report 与受管配置快照，缺少统一 Kernel 事件与完整灾备演练 |
 | 企业管理员 | 身份联合、策略治理、配额与合规 | 🔴 未实现 |
 
 ### 已验证的核心场景 🟢
@@ -102,8 +102,8 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 引擎兼容性过滤 | 🟢 | Claude Code 只选择 Claude 模型；Codex 只选择 `gpt`/`codex`/`grok`/`o`/`openai` 兼容模型；自动切换不跨模型族 |
 | Base URL 自适配 | 🟢 | Claude 去 `/v1`，Codex 保留 |
 | 健康状态缓存 | 🟢 | 写入 `.ai-cache.json` |
-| API Key 加密 | 🔴 | **明文存 `providers.json`** |
-| API Key 完全不回显 | 🟡 | 当前显示掩码（首末 4 位），目标只显示「已配置/缺失」 |
+| Provider Key 系统托管 | 🟡 | `SecretStorePort` + `apiKeyRef`；显式迁移与回滚可用，真实 OS 持久性仍需验收；其他凭据未纳入 |
+| API Key 完全不回显 | 🟢 | 列表只显示 configured/missing；编辑不预填，交互输入不回显；日志使用 SHA-256 指纹 |
 
 ### 3.2 工具执行 🟢
 
@@ -111,13 +111,13 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 |---|---|---|
 | 启动 Claude Code | 🟢 | 临时 `--settings`，不碰 `~/.claude/settings.json`；execution scope 删除进程继承的 `ANTHROPIC_AUTH_TOKEN`，并以空值遮蔽用户 settings 中的同名变量，避免与 Provider API Key 冲突 |
 | 启动 Codex | 🟢 | `-c model_provider=` + `env_key`，不碰全局 `auth.json`/`config.toml` |
-| 运行时降级 | 🟡 | `ai use` 在同一原生 CLI 会话内对**会产生补全的模型端点**做请求级切换；失败先在当前 Provider 原地重试（限流/`5xx`/连接层错误可重试，`401`/`403`/`404` 直接换），重试耗尽才轮转，已有输出则等待用户重新提交/重试确认。辅助端点（`/v1/messages/count_tokens` 等中转站常未实现的路径）的 `404` 不触发轮转，也不计入健康分。`ai failover off` 一键全局关闭跨 Provider 自动降级（候选链折叠为单候选，只尝试选定或默认 Provider，失败即报错不轮转；原地重试不受影响）。**一处偏差**：待确认状态在读请求体之前消费，不区分方法，CLI 自发的无关请求会替用户确认切换 |
+| 运行时降级 | 🟡 | `ai use` 在同一原生 CLI 会话内对**会产生补全的模型端点**做请求级切换；失败先在当前 Provider 原地重试（限流/`5xx`/连接层错误可重试，`401`/`403`/`404` 直接换），重试耗尽才轮转，已有输出则等待用户重新提交/重试确认。辅助端点（`/v1/messages/count_tokens` 等中转站常未实现的路径）的 `404` 不触发轮转，也不计入健康分。`ai failover off` 一键全局关闭跨 Provider 自动降级（候选链折叠为单候选，只尝试选定或默认 Provider，失败即报错不轮转；原地重试不受影响）。待确认状态仅由带请求体的模型 POST（不含 multipart）消费；GET、空请求和辅助端点不确认 |
 | 健康分恢复 | 🟢 | 一次真实成功探测把 `healthScore` 直接置满，不靠固定步长累加填坑，避免误判造成的低分长期滞留 |
 | 切换提示不破坏 TUI | 🟢 | 会话期间提示走协议内错误事件由原生 CLI 渲染，退出后再打印切换汇总；父进程不在 TUI 重绘期间写终端 |
 | Runtime 出站代理 | 🟢 | `ai proxy` 可选择 Provider 或 Runtime 默认值；Provider 的 `proxyUrl` 优先、缺省时回退默认值，清除覆盖后恢复回退；新增或编辑先做零 Token 连通检查。探测和 Transport Proxy 上游按实际 Provider 路由；不修改原生 CLI 配置 |
 | root 权限约束 | 🟢 | UID 0 下 `bypassPermissions` 强制降级为 `default` |
-| 会话记录 | 🟢 | 工具、服务商、模型、路径、起止、退出状态 |
-| 会话续用 | 🟡 | **复用启动参数**，不恢复 Claude/Codex 原生聊天上下文 |
+| 会话记录 | 🟢 | 启动配置、最近成功 `actualProvider/actualModel`、请求关联、路径、起止及真实退出状态 |
+| 会话续用 | 🟡 | 有 `nativeSessionId` 时在原项目续用原生上下文；Claude 显式 ID，Codex 仅唯一 metadata 候选；旧记录退回启动设置，上游兼容性需验收 |
 | 统一 Agent 契约 | 🔴 | Telegram `Engine` 仍是本地兼容 facade，直接 spawn CLI |
 | 工具调用逐步授权 | 🔴 | Agent 提议的工具动作尚未回到统一 Kernel 授权 |
 
@@ -203,9 +203,11 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 结构化日志 | 🟢 | 记录 API Key 指纹，不记完整 Key |
 | 会话报告 | 🟢 | `ai report`，不写 Key、不估 token |
 | 项目上下文 | 🟢 | `ai context`，自动排除敏感文件 |
-| 统一执行 trace | 🔴 | 无 `CapabilityObservation` |
+| 执行日志关联 | 🟢 | 新模型请求独立 `traceId`，关联父 `executionId` / `sessionId`；Web 显示已观测用量、成本及终止耗时，旧记录保持未知；完整实时状态仍待实现 |
+| 统一 Kernel 观测契约 | 🔴 | 无 `CapabilityObservation` |
 | OpenTelemetry 导出 | 🔴 | |
-| 备份 / 恢复演练 | 🔴 | |
+| 受管配置备份 / 恢复 | 🟢 | 受限权限快照，恢复保留当前调用凭证，测试覆盖撤销凭证不复活 |
+| 完整灾备恢复演练 | 🔴 | 配置快照不覆盖数据库、用量账本和 Codex 用户配置；尚无全量恢复验收 |
 
 ### 3.8 常驻 API 服务 🟢
 
@@ -214,22 +216,25 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | `POST /v1/chat/completions` | 🟢 |
 | `POST /v1/responses` | 🟢 |
 | `POST /v1/embeddings` | 🟢 |
+| `POST /v1/images/generations` | 🟢 |
+| `POST /v1/images/edits` | 🟢 |
 | `GET /v1/models` | 🟢 |
 | `POST /v1/agent/runs` | 🟢 |
+| `POST /v1/tools/execute` | 🟢 仅 `runtime.status`、`providers.list` 两个注册只读工具 |
 
 安全约束 🟢：
 
-- **必须**设置 `AI_GATEWAY_SERVER_TOKEN` 或 `..._FILE`
-- Bearer Token **constant-time 比较**
+- **必须**设置 `AI_GATEWAY_SERVER_TOKEN` / `AI_GATEWAY_SERVER_TOKEN_FILE`，或启用开放配置并创建能力凭证；托管 API 只使用后者
+- 环境变量服务 Token 使用 **constant-time 比较**；能力凭证仅保存 SHA-256 摘要，逐请求检查能力与 Provider/模型范围、有效期和请求额度
 - Agent Run **禁止任意 cwd**，只接受规范化 `workspace_id`
 - 默认 `read_only`；**服务端 API 不暴露 `bypassPermissions`**
-- 请求体、并发、执行超时都有上限（默认 16 MiB / 2 并发 / 10 分钟）
+- 请求体、Agent 并发、Agent 执行超时都有上限（默认 42 MiB / 2 并发 / 10 分钟）
 
 ### 3.9 完全未实现 🔴
 
 | 能力 | 说明 |
 |---|---|
-| `ai web` 控制面板 | 本机基础控制面已实现；企业治理、完整实时 trace 与远程多租户尚未实现 |
+| 企业 Web 治理与远程多租户 | 本机基础控制面已实现，企业管理与完整实时 trace 尚未实现 |
 | Skill 自动沉淀 | 程序性记忆整套未实现 |
 | 受治理学习闭环 | LearningSignal → Decision → Candidate → 评测 → 激活 |
 | Policy Engine | 确定性策略求值 |
@@ -243,6 +248,31 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | Scheduler 接入面 | |
 
 ---
+
+### 3.10 可投入使用边界与待完善项（2026-10-24）
+
+基线审计为 `develop` 的 `26a21a2`，当时 303 项测试通过；本轮继续完善既有能力，317 项测试与前端类型检查通过，`smoke:package` 在隔离安装的 npm 包上验证 CLI、鉴权 API、历史备份/回滚及控制面 HTML/JS/CSS。本次没有调用真实付费模型、Telegram 或远程 SSH/Nginx，也没有执行 Windows 实机验收；这些不能由自动化测试结果推定通过。
+
+| 采用范围 | 当前可投入使用的部分 | 仍需完善或验收 |
+|---|---|---|
+| 个人本机 | Provider 管理、Claude/Codex 启动、Runtime/Provider 代理、持久 Codex 配置、图片生成与参考图、用量和诊断 | Provider Key 可显式迁移至 OS 凭据库；OS 解锁/持久性及原生 CLI 与 Provider 兼容性需目标环境验证 |
+| 本机管理面 | Web 配置、用量、调用/会话/日志查询、配置快照与恢复、帮助中心 | 新请求已有独立 trace/session 与终止落点；SQLite 用量/会话分页和有界日志读取可用，完整聚合及长期容量仍待验收 |
+| 手机远程执行 | Telegram 多 Bot、白名单、进度、附件与显式记忆 | Engine 生命周期仍位于 Telegram adapter；没有统一逐工具授权，需控制可访问用户和工作目录 |
+| 小团队 API | 对话、向量、图片、Agent 和注册只读工具；能力凭证、轮换、范围、有效期、请求频率与次数限制 | 不提供租户隔离、组织身份或 Token/金额预算；先完成目标环境真实授权调用验收 |
+| 常驻与公网接入 | macOS/Linux 用户服务、SSH 隧道、Nginx/TLS 预览与确认部署 | 平台服务、DNS/TLS 与端到端链路需实机验收；Windows Task Scheduler 仍为 🟡；无完整灾备恢复或长时间 SLO 验收 |
+| 记忆与学习 | Telegram 显式记忆、关键词检索、embedding 配置与探测 | 自动抽取、向量召回、终端记忆、Claim/Evidence、Skill 学习与治理尚未实现 |
+
+优先级与退出条件：
+
+| 优先级 | 待完善项 | 责任与退出条件 |
+|---|---|---|
+| P1 | 可靠执行与凭证边界 | 待确认切换、会话归属、原生续用、信号退出、Agent 并发与断连取消已补回归；Provider OS 迁移、轮换、快照及回滚 fixtures 通过。既有 `undici` high advisory 已通过固定升级 `8.12.3` 与回归关闭，生产 npm 审计 0 项；Runtime/发布维护者仍须验收真实 OS 凭据库及平台二进制 |
+| P1 | 发布能力与安装一致性 | `npm run link` 已同步，构建/清理使用跨平台 Node API；隔离打包安装 smoke 通过，CI 加入三平台 matrix。发布维护者仍按 release tag 核对能力，实际远端 CI 与正式 npm 发布需在授权发版时验收 |
+| P2 | 运维与容量 | `ai history` 的 SQLite 迁移、幂等、索引分页、备份/恢复/回滚及损坏失败关闭已补齐；Runtime/部署维护者仍负责目标 OS 服务生命周期、真实 Provider/Telegram/公网调用、长时间容量/SLO 与完整灾备演练 |
+| P2 | Runtime 执行地基 | Runtime 维护者按 R0.1–R0.3 交付 Contracts、统一 Kernel、权限/取消/幂等、稳定事件、插件与治理边界；保持既有 CLI/API 契约 |
+| P3 | 记忆与可验证学习 | 记忆能力维护者按既有 Phase 先抽离 core 与身份/scope，再引入受治理的自动候选、检索、评测、激活与回滚，不以 embedding 配置替代记忆闭环 |
+
+适用结论：当前可用于个人日常工作与受控小团队试用；完整 R0、企业多租户和「每次交互积累组织能力」的学习闭环仍未达到验收门槛。
 
 ## 4. 发布计划
 
@@ -277,7 +307,7 @@ R0 保留完整目标，但拆成三个可独立演示、验收和回滚的增�
 
 已具备：原子写、provider/auth 失败回滚、proxy 配置 + macOS 环境回滚、凭证 `0600`、无 secret 的凭证日志 fixture。
 
-**不代表** `SecretStore`、统一 Admin mutation/audit 或完整 R0 gate 已完成。
+Provider 已有受限 `SecretStorePort` 增量；这不代表全部凭据统一托管、统一 Admin mutation/audit 或完整 R0 gate 已完成。
 
 ### Phase 顺序（技术依赖）
 
@@ -429,9 +459,9 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 
 🟢 本机控制面已拆分为运行总览、用量统计、本地配置、运行记录、对外服务、帮助中心六个一级页面。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 汇总表、Token 趋势、GitHub 式周列 × 7 天小方格调用活动和带圆角轻量涂鸦纹理的占比图；短区间保留至少 70 天日历上下文，区间外日期以淡灰格标识，不作为零用量计入统计。成本卡片支持通过 core pricing API 按 Provider/模型维护美元/百万 token 价格，Provider 完整下拉列表合并当前配置、历史 usage 和已有价格键，模型下拉合并缓存目录、默认模型、历史 usage 模型和已有价格键，并支持手动输入模型；切换 Provider 时刷新对应模型和价格，空模型目录清除上一 Provider 的模型；按当前日期与 Provider 筛选计算成本，未定价事件单独计数；区间内空日期补零，点击日期跳转运行记录。数据来自唯一 usage 账本，包括 Runtime 代理和显式启用后的 Codex App 本机采集；不推测其他未采集的外部调用。App 采集不生成 Runtime 调用链路或工具会话。
 
-🟢 运行记录分为调用记录、工具会话、系统日志。调用列表按执行归组，侧边详情展示结果、Provider 过程与中文时间线；同 Provider 重试与跨 Provider 切换分开计数，缺少终止事件显示结果未知，结果 Provider 仅取明确终止证据。工具会话显示初始配置、起止、时长和退出码，调用关联只接受明确且匹配的 `sessionId`。系统日志按模型请求/服务检查/配置变更/系统运行分类，支持级别、Provider、分类和搜索筛选。最近记录摘要仍取 300 条日志和 30 次会话；完整历史区支持日志、调用、会话、用量分页查询、搜索、CSV/JSON 下载与每 2 秒刷新。不推算逐调用用量，下载只包含白名单字段并防止 CSV 公式注入。
+🟢 运行记录分为调用记录、工具会话、系统日志。调用列表按执行归组，侧边详情展示结果、Provider 过程与中文时间线；同 Provider 重试与跨 Provider 切换分开计数，缺少终止事件显示结果未知，结果 Provider 仅取明确终止证据。工具会话显示初始配置、起止、时长和退出码，调用关联只接受明确且匹配的 `sessionId`。系统日志按模型请求/服务检查/配置变更/系统运行分类，支持级别、Provider、分类和搜索筛选。最近记录摘要仍取 300 条日志和 30 次会话；完整历史区支持日志、调用、会话、用量分页查询、搜索、CSV/JSON 下载与每 2 秒刷新。新模型请求按独立 `traceId` 展示观测到的用量、成本来源、耗时及父 `executionId`，旧记录缺失关联时保持未知；下载只含白名单字段并防止 CSV 公式注入。
 
-🟢 帮助中心的命令手册与 `ai help` 打开的 `docs/USAGE.html` 同源，完整覆盖命令索引、安装配置、模型使用、服务管理、记忆配置、消息接入、状态诊断、会话报告、配置文件。验收要求正文规则、参数、注意事项及代码示例完整保留；支持命令分组筛选、跨分类全文搜索、详细说明导航、命令/整段示例复制、展开/收起与移动端目录。复制只写入剪贴板，不执行命令或配置写入。
+🟢 帮助中心的命令手册与 `ai help` 打开的 `docs/USAGE.html` 同源，完整覆盖命令索引、安装配置、模型使用、服务管理、记忆配置、消息接入、状态诊断、会话报告、凭据与历史、配置文件。`ai secrets` / `ai history` 的详细用法直接导航到凭据与历史，完整列出状态、迁移、备份、恢复及显式回滚的适用前提和限制；会话续用与请求日志筛选同步写入相应分类。验收要求正文规则、参数、注意事项及代码示例完整保留；支持命令分组筛选、跨分类全文搜索、详细说明导航、命令/整段示例复制、展开/收起与移动端目录。复制只写入剪贴板，不执行命令或配置写入。
 
 🟡 本地配置支持通过 core API 编辑 Provider、路由、Codex、Runtime/Provider 出站代理、Telegram Bot 和 embedding 连接；写入前展示变更预览，核心服务负责校验、原子写入、失败回滚和受限权限备份。Claude Code 用户连接可持久编辑并备份原文件；Bot 支持启停、重启与删除配置，删除保留会话/日志。记忆设置保留现状。
 
@@ -469,11 +499,11 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 
 设计稿位于 `docs/AxiomRuntime.pen`。当前控制面将 Execution & Audit 落在「运行记录」页，分为「调用记录 / 工具会话 / 系统日志」三个四字标签。🟢 调用记录按 `traceId` 聚合最近日志中的一次执行，列表优先显示结果、模型、Provider、时间，侧边详情展示结果摘要、Provider 过程、中文时间线与可展开的原始字段。工具会话展示启动配置、时长和退出结果；系统日志按模型请求、服务检查、配置变更、系统运行分类，支持级别/Provider/分类筛选及明确关联调用的跳转。「本地配置」和「对外服务」分别管理本机运行方式与远程能力授权。
 
-🟢 验收行为：明确区分执行成功、执行失败、结果未知；缺少终止事件不推断正在运行，HTTP 失败响应不能被标成成功。重试与跨 Provider 切换分别计数，配对的切换计划/应用事件不重复计数，路由保留重复回跳。结果 Provider 仅取自终止事件，未记录耗时则显示事件跨度；无 `traceId` 的独立事件不生成调用。工具会话仅凭明确且匹配的 `sessionId` 关联调用，缺少退出记录不声称进程存活。每个标签有独立搜索提示和空状态；图表日期入口默认进入调用记录并保留日期。🔴 完整逐跳 `level`、耗时与逐请求成本仍依赖日志契约补齐；当前执行分组可能包含多次请求，不能推断逐请求 Token、成本或实际承接者。
+🟢 验收行为：明确区分执行成功、执行失败、结果未知；缺少终止事件不推断正在运行，HTTP 失败响应不能被标成成功。重试与跨 Provider 切换分别计数，配对的切换计划/应用事件不重复计数，路由保留重复回跳。结果 Provider 仅取自终止事件，未记录耗时则显示事件跨度；无 `traceId` 的独立事件不生成调用。工具会话仅凭明确且匹配的 `sessionId` 关联调用，缺少退出记录不声称进程存活。每个标签有独立搜索提示和空状态；图表日期入口默认进入调用记录并保留日期。🟡 新请求已有独立 trace、终止耗时、实际路由和观测用量/成本；父执行可能包含多个请求，旧日志缺少关联时保持未知，完整逐跳 `level`/耗时与统一事件流仍待补齐。
 
 数据来源均为已落库的 `writeLog` 事件；`src/core/web/execution-history.ts` 提供只读、脱敏的状态与关联投影，Web 负责中文展示，不重算路由或新增 usage ledger。
 
-链路聚合键是 `LogEvent.traceId` 🟢：HTTP 请求 / Telegram Provider 尝试 / 一次 `ai use` 的候选解析、切换与终止事件复用入口 ID。HTTP 入口直接复用 `requestId` 作为 traceId，`x-request-id` 响应头可反查链路。历史日志及部分工具代理、任务生命周期事件没有该字段，读取方必须容忍缺失；不通过时间或 Provider 补关联。
+链路聚合键是 `LogEvent.traceId` 🟢：HTTP 请求 / Telegram Provider 尝试 / `ai use` 启动过程各自使用入口 ID。工具代理中的新模型请求有独立 `traceId`，通过 `executionId` 关联父执行，通过 `sessionId` 关联会话；辅助请求不计入模型调用摘要。内网 API 入口使用 `requestId` 作为 traceId，`x-request-id` 响应头可反查链路。历史日志及部分生命周期事件没有关联字段，读取方必须容忍缺失；不通过时间或 Provider 补关联。
 
 | 链路语义 | 日志 action | 关键 metadata |
 |---|---|---|
@@ -566,18 +596,14 @@ Provider 切换只更新 Codex App 用户级配置，不迁移已有原生历史
 
 | 限制 | 影响 | 计划 |
 |---|---|---|
-| **API Key 明文存储** | `providers.json` / `memory.json` 需自行限制文件权限 | `SecretStore` + `apiKeyRef`（R0.1） |
+| **全部凭据未统一托管** | Provider 可显式 OS 迁移；记忆与外部原生认证文件沿用现状 | 真实 OS 验收；其他凭据另行规划，不在本轮范围 |
 | **记忆只在 Telegram 生效** | 终端 `ai use` 无记忆 | 记忆核心迁到 `src/core/memory`（Phase 1） |
 | **无自动记忆** | 必须显式 `/remember` | Phase 2 |
 | **向量检索未接入** | `ai memory embedding` 只是前置配置 | Phase 6 |
-| **会话续用不恢复原生上下文** | 只复用启动参数 | 依赖上游 CLI 能力 |
+| **旧会话或歧义记录无原生 ID** | 明确退回启动设置；有 ID 才传给原生 resume | 维护上游 CLI 兼容 fixtures，真实工具验收 |
 | **运行期间看不到当前 Provider** | 原生 TUI 独占终端，只能退出后看切换汇总或 `ai log --trace` | Web 实时视图（§8.1） |
-| **`ai last` / 会话记录只存启动时 Provider** | 请求级自动切换不回写，实际承接者需查 trace | 代理切换回调写回会话存储 |
-| **无关请求会替用户确认切换** | 待确认状态在读请求体前消费且不区分方法，CLI 自发探测即可消耗掉 | 消费待确认状态前先判定是带请求体的模型 POST |
 | **用量不补录历史** | 装代理版本前的请求不计入 | 刻意设计，避免归错账 |
 | **单机单用户** | 无组织/项目用量归属 | R3 |
-| **掩码 API Key 会显示** | 录屏分享需注意 | 收敛为只显示「已配置/缺失」 |
-| **编辑时 apiKey 预填当前值** | 同上 | 同上 |
 | **Telegram Engine 是本地 facade** | 与 CLI 执行路径未完全统一 | R0.1 |
 | **无版本化 migrations** | 记忆表直建 | Phase 0 |
 | **Node.js ≥ 22.19.0 硬要求** | Node 20 不可用 | 不变 |

@@ -1,30 +1,42 @@
 import { getProvidersPath } from "./paths.js";
-import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
+import { readJsonFile, updateJsonFile } from "./json-store.js";
 import { readNumber, readOptionalRecord, readOptionalString, readRecord, readString } from "./schema.js";
 import { normalizeProxyUrl } from "../network/proxy.js";
 import type { Provider, ProviderAuthScheme, ProviderMode, ProviderRequestProfile } from "../types.js";
+import { hydrateProviderSecrets, parseProviderDocument, protectProviderSecrets } from "./provider-secrets.js";
 
 const VALID_MODES = new Set<ProviderMode>(["ask", "auto"]);
 const VALID_AUTH_SCHEMES = new Set<ProviderAuthScheme>(["bearer", "x-api-key", "api-key"]);
 
 export async function readProviders(): Promise<Provider[]> {
   const raw = await readJsonFile<unknown>(getProvidersPath(), []);
-  if (!Array.isArray(raw)) {
-    throw new Error("providers.json must contain a JSON array.");
-  }
-  return normalizeProviders(raw.map(normalizeProviderShape));
+  return decodeProviders(raw);
 }
 
 export async function writeProviders(providers: Provider[]): Promise<void> {
-  await writeJsonFile(getProvidersPath(), normalizeProviders(providers));
+  await updateProviders(() => providers);
 }
 
 export async function updateProviders(updater: (providers: Provider[]) => Provider[] | Promise<Provider[]>): Promise<Provider[]> {
-  return updateJsonFile<Provider[]>(getProvidersPath(), [], async (raw) => {
-    if (!Array.isArray(raw)) {
-      throw new Error("providers.json must contain a JSON array.");
-    }
-    return normalizeProviders(await updater(normalizeProviders(raw.map(normalizeProviderShape))));
+  let result: Provider[] = [];
+  await updateJsonFile<unknown>(getProvidersPath(), [], async raw => {
+    const document = parseProviderDocument(raw);
+    result = normalizeProviders(await updater(await decodeProviders(raw)));
+    return document.backend === "keyring" ? protectProviderSecrets(result, document.rows) : result;
+  });
+  return result;
+}
+
+export async function decodeProviders(raw: unknown): Promise<Provider[]> {
+  return normalizeProviders((await hydrateProviderSecrets(parseProviderDocument(raw).rows)).map(normalizeProviderShape));
+}
+
+export async function restoreProviders(raw: unknown): Promise<void> {
+  const incoming = await decodeProviders(raw);
+  const backend = parseProviderDocument(raw).backend;
+  await updateJsonFile<unknown>(getProvidersPath(), [], async current => {
+    const document = parseProviderDocument(current);
+    return backend === "keyring" || document.backend === "keyring" ? protectProviderSecrets(incoming, document.rows) : incoming;
   });
 }
 

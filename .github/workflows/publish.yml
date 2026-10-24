@@ -53,5 +53,6 @@ jobs:
       - run: npm --prefix web ci --prefer-offline
       - run: npm test
       - run: npm --prefix web run typecheck
+      - run: npm run smoke:package
       - run: npm pack --dry-run
       - run: npm publish --access public --provenance --ignore-scripts

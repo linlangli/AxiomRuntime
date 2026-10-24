@@ -26,6 +26,16 @@ export type OpenAiUsageProxy = {
   getMetrics(): OpenAiUsageProxyMetrics;
 };
 
+export type SettledProxyRequest = {
+  traceId: string;
+  provider: string | null;
+  model: string | null;
+  success: boolean;
+  modelInvocation: boolean;
+  durationMs: number;
+  status: number | string | null;
+};
+
 export type OpenAiUsageProxyRoute = {
   provider: Provider;
   model: string;
@@ -42,6 +52,8 @@ export type StartOpenAiUsageProxyInput = {
   provider: Provider;
   model: string;
   tool: RunToolType;
+  traceId?: string;
+  sessionId?: string;
   engine?: CliToolType;
   fallbackRoutes?: OpenAiUsageProxyRoute[];
   /** 覆盖 runtime.json 的全局默认代理；缺省时由服务自读 runtime.json（测试注入用）。 */
@@ -49,6 +61,7 @@ export type StartOpenAiUsageProxyInput = {
   onFailover?: (event: OpenAiUsageProxyFailoverEvent) => void | Promise<void>;
   onRouteResult?: (route: OpenAiUsageProxyRoute, success: boolean, reason?: string) => void | Promise<void>;
   onUsage?: (record: OpenAiUsageProxyRecord) => void | Promise<void>;
+  onRequestSettled?: (request: SettledProxyRequest) => void | Promise<void>;
   upstreamHeadersTimeoutMs?: number;
   /** 同一个 Provider 上的最大尝试次数（含首次）。瞬时失败先原地重试，耗尽后才换 Provider。 */
   maxAttemptsPerRoute?: number;

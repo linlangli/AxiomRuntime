@@ -64,6 +64,10 @@ export type UsageEvent = {
   model: string;
   source: "doctor_deep" | "model_probe" | "proxy" | "cli" | "codex_app";
   id?: string;
+  traceId?: string;
+  sessionId?: string;
+  costUsd?: number;
+  costSource?: "provider" | "pricing" | "unknown";
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
@@ -110,6 +114,12 @@ export type SessionRecord = {
   status: SessionStatus;
   exitCode: number | null;
   fallbackFrom: string | null;
+  traceId?: string;
+  actualProvider?: string;
+  actualModel?: string;
+  lastRequestId?: string;
+  nativeSessionId?: string;
+  resumedFrom?: string;
 };
 
 export type SessionsFile = {

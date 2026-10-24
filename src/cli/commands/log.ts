@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { LogEvent } from "../../core/types.js";
-import { ensureLogFile, readRecentLogs } from "../../core/logs/log-service.js";
+import { ensureLogFile, iterateLogsNewestFirst, readRecentLogs } from "../../core/logs/log-service.js";
 
 export async function runLogCommand(args: string[]): Promise<void> {
   if (!args.includes("--print")) {
@@ -13,19 +13,22 @@ export async function runLogCommand(args: string[]): Promise<void> {
   const traceId = parseTraceId(args);
   const printableArgs = args.filter((arg) => arg !== "--print" && arg !== "--trace" && arg !== traceId);
   const limit = parseLimit(printableArgs[0]);
-  const logs = await readRecentLogs(traceId ? Math.max(limit, 500) : limit);
   if (!traceId) {
-    printLogs(logs);
+    printLogs(await readRecentLogs(limit));
     return;
   }
 
   // 按 traceId 聚合成一条调用链路：同一次请求的每一跳按时间先后排成一列。
-  const chain = logs.filter((event) => event.traceId === traceId);
+  const chain: LogEvent[] = [];
+  for await (const event of iterateLogsNewestFirst()) {
+    if (event.traceId === traceId || event.metadata?.executionId === traceId) chain.push(event);
+    if (chain.length >= limit) break;
+  }
   if (!chain.length) {
     console.log(`No logs found for trace ${traceId}.`);
     return;
   }
-  printLogs(chain);
+  printLogs(chain.reverse());
 }
 
 function parseTraceId(args: string[]): string | undefined {

@@ -43,8 +43,12 @@ async function resumeSession(sessionId: string): Promise<void> {
   if (!session) {
     throw new Error(`Session not found: ${sessionId}`);
   }
-  console.log(`Resuming ${session.tool}: ${session.provider} / ${session.model}`);
-  await runUseCommand([session.tool, session.provider, session.model]);
+  const provider = session.actualProvider ?? session.provider;
+  const model = session.actualModel ?? session.model;
+  console.log(`${session.nativeSessionId ? "Resuming native conversation" : "Restarting with saved launch settings"}: ${session.tool} / ${provider} / ${model}`);
+  await runUseCommand([session.tool, provider, model], {
+    cwd: session.projectPath, nativeSessionId: session.nativeSessionId, resumedFrom: session.id
+  });
 }
 
 async function printSessions(): Promise<void> {
@@ -61,6 +65,8 @@ async function printSessions(): Promise<void> {
     console.log(`   id       ${session.id}`);
     console.log(`   project  ${session.projectPath}`);
     console.log(`   status   ${session.status}${session.exitCode === null ? "" : ` (${session.exitCode})`}`);
+    console.log(`   actual   ${session.actualProvider ? `${session.actualProvider} / ${session.actualModel}` : "not recorded"}`);
+    console.log(`   resume   ${session.nativeSessionId ? "native conversation" : "launch settings only"}`);
     if (session.fallbackFrom) {
       console.log(`   fallback ${session.fallbackFrom} -> ${session.provider}`);
     }

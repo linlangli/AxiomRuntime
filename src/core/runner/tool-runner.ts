@@ -1,12 +1,13 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { recordProviderRuntimeFailure, recordProviderRuntimeSuccess, saveLastSelection } from "../config/cache-store.js";
 import { loadRuntimeConfig } from "../config/runtime-config.js";
-import { writeLog } from "../logs/log-service.js";
+import { newTraceId, writeLog } from "../logs/log-service.js";
 import { applyProxyToEnv, resolveProviderProxy } from "../network/proxy.js";
-import type { CliToolType, Provider } from "../types.js";
+import type { CliToolType, Provider, SessionRecord } from "../types.js";
 import { isRecord } from "../utils/is-record.js";
 import { resolveToolCommand } from "./command-resolver.js";
 import { getRunnerEngine } from "./engine-registry.js";
@@ -18,13 +19,21 @@ import {
   resolveClaudePermissionMode,
   type ProcessIdentityOptions
 } from "./claude-permission-policy.js";
-import { finishSession, startSession } from "../sessions/session-service.js";
+import { finishSession, getSession, recordSessionProvider, startSession } from "../sessions/session-service.js";
+import { updateSession } from "../config/session-store.js";
+import { findNativeCodexSession } from "../sessions/native-session.js";
+
+export type RunToolOptions = {
+  fallbackFrom?: string | null; fallbackRoutes?: OpenAiUsageProxyRoute[]; traceId?: string;
+  cwd?: string; nativeSessionId?: string; resumedFrom?: string;
+  onSettled?: (session: SessionRecord) => void;
+};
 
 export async function runTool(
   tool: CliToolType,
   provider: Provider,
   model: string,
-  options: { fallbackFrom?: string | null; fallbackRoutes?: OpenAiUsageProxyRoute[] } = {}
+  options: RunToolOptions = {}
 ): Promise<number> {
   await saveLastSelection(tool, provider.name, model);
   const command = resolveToolCommand(tool);
@@ -38,20 +47,39 @@ export async function runTool(
     console.warn(`Warning: ${launchPolicy.warning}`);
   }
   const effectiveProvider = launchPolicy.provider;
+  const requestedCwd = path.resolve(options.cwd ?? process.cwd());
+  const cwd = await fs.promises.realpath(requestedCwd).catch(() => requestedCwd);
+  const traceId = options.traceId ?? newTraceId();
+  const nativeSessionId = options.nativeSessionId ?? (tool === "claude" ? randomUUID() : undefined);
+  const session = await startSession({
+    tool, provider: effectiveProvider, model, projectPath: cwd, traceId, nativeSessionId,
+    fallbackFrom: options.fallbackFrom, resumedFrom: options.resumedFrom
+  });
   const usageProxy = await startOpenAiUsageProxy({
     provider: effectiveProvider,
     model,
     tool,
     engine: tool,
+    traceId,
+    sessionId: session.id,
     fallbackRoutes: options.fallbackRoutes,
     onRouteResult: async (route, success, reason) => {
       if (success) await recordProviderRuntimeSuccess(route.provider.name);
       else await recordProviderRuntimeFailure(route.provider.name, reason ?? "request_failed");
     },
+    onRequestSettled: async (request) => {
+      if (request.success && request.provider && request.model) {
+        await recordSessionProvider(session.id, { traceId: request.traceId, provider: request.provider, model: request.model });
+        await saveLastSelection(tool, request.provider, request.model);
+      }
+    },
     // 子进程独占终端期间不直接写 stdio：提示由代理写回协议内，这里只累积，退出后统一汇总。
     onFailover: (event) => {
       failoverEvents.push(event);
     }
+  }).catch(async (error) => {
+    await finishSession(session.id, 1);
+    throw error;
   });
   const temporaryFiles: string[] = [];
   const setup = await (async () => {
@@ -69,12 +97,16 @@ export async function runTool(
         : null;
       if (claudeSettingsPath) temporaryFiles.push(claudeSettingsPath);
       const args = buildRunnerArgs(tool, routedProvider, model, claudeSettingsPath);
+      if (tool === "claude") args.push(options.nativeSessionId ? "--resume" : "--session-id", nativeSessionId!);
+      else if (options.nativeSessionId) args.unshift("resume", options.nativeSessionId);
       const effectiveBaseUrl = getToolBaseUrl(tool, effectiveProvider);
       await writeLog({
         category: "usage",
         action: "tool_spawn",
         message: `Spawning ${tool}: ${provider.name} / ${model}`,
+        traceId,
         metadata: {
+          sessionId: session.id,
           tool,
           provider: provider.name,
           model,
@@ -90,27 +122,26 @@ export async function runTool(
           authInjection: engine.authInjection
         }
       });
-      const session = await startSession({
-        tool,
-        provider: effectiveProvider,
-        model,
-        projectPath: process.cwd(),
-        fallbackFrom: options.fallbackFrom ?? null
-      });
-      return { args, env, session };
+      return { args, env };
     } catch (error) {
       cleanupTemporaryFiles(temporaryFiles);
       await usageProxy.close().catch(() => undefined);
+      await finishSession(session.id, 1);
       throw error;
     }
   })();
-  const { args, env, session } = setup;
+  const { args, env } = setup;
 
   return new Promise((resolve, reject) => {
     let finished = false;
+    let child: ChildProcess | undefined;
+    const signals = ["SIGINT", "SIGTERM"] as const;
+    const forwardSignal = (signal: NodeJS.Signals) => { child?.kill(signal); };
+    const signalHandlers = signals.map(signal => ({ signal, handler: () => forwardSignal(signal) }));
     const finish = async (exitCode: number, error?: Error): Promise<void> => {
       if (finished) return;
       finished = true;
+      for (const { signal, handler } of signalHandlers) process.off(signal, handler);
       cleanupTemporaryFiles(temporaryFiles);
       await usageProxy.close().catch(async (closeError) => {
         await writeLog({
@@ -122,6 +153,16 @@ export async function runTool(
         }).catch(() => undefined);
       });
       await finishSession(session.id, exitCode).catch(() => undefined);
+      try {
+        if (tool === "codex" && !nativeSessionId) {
+          const detected = await findNativeCodexSession({ cwd, startedAt: Date.parse(session.startedAt), finishedAt: Date.now() });
+          if (detected) await updateSession(session.id, { nativeSessionId: detected });
+        }
+        const completed = await getSession(session.id);
+        if (completed) options.onSettled?.(completed);
+      } catch {
+        await writeLog({ level: "warn", category: "system", action: "session_projection_failed", message: "Tool exited but its final session projection could not be updated.", traceId, metadata: { sessionId: session.id } });
+      }
       // 子进程已退出，终端所有权回到父进程：此时打印汇总不会破坏 TUI 渲染。
       const summary = formatFailoverSummary(failoverEvents);
       if (summary) console.error(summary);
@@ -132,12 +173,13 @@ export async function runTool(
       }
     };
 
-    let child;
     try {
       child = spawn(command, args, {
         stdio: "inherit",
-        env
+        env,
+        cwd
       });
+      for (const { signal, handler } of signalHandlers) process.on(signal, handler);
     } catch (error) {
       void finish(1, new Error(`Failed to start ${command}. Run \`ai doctor\` to check local CLI installation. ${error instanceof Error ? error.message : String(error)}`));
       return;
@@ -147,8 +189,8 @@ export async function runTool(
       void finish(1, new Error(`Failed to start ${command}. Run \`ai doctor\` to check local CLI installation. ${error.message}`));
     });
 
-    child.on("close", (code) => {
-      const exitCode = code ?? 0;
+    child.on("close", (code, signal) => {
+      const exitCode = code ?? (signal ? 128 + (os.constants.signals[signal] ?? 1) : 1);
       void finish(exitCode);
     });
   });
@@ -156,8 +198,7 @@ export async function runTool(
 
 export function getSecretFingerprint(value: string): string {
   if (!value) return "(empty)";
-  if (value.length <= 12) return `len=${value.length}`;
-  return `${value.slice(0, 8)}...${value.slice(-6)} len=${value.length}`;
+  return `sha256:${createHash("sha256").update(value).digest("hex").slice(0, 16)}`;
 }
 
 export function buildRunnerArgs(

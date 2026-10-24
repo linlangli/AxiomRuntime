@@ -61,7 +61,8 @@ export async function getWebDashboard() {
     providerDay.outputTokens += event.outputTokens;
     providerDay.totalTokens += event.totalTokens;
     provider.days.set(date, providerDay);
-    const cost = estimateTokenCostUsd(event.provider, event.model, event, pricing);
+    const cost = event.costSource === "provider" && typeof event.costUsd === "number" && Number.isFinite(event.costUsd) && event.costUsd >= 0
+      ? event.costUsd : estimateTokenCostUsd(event.provider, event.model, event, pricing);
     day.inputTokens += event.inputTokens;
     day.outputTokens += event.outputTokens;
     day.totalTokens += event.totalTokens;
@@ -99,8 +100,8 @@ export async function getWebDashboard() {
     pricing,
     calls: summarizeCalls(safeLogs, new Set(sessions.map(session => session.id))),
     logs: safeLogs.reverse(),
-    sessions: sessions.map(({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom }) =>
-      ({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom })),
+    sessions: sessions.map(({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom, actualProvider, actualModel, nativeSessionId, traceId, resumedFrom }) =>
+      ({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom, actualProvider, actualModel, nativeSessionId, traceId, resumedFrom })),
     codex, codexUsage, settings
   };
 }

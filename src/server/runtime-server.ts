@@ -15,7 +15,7 @@ import { loadServiceExposure, findServiceCredential, SERVICE_CAPABILITIES, type 
 import { admitServiceRequest } from "../core/services/credential-policy.js";
 import { executeRuntimeTool } from "../core/services/runtime-tools.js";
 import { readProviders } from "../core/config/providers-store.js";
-import { writeLog } from "../core/logs/log-service.js";
+import { withLogContext, writeLog } from "../core/logs/log-service.js";
 import {
   createUpstreamDispatcher,
   resolveProviderProxy
@@ -101,7 +101,7 @@ export async function startRuntimeServer(options: RuntimeServerOptions): Promise
     const requestId = normalizeRequestId(req.headers["x-request-id"]);
     res.setHeader("x-request-id", requestId);
     try {
-      await handleRequest({ req, res, requestId, token, useExposureConfig: options.useExposureConfig === true, maxRequestBytes, globalProxyUrl, dispatcherFor, agentRuntime });
+      await withLogContext({ traceId: requestId }, () => handleRequest({ req, res, requestId, token, useExposureConfig: options.useExposureConfig === true, maxRequestBytes, globalProxyUrl, dispatcherFor, agentRuntime }));
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError && !res.headersSent) {
         sendJson(res, 413, { error: { message: error.message, request_id: requestId } });
@@ -112,6 +112,7 @@ export async function startRuntimeServer(options: RuntimeServerOptions): Promise
         level: "error",
         category: "error",
         action: "runtime_server_request_failed",
+        traceId: requestId,
         message: `Runtime server request failed: ${message}`,
         metadata: { requestId, path: req.url ?? "/" }
       });
@@ -294,11 +295,15 @@ async function runAgent(
   }
 
   const cwd = path.join(runtime.workspaceRoot, request.workspaceId);
-  await fs.mkdir(cwd, { recursive: true });
-  const engine = createTelegramEngine(request.engine);
-  const runId = stableRunId(requestId);
   runtime.activeRuns += 1;
+  const controller = new AbortController();
+  const cancel = () => { if (!res.writableEnded) controller.abort(); };
+  res.on("close", cancel);
   try {
+    await fs.mkdir(cwd, { recursive: true });
+    const engine = createTelegramEngine(request.engine);
+    const runId = stableRunId(requestId);
+    if (controller.signal.aborted) return;
     const result = await engine.execute({
       chatId: runId,
       prompt: request.prompt,
@@ -307,6 +312,7 @@ async function runAgent(
       providerName: request.providerName,
       modelName: request.modelName,
       timeoutMs: runtime.timeoutMs,
+      signal: controller.signal,
       onPermission: async () => false
     });
     sendJson(res, 200, serializeAgentResult(requestId, request, result));
@@ -314,6 +320,7 @@ async function runAgent(
     const message = error instanceof Error ? error.message : String(error);
     sendJson(res, 502, { error: { message, request_id: requestId } });
   } finally {
+    res.off("close", cancel);
     runtime.activeRuns -= 1;
   }
 }

@@ -3,10 +3,10 @@ import { newTraceId, writeLog } from "../../core/logs/log-service.js";
 import { refreshAllProviders } from "../../core/providers/provider-service.js";
 import { resolveProviderCandidatesForTool, type ResolvedRun } from "../../core/runner/fallback.js";
 import { runTool } from "../../core/runner/tool-runner.js";
-import type { CliToolType } from "../../core/types.js";
+import type { CliToolType, SessionRecord } from "../../core/types.js";
 import { promptConfirm, promptSelect } from "../prompts/prompt.js";
 
-export async function runUseCommand(args: string[]): Promise<void> {
+export async function runUseCommand(args: string[], resume: { nativeSessionId?: string; cwd?: string; resumedFrom?: string } = {}): Promise<void> {
   const tool = await getTool(args[0]);
   const providerName = args[1];
   const modelName = args[2];
@@ -21,11 +21,16 @@ export async function runUseCommand(args: string[]): Promise<void> {
     throw new Error("No usable provider/model found. Run `ai status` or `ai doctor`.");
   }
   const [initial, ...fallbacks] = candidates;
+  let settled: SessionRecord | undefined;
   const code = await runResolvedProviderCandidates(tool, [initial!], {
     confirm: promptConfirm,
     traceId,
+    result: () => settled ? { provider: settled.actualProvider ?? null, model: settled.actualModel ?? null, sessionId: settled.id } : undefined,
     runner: (candidate, fallbackFrom) => runTool(tool, candidate.provider, candidate.model, {
       fallbackFrom,
+      traceId,
+      ...resume,
+      onSettled: (session) => { settled = session; },
       fallbackRoutes: fallbacks.map(({ provider, model }) => ({ provider, model }))
     })
   });
@@ -56,6 +61,7 @@ export type RunResolvedProviderCandidatesOptions = {
   runner?: (candidate: ResolvedRun, fallbackFrom: string | null) => Promise<number>;
   /** 调用链路关联 id；省略时自行生成，保证同一次执行的多跳仍能聚合。 */
   traceId?: string;
+  result?: () => { provider: string | null; model: string | null; sessionId: string } | undefined;
 };
 
 export async function runResolvedProviderCandidates(
@@ -99,7 +105,8 @@ export async function runResolvedProviderCandidates(
 
     const code = await runner(candidate, fallbackFrom);
     if (code === 0) {
-      await recordProviderRuntimeSuccess(candidate.provider.name);
+      const result = options.result?.();
+      if (!options.result) await recordProviderRuntimeSuccess(candidate.provider.name);
       await writeLog({
         category: "strategy",
         action: "tool_run_settled",
@@ -107,9 +114,10 @@ export async function runResolvedProviderCandidates(
         traceId,
         metadata: {
           tool,
-          provider: candidate.provider.name,
+          provider: result?.provider ?? (options.result ? null : candidate.provider.name),
           level: candidate.provider.level,
-          model: candidate.model,
+          model: result?.model ?? (options.result ? null : candidate.model),
+          ...(result ? { sessionId: result.sessionId } : {}),
           attempt: index + 1,
           fellBack: index > 0 || Boolean(candidate.fallbackFrom)
         }
@@ -118,7 +126,7 @@ export async function runResolvedProviderCandidates(
     }
 
     lastExitCode = code;
-    await recordProviderRuntimeFailure(candidate.provider.name, `exit_code_${code}`);
+    if (!options.result) await recordProviderRuntimeFailure(candidate.provider.name, `exit_code_${code}`);
     const next = candidates[index + 1];
     if (next) {
       runtimeFallbackFrom = candidate.provider.name;

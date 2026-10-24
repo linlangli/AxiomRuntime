@@ -23,6 +23,7 @@ test("unlinked events and configuration traces remain logs without becoming call
   const events = [event("openai_usage_proxy_request", { provider: "first" }, { traceId: undefined }), event("web_settings_updated"), event("provider_health_check"), event("bot_start"), event("web_model_pricing_updated")];
   assert.equal(summarize(events).length, 0);
   assert.deepEqual(projectHistoryLogs(events).map(item => item.kind), ["model", "config", "check", "system", "config"]);
+  assert.equal(summarize([event("openai_usage_proxy_request", { provider: "first", modelInvocation: false }), event("openai_usage_proxy_error", { provider: "first" })]).length, 0);
 });
 
 test("missing terminal events produce unknown results without guessing a final Provider or duration", () => {

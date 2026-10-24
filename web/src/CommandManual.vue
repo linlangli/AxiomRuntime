@@ -7,7 +7,7 @@ const emit = defineEmits<{ copy: [value: string] }>()
 const manualDocument = new DOMParser().parseFromString(manualSource, 'text/html')
 const labels: Record<string, string> = {
   commands: '命令索引', install: '安装配置', use: '模型使用', providers: '服务管理',
-  memory: '记忆配置', telegram: '消息接入', status: '状态诊断', sessions: '会话报告', files: '配置文件'
+  memory: '记忆配置', telegram: '消息接入', status: '状态诊断', sessions: '会话报告', storage: '凭据与历史', files: '配置文件'
 }
 const groupSections: Record<string, string> = { 基础: 'install', 使用: 'use', Provider: 'providers', Memory: 'memory', Telegram: 'telegram', 诊断: 'status', 会话: 'sessions' }
 const normalize = (value: string) => value.replace(/\s+/g, ' ').trim()
@@ -49,7 +49,7 @@ const commands = [...manualDocument.querySelectorAll<HTMLTableRowElement>('#comm
   const examples = [...(cells[1]?.querySelectorAll('code') ?? [])].map(code => code.textContent ?? '')
   const group = cells[0]?.textContent?.trim() ?? '其它'
   return {
-    id: index, group, examples, guide: groupSections[group],
+    id: index, group, examples, guide: row.dataset.guide ?? groupSections[group],
     description: cells[2]?.innerHTML ?? '', notes: cells[3]?.innerHTML ?? '',
     text: normalize(`${row.textContent ?? ''} ${row.dataset.search ?? ''}`)
   }

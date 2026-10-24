@@ -1,7 +1,7 @@
 import http from "node:http";
 import { fetch, type Dispatcher, type Response } from "undici";
 import { loadRuntimeConfig } from "../config/runtime-config.js";
-import { writeLog } from "../logs/log-service.js";
+import { getLogContext, newTraceId, withLogContext, writeLog } from "../logs/log-service.js";
 import { getProviderAuthScheme } from "../providers/provider-request-profile.js";
 import {
   createUpstreamDispatcher,
@@ -69,13 +69,18 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
   const consecutiveHeadersTimeouts = new Map<string, number>();
   let activeRouteIndex = 0;
   let pendingRouteIndex: number | null = null;
+  const settlements = new Set<Promise<void>>();
 
-  const server = http.createServer(async (req, res) => {
+  const server = http.createServer((req, res) => withLogContext({
+    traceId: newTraceId(), sessionId: input.sessionId, executionId: input.traceId
+  }, async () => {
     const startedAt = Date.now();
     let requestBytes = 0;
     let requestShape: Record<string, unknown> = {};
     metrics.requestCount += 1;
     let finalized = false;
+    let settledRoute: OpenAiUsageProxyRoute | null = null;
+    let modelInvocation = false;
     const finalizeMetrics = (success: boolean, upstreamStatus?: number | string): void => {
       if (finalized) return;
       finalized = true;
@@ -83,10 +88,35 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
       else metrics.failureCount += 1;
       metrics.totalDurationMs += Date.now() - startedAt;
       if (upstreamStatus !== undefined) incrementStatusCount(metrics, upstreamStatus);
+      if (modelInvocation) {
+        const request = {
+          traceId: getLogContext().traceId!, provider: settledRoute?.provider.name ?? null,
+          model: settledRoute?.model ?? null, success, modelInvocation,
+          durationMs: Date.now() - startedAt, status: upstreamStatus ?? null
+        };
+        const settlement = (async () => {
+          await writeLog({
+            level: success ? "info" : "warn", category: "usage", action: "openai_usage_proxy_request_settled",
+            message: "Model request settled.",
+            metadata: { ...request, tool: input.tool, outcome: success ? "succeeded" : "failed" }
+          });
+          await input.onRequestSettled?.(request);
+        })().catch(async () => {
+          await writeLog({ level: "error", category: "system", action: "session_projection_failed", message: "Failed to persist the settled request projection." });
+        });
+        settlements.add(settlement);
+        void settlement.finally(() => settlements.delete(settlement));
+      }
     };
 
     try {
-      if (pendingRouteIndex !== null) {
+      const originalRequestBody = await readRequestBody(req);
+      requestBytes = originalRequestBody.length;
+      requestShape = summarizeRequestShape(originalRequestBody);
+      modelInvocation = isModelInvocationRequest(req.method, req.url ?? "/");
+      const multipart = req.headers["content-type"]?.toLowerCase().startsWith("multipart/form-data") ?? false;
+      const canFailover = req.method === "POST" && requestBytes > 0 && modelInvocation && !multipart;
+      if (pendingRouteIndex !== null && canFailover) {
         const from = routes[activeRouteIndex]!;
         const to = routes[pendingRouteIndex]!;
         activeRouteIndex = pendingRouteIndex;
@@ -94,19 +124,13 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
         await emitFailover(input, { type: "confirmed", from, to, reason: "user_retried_after_partial_output" });
       }
 
-      const originalRequestBody = await readRequestBody(req);
-      requestBytes = originalRequestBody.length;
-      requestShape = summarizeRequestShape(originalRequestBody);
       // 只有真正会产生补全的模型端点才允许轮转。count_tokens 这类辅助端点在很多中转站上
       // 并不存在，它的 404 不代表 Provider 不可用，不能据此烧掉整条候选链。
-      const modelInvocation = isModelInvocationRequest(req.method, req.url ?? "/");
-      const multipart = req.headers["content-type"]?.toLowerCase().startsWith("multipart/form-data") ?? false;
-      const canFailover = req.method === "POST" && requestBytes > 0 && modelInvocation && !multipart;
-
       let routeIndex = activeRouteIndex;
       let attempt = 1;
       while (routeIndex < routes.length) {
         const route = routes[routeIndex]!;
+        settledRoute = route;
         const nextRoute = routes[routeIndex + 1];
         // 记账已由 handleFailure 写过，避免落地分支再补一次健康失败。
         let failureRecorded = false;
@@ -154,7 +178,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
           category: "usage",
           action: "openai_usage_proxy_request",
           message: `Proxying ${input.tool} request for ${route.provider.name} / ${requestModel}`,
-          metadata: { tool: input.tool, provider: route.provider.name, model: requestModel, path: upstreamPath, route: routeIndex - activeRouteIndex + 1, attempt }
+          metadata: { tool: input.tool, provider: route.provider.name, model: requestModel, modelInvocation, path: upstreamPath, route: routeIndex - activeRouteIndex + 1, attempt }
         });
 
         if (headersCircuitEnabled && timeoutCount >= MAX_CONSECUTIVE_HEADERS_TIMEOUTS) {
@@ -268,6 +292,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
             }
             if (canFailover && !failureRecorded) await input.onRouteResult?.(route, false, reason);
             if (streamed.outputStarted && nextRoute && canFailover) {
+              activeRouteIndex = routeIndex;
               pendingRouteIndex = routeIndex + 1;
               const event: OpenAiUsageProxyFailoverEvent = { type: "confirmation_required", from: route, to: nextRoute, reason };
               await emitFailover(input, event);
@@ -315,11 +340,12 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
         recordUsageMetric(metrics, recordedUsage);
         res.end(responseBody);
         activeRouteIndex = routeIndex;
+        const routeSucceeded = effectiveStatus >= 200 && effectiveStatus < 400;
         // 辅助端点缺失不代表 Provider 不健康，不能把它的 404 计入连续失败与健康分。
-        if ((modelInvocation || upstreamResponse.ok) && (upstreamResponse.ok || !failureRecorded)) {
-          await input.onRouteResult?.(route, upstreamResponse.ok, `http_${upstreamResponse.status}`);
+        if ((modelInvocation || routeSucceeded) && (routeSucceeded || !failureRecorded)) {
+          await input.onRouteResult?.(route, routeSucceeded, `http_${effectiveStatus}`);
         }
-        finalizeMetrics(upstreamResponse.ok, upstreamResponse.status);
+        finalizeMetrics(routeSucceeded, effectiveStatus);
         return;
       }
     } catch (error) {
@@ -335,7 +361,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
       else res.end();
       finalizeMetrics(false, diagnostic.code ?? "proxy_error");
     }
-  });
+  }));
 
   await new Promise<void>((resolve, reject) => {
     const onListenError = (error: Error): void => {
@@ -358,6 +384,7 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
         ? new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
         : Promise.resolve();
       await Promise.all([closeServer, closeDispatchers()]);
+      await Promise.all([...settlements]);
     },
     getRecords: () => [...records],
     getMetrics: () => snapshotMetrics(metrics)

@@ -22,6 +22,8 @@ import { runTelegramCommand } from "./commands/telegram.js";
 import { runVersionCommand } from "./commands/version.js";
 import { runWebCommand } from "./commands/web.js";
 import { runServerCommand } from "./commands/server.js";
+import { runSecretsCommand } from "./commands/secrets.js";
+import { runHistoryCommand } from "./commands/history.js";
 import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
 import { getCliCommand, registerCliCommand } from "./registry.js";
@@ -145,8 +147,7 @@ function maskMemoryEmbeddingSetArgs(args: string[]): string[] {
 }
 
 function maskSecretArg(value: string): string {
-  if (value.length <= 8) return "****";
-  return `${value.slice(0, 4)}****${value.slice(-4)}`;
+  return value ? "[redacted]" : "";
 }
 
 async function runInteractive(): Promise<void> {
@@ -193,6 +194,8 @@ async function runProviderCommand(args: string[]): Promise<void> {
 }
 
 function registerBuiltInCommands(): void {
+  registerCliCommand({ name: "secrets", description: "Manage Provider OS credentials", interactive: false, run: runSecretsCommand });
+  registerCliCommand({ name: "history", description: "Manage usage/session history storage", interactive: false, run: runHistoryCommand });
   registerCliCommand({ name: "server", description: "Manage background Runtime API", interactive: false, run: runServerCommand });
   registerCliCommand({
     name: "version",

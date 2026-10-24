@@ -8,31 +8,32 @@ AxiomRuntime 是一个以 CLI 为核心的本地 AI Runtime 基础层。它不�
 
 ## 先看实现状态
 
-README 需要区分“已经能用”和“只是规划”。下面的状态以当前仓库代码和 npm `0.0.4` 为准：
+README 需要区分“已经能用”和“只是规划”。下面的状态以当前仓库源码为准；`develop` 与已发布 npm 包的能力可能不同，即使 `package.json` 版本号相同，也必须按对应 release tag 核对。
 
 | 标记 | 含义 |
 |---|---|
-| ✅ | 已实现，并随 npm `0.0.4` 提供 |
+| ✅ | 当前源码已实现 |
 | 🟡 | 有可用实现，但能力范围或接入面仍有限制 |
 | 🚧 | 尚未实现，仅代表后续方向 |
 
-| 能力 | npm `0.0.4` | 当前源码 | 说明 |
-|---|---:|---:|---|
-| Provider 增删改查、模型发现、优先级 | ✅ | ✅ | `ai provider`、`ai status` |
-| Claude Code / Codex 启动与运行时 fallback | ✅ | ✅ | 按健康度、兼容模型和 `level` 选择 |
-| 多窗口使用不同 Provider，互不影响 | ✅ | ✅ | 配置只注入对应子进程 |
-| 不修改原生 Claude / Codex 配置 | ✅ | ✅ | `ai use` 的默认行为 |
-| 用量统计、成本展示、会话和报告 | ✅ | ✅ | 记录新产生的请求，不补录历史 |
-| Telegram 远程执行与多 Bot 隔离 | ✅ | ✅ | 带进度、审批、附件和 Provider 管理 |
-| 图片生成 | ✅ | ✅ | OpenAI-compatible Images API |
-| `ai set codex` 持久配置 Codex App | ✅ | ✅ | 这是显式修改原生配置的命令 |
-| 本地 HTTP Runtime API | ✅ | ✅ | Bearer 鉴权，适合本机集成 |
-| Telegram 显式记忆 | 🟡 | 🟡 | `/remember` 等命令可用，普通聊天不会自动记忆 |
-| 自动记忆、向量检索、终端记忆 | 🚧 | 🚧 | embedding 配置已就绪，入库和召回尚未接入 |
-| 本机 Web 控制面板（`ai web`） | ✅ | ✅ | 本机打开，查看用量与日志、管理 Provider 和 Codex 配置；实时执行视图尚未完整实现 |
-| 加密凭证、Skill 沉淀、学习治理和插件 | 🚧 | 🚧 | 仍是后续路线，不要按已实现能力使用 |
+| 能力 | 当前源码 | 说明 |
+|---|---:|---|
+| Provider 增删改查、模型发现、优先级 | ✅ | `ai provider`、`ai status` |
+| Claude Code / Codex 启动与运行时 fallback | 🟡 | 请求级重试/切换；部分输出后仅后续有效模型请求确认，上游兼容性需验证 |
+| 多窗口使用不同 Provider，互不影响 | ✅ | 配置只注入对应子进程 |
+| 不修改原生 Claude / Codex 配置 | ✅ | `ai use` 的默认行为 |
+| 用量统计、成本展示、会话和报告 | ✅ | 记录新产生的请求，不补录历史 |
+| Telegram 远程执行与多 Bot 隔离 | ✅ | 带进度、审批、附件和 Provider 管理 |
+| 图片生成 | ✅ | OpenAI-compatible Images API |
+| `ai set codex` 持久配置 Codex App | ✅ | 这是显式修改原生配置的命令 |
+| 本地 HTTP Runtime API | ✅ | Bearer 鉴权，适合本机集成 |
+| Telegram 显式记忆 | 🟡 | `/remember` 等命令可用，普通聊天不会自动记忆 |
+| 自动记忆、向量检索、终端记忆 | 🚧 | embedding 配置已就绪，自动抽取和向量召回尚未接入 |
+| 本机 Web 控制面板（`ai web`） | 🟡 | 基础配置、用量与历史可用；企业治理与完整实时执行视图尚未实现 |
+| Provider 系统凭据库、历史迁移与恢复 | 🟡 | `ai secrets` / `ai history` 可用；显式启用，平台与容量 gate 仍需验收 |
+| Skill 沉淀、学习治理和插件 | 🚧 | 仍是后续路线，不要按已实现能力使用 |
 
-如果你通过 npm 安装，实际可用的是 npm `0.0.4` 那一列；README 会随功能发布同步更新。
+当前适合个人本机使用与受控的小团队接入。完整可用性边界与待完善项见 [产品需求文档](./docs/prd.md#310-可投入使用边界与待完善项2026-10-24)。
 
 ## 它解决什么问题
 
@@ -91,7 +92,7 @@ ai use codex fenno gpt-5.5
 
 ### 5. 看见用量，而不是凭感觉猜成本
 
-Claude Code 和 Codex 的请求会经过本次执行专属的本地用量代理。Runtime 读取 Provider 返回的真实 token 和成本，写入同一份 `usage.json`：
+Claude Code 和 Codex 的请求会经过本次执行专属的本地用量代理。Runtime 读取 Provider 返回的真实 token 和成本，写入唯一用量账本（默认 `usage.json`，显式迁移后为 `history.sqlite`）：
 
 - 有 Provider 返回的 `cost_usd` 时优先使用真实成本
 - 只有 token、没有成本时，才按 `model-pricing.json` 估算
@@ -162,6 +163,21 @@ ai image <provider> <model> "数字插画"
 ```
 
 图片生成调用已配置 Provider 的 OpenAI-compatible `/v1/images/generations`。`b64_json` 会以 `0600` 权限保存到当前目录；远程 `https` 图片只输出 URL，不会自动下载不受信任的地址。图片请求最长等待 120 秒，失败后会尝试下一个兼容 Provider。
+
+### 凭据与历史维护
+
+```bash
+ai secrets status
+ai secrets migrate
+ai secrets rollback --yes
+ai history status
+ai history migrate
+ai history backup
+ai history restore <backup.sqlite> --yes
+ai history rollback --yes
+```
+
+`ai secrets` 管理 Provider 系统凭据库保护，回滚会导出明文。`ai history` 管理用量与会话 SQLite 存储；迁移、恢复和回滚前停止所有 Runtime 写入进程，恢复参数仅使用备份文件名。平台要求与恢复限制见 [使用指南](docs/usage.md)，也可在 `ai web → 帮助中心 → 命令手册 → 凭据与历史` 查阅。`ai session resume <session-id>` 在有原生 ID 时续用上下文；`ai last` 只沿用上次启动选择。
 
 ### AI Runtime 代理
 
@@ -284,7 +300,7 @@ AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 
 请注意：
 
-- `providers.json` 和 `memory.json` 中的 API Key 当前仍是明文保存。请限制目录权限，绝不要提交到仓库；加密凭证库尚未实现。
+- Provider 可通过 `ai secrets migrate` 显式转入系统凭据库，旧明文配置仍兼容；`memory.json` 和原生工具认证文件沿用现状。请限制权限，不提交凭据或快照。
 - `ai use` 的临时注入文件会在进程结束后清理；`ai set codex` 是例外，因为它就是明确的持久配置操作。
 - 配置写入使用文件锁、临时文件和原子重命名，降低 CLI 与 Telegram 并发写入时损坏文件的风险。
 - 日志不会记录完整 API Key，但会记录脱敏指纹；Provider 名称、模型和部分运行元数据会进入日志。
@@ -298,7 +314,7 @@ AI_GATEWAY_SERVER_TOKEN='replace-me' npm run server
 1. **更完整的记忆**：自动抽取、向量检索、终端接入、Claim / Evidence、冲突和时序治理。
 2. **可复用能力沉淀**：把经过验证的重复流程沉淀为 Skill 或 Workflow，并支持评测、激活和回滚。
 3. **统一 Runtime 契约**：统一 CLI、Telegram、HTTP 的身份、权限、事件、取消、幂等和恢复语义。
-4. **更完整的安全能力**：加密凭证、登录态托管、细粒度策略和可审计的权限决策。
+4. **更完整的安全能力**：扩大系统凭据库覆盖、登录态托管、细粒度策略和可审计的权限决策。
 5. **更多接入面**：企业级 Web 治理、桌面、调度和插件体系。本机 `ai web` 控制面板已实现基础视图与配置操作；公网门户是独立部署的静态站点，不进入 npm 包。
 
 这些是产品路线，不是已经发布的功能。README、使用指南和产品文档会继续按 🟢 / 🟡 / 🔴 状态同步。
@@ -310,7 +326,7 @@ npm install
 npm --prefix web ci
 npm run build
 npm test
-npm link
+npm run link
 ```
 
 完整命令说明见：

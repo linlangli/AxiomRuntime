@@ -104,6 +104,8 @@ src/
 
 帮助中心的完整命令手册由 `web/src/CommandManual.vue` 在构建时导入 `docs/USAGE.html` 原文，并从手册的正文 section 和命令索引投影目录、命令、参数说明与示例，不维护第二份命令清单。独立手册的样式、脚本与搜索控件不嵌入控制面；Web 使用自己的分类、跨分类全文搜索、复制和展开交互，正文保留同一来源的完整规则。该功能仅是静态文档适配，不调用执行或配置写入 API。
 
+命令索引行可通过 `data-guide` 指定正文 section，未指定时按命令分组选择默认分类。`ai secrets` 与 `ai history` 保留 Provider/会话分组，但直接导航到 `storage`；独立手册和 Web 目录均提供「凭据与历史」入口。新增命令须同步索引、正文和导航；修改 HTML 后重新构建控制面，避免部署旧的内嵌手册。
+
 `service-exposure.json` 是对外能力授权的控制面配置。它维护公网入口、Runtime 上游地址、能力白名单和一次性显示的调用凭证摘要；反向代理与 TLS 仍属于部署环境。Runtime server 可启用该配置，逐请求同时检查凭证能力和全局开放能力，能力关闭或凭证撤销立即拒绝请求。Web 生成 Nginx 片段和调用示例，SSH 模式还支持显式预览/确认后的远端部署；普通保存不修改远端。
 
 反代接入 UI 以单一流程管理 `placement`、`server`、`entry` 三个本地展示状态，同机模式跳过 `server`；能力/凭证/API 状态仅作前置检查。配置与 SSH 连接仍分别调用原有 core API；「保存并连接服务器」在保存成功后才请求启动，失败保留已保存配置并显示错误，不承诺跨 API 事务。步骤切换不隐式启动服务、连接 SSH 或执行远端部署。`SshSetup` 区分父级操作忙碌与连接配置锁：运行/自启锁仅阻止密钥、主机信任及授权变更，不阻止扫描指纹与认证诊断；每个禁用操作展示具体原因。`prepareSsh` 的本机密钥生成/复用先于远端连接参数校验，不要求主机地址或读取 SSH 连接配置，仍使用独立锁且不覆盖现有私钥。
@@ -122,7 +124,7 @@ Web 的启动准备投影在四个对外服务分类中共享：按已保存能�
 
 ---
 
-本机 Web 的补齐能力均通过共享 core API：`claude-settings.ts` 备份并编辑用户连接字段，`bot-service.ts` 为 Web 与具名 Bot CLI 提供同一生命周期锁，并在发送停止信号前校验进程归属标识；升级前启动且没有标识的旧 Bot 需核实 PID 并手动停止后重新启动。`history-service.ts` 从既有日志、会话和唯一 usage ledger 投影分页与 CSV/JSON 导出；轮询每 2 秒刷新，当前查询仍读取完整本机日志，不保证大规模日志性能。`service-playground.ts` 将瞬态调用凭证和请求转交现有 API，只有协议有效的公网成功调用才写入与当前开放/SSH 配置指纹绑定的验证记录。图片编辑转换为 multipart，调用输入、凭证和图片不写配置或日志。`runtime-tools.ts` 仅注册两个只读查询，不能执行任意 Shell。`credential-policy.ts` 在能力交集授权后检查有效期、Provider/模型白名单与原子请求计数；计数属于准入状态，不能充当 UsageObserver 账本，凭证轮换和快照恢复不重置计数。快照纳入 SSH 连接配置但不纳入专用私钥、known_hosts、准入计数或验证记录；恢复保留当前凭证集合。
+本机 Web 的补齐能力均通过共享 core API：`claude-settings.ts` 备份并编辑用户连接字段，`bot-service.ts` 为 Web 与具名 Bot CLI 提供同一生命周期锁，并在发送停止信号前校验进程归属标识；升级前启动且没有标识的旧 Bot 需核实 PID 并手动停止后重新启动。`history-service.ts` 从既有日志、会话和唯一 usage ledger 投影分页与 CSV/JSON 导出；轮询每 2 秒刷新，用量/会话可显式迁移至 SQLite 后索引分页，日志逐块扫描且只保留当前页；完整调用聚合和总览仍读取相应历史，不保证大规模性能。`service-playground.ts` 将瞬态调用凭证和请求转交现有 API，只有协议有效的公网成功调用才写入与当前开放/SSH 配置指纹绑定的验证记录。图片编辑转换为 multipart，调用输入、凭证和图片不写配置或日志。`runtime-tools.ts` 仅注册两个只读查询，不能执行任意 Shell。`credential-policy.ts` 在能力交集授权后检查有效期、Provider/模型白名单与原子请求计数；计数属于准入状态，不能充当 UsageObserver 账本，凭证轮换和快照恢复不重置计数。快照纳入 SSH 连接配置但不纳入专用私钥、known_hosts、准入计数或验证记录；恢复保留当前凭证集合。
 
 ## 4. 目标分层架构
 
@@ -236,7 +238,27 @@ flowchart LR
 
 CLI `ai use` 的 fallback 由唯一 Transport Proxy 在请求级完成，不重启原生 CLI。每个候选携带自己的 `Provider`、`model`、认证 profile 和规范化 Base URL；切换时必须改写 JSON 请求中的 `model`，用实际候选凭证构造上游 header，并把 usage 归属到实际成功的 Provider。连接错误以及 `401`、`403`、`404`、`408`、`409`、`425`、`429`、`5xx` 可在尚未产生有效输出时安全重试；`400`、`413`、`422` 不跨 Provider 重试。
 
-Streaming 响应在首个文字、推理或工具参数增量前由代理暂存协议前导事件；此前中断可丢弃并无感切换。首个有效增量写给客户端后即越过不可自动重放边界：中断时只记录待切换候选并显示提示，不重放请求；当前 CLI 发起下一次请求视为用户通过“重新提交/重试”确认，随后激活候选 Provider。父进程禁止与原生 TUI 争抢 stdin 弹出并行 `y/n` 提示。
+Streaming 响应在首个文字、推理或工具参数增量前由代理暂存协议前导事件；此前中断可丢弃并无感切换。首个有效增量写给客户端后即越过不可自动重放边界：中断时只记录待切换候选并显示提示，不重放请求；当前 CLI 下一次带请求体的模型 POST（不含 multipart）才消费待确认状态。GET、空请求体及辅助请求不会确认。父进程禁止与原生 TUI 争抢 stdin 弹出并行 `y/n` 提示。
+
+### 请求与会话归属 🟢
+
+`core/logs/log-service.ts` 通过 `AsyncLocalStorage<LogContext>` 传播请求 `traceId`、Runtime `sessionId` 和父执行 `executionId`。Transport 每个 HTTP 请求创建独立 trace，模型请求以 `openai_usage_proxy_request_settled` 记录终止结果、实际路由与耗时；UsageObserver 记录同一 trace/session 的用量及 `costUsd` / `costSource`，仍只写唯一账本。Provider 明确返回的成本优先于价格估算；用量写失败产生 `usage_persistence_failed`，不导致已输出请求重放。Web 仅投影白名单字段，旧记录缺少关联时保持未知。完整执行聚合不等于完整逐跳 trace。
+
+`SessionRecord.provider/model` 保留启动配置，`actualProvider/actualModel/lastRequestId` 表示最近成功模型请求；无成功请求时不臆测。新会话报告按 `sessionId` 精确归属，旧记录明确标注时间窗口近似。Claude 使用显式原生 `--session-id`；Codex 只读 bounded JSONL 首行 metadata，在 cwd、时间、`source: "cli"` 匹配且唯一时保存 `nativeSessionId`。`resume` 回到原目录并传原生 ID；无 ID 明确退回启动设置，歧义不猜测。CLI 转发终止信号并清理 listener，信号退出不是成功；Agent API 在异步 setup 前保留并发额度，并用断连 `AbortSignal` 取消 execution。以上是既有执行路径的修复，不代表统一 Kernel 已实现。
+
+### Provider 凭据 adapter 与存储决策 🟡
+
+`core/config/provider-secrets.ts` 定义 `SecretStorePort`，采用固定版本 `@napi-rs/keyring@2.1.2` 的 `AsyncEntry` 接入操作系统凭据库。决策：使用成熟 Keychain / Credential Manager / Secret Service，避免自制密码学或把解密主密钥存回同一目录；Linux 强制 `secret-service`，禁用库默认的易失 keyutils 回退。每次调用有 15 秒超时，锁定、丢失或 adapter 缺失时失败关闭。作用域是当前 OS 用户及配置根路径哈希，无网络数据出境。
+
+旧 Provider 数组继续兼容。`ai secrets migrate` 以读回验证后的 immutable `apiKeyRef` 替换明文，保存 `{version: 1, secretBackend: "keyring", providers}`；共享 Provider API hydrate 后仍返回原 `Provider` 契约，新增、轮换、删除全部后重建及旧快照恢复不能降级该策略。配置快照创建、迁移与恢复共享可重入文件锁；快照逐文件转换，失败可重试，`ai secrets status` 显示剩余明文数量。`rollback --yes` 是显式明文导出与 adapter 替换路径；保留旧凭据版本保证快照恢复，不自动 purge，外部备份与磁盘历史不保证擦除。其他凭据和记忆设置不纳入该增量。
+
+依赖审查：Node wrapper 为 MIT；平台包附 Rust SBOM 与 `LICENSE.third-party.md`，Linux 静态 `libdbus` 适用 `AFL-2.1 OR GPL-2.0-or-later`，分发须保留声明。`package-lock.json` 固定平台包版本与 integrity。注入式 adapter fixtures 覆盖迁移、轮换、快照、不可用与回滚；真实 OS 解锁/重启持久性及 Rust 二进制漏洞扫描仍由发布维护者完成后才扩大默认启用范围。2026-10-24 审计发现既有 `undici@8.10.0` high advisory，本轮固定升级为支持相同 Node 最低版本的 `undici@8.12.3`，`npm audit --omit=dev` 为 0 项；传输与打包回归覆盖该升级。npm 审计不替代 Rust 二进制扫描与真实平台验收。
+
+### 历史存储 adapter 与恢复 🟢
+
+`core/config/history-database.ts` 复用现有 `better-sqlite3`，只存 usage 和 Runtime sessions，不接触记忆数据库。`ai history migrate` 在共享写锁内导入旧 JSON、校验 SQLite integrity、原子启用版本 1 数据库及 `history-storage.json` 标记；失败保留旧数据。显式迁移后唯一权威是 `history.sqlite`，旧 JSON 不再双写；事件 `id` 唯一索引处理重复采集，Provider/time/session 索引服务分页和更新。存在启用标记但数据库缺失、损坏或版本未知时禁止静默读取旧 JSON。doctor 使用 `quick_check`，不会自动重建数据库。
+
+备份采用 SQLite backup API；恢复只接受本配置目录的备份 ID，先校验 schema/integrity，并保留原数据库；回滚先导出最新 JSON 再停用数据库。文件权限为 `0600`，备份目录为 `0700`。这些操作要求停写且不得混用旧版本。授权准入计数、配置、Telegram、原生历史和记忆不进入这份数据库，因此恢复不会复活已撤销凭证或重置额度。Web 用量/会话使用 SQL 分页；日志以反向分块迭代和有界分页读取，超过 4 MiB 单行及坏行忽略。总览及完整调用聚合仍需扫描相应历史，日志轮转、压测和 SLO 仍是部署 gate，不自建检索或队列引擎。
 
 ### Provider 配置探测 🟢
 
@@ -684,7 +706,7 @@ flowchart TD
 | Learning Governor / 自动抽取 | 🔴 | 全靠显式 `remember()` |
 | 版本化 migrations | 🔴 | 无 migrations 目录 |
 | 凭证加密 | 🔴 | credential 类直接抛错 |
-| `SecretStore` + `apiKeyRef` | 🔴 | `providers.json` 明文存 `apiKey` |
+| `SecretStore` + `apiKeyRef` | 🟡 | Provider 已有 `SecretStorePort` 与显式 OS 迁移；记忆凭据未纳入 |
 | 终端 `ai use` 接入记忆 | 🔴 | 仅 Telegram |
 
 演进方向：记忆核心迁移到 `src/core/memory`，Telegram 和 CLI 只是调用方；所有执行入口统一经过 memory hook；敏感登录态由独立 `auth session` 服务管理。
@@ -727,7 +749,7 @@ Cost 视图在**查询时**关联 UsageObserver 拥有的读模型；telemetry *
 
 `CapabilityObservation` 与 OpenTelemetry 导出仍未实现，但结构化日志已有跨 surface 的关联键：`LogEvent.traceId`（`src/core/types.ts`）。
 
-- 一次 HTTP 请求、一条 Telegram 消息、一次 `ai use` 在入口生成一个 traceId（`newTraceId()`，`src/core/logs/log-service.ts`），该次执行的候选解析、每次 provider 切换和终止跳全部复用它
+- 一次 HTTP 请求、一条 Telegram 消息、一次 `ai use` 在入口生成一个 traceId（`newTraceId()`，`src/core/logs/log-service.ts`），父执行候选解析与工具终止跳复用它；Transport 子请求创建独立 `traceId` 并记录父 `executionId`
 - 常驻服务直接把自身 `requestId` 当作 traceId，因此 `x-request-id` 响应头可反查整条链路
 - `resolveProviderCandidatesForTool(tool, provider, model, traceId)` 接受可选 traceId，让熔断 / 健康 / 无兼容模型这些**前置跳过**也进入同一条链路
 - 每条链路以终止跳收尾：`runtime_server_request_settled` / `tool_run_settled` / `runtime_provider_settled`（成功，带 `fellBack`、`attempt`、`totalCandidates`），或 `*_candidates_exhausted`（全败，带 `attempted`）
@@ -892,11 +914,11 @@ gh repo edit linlangli/AxiomRuntime --default-branch main
 
 ```bash
 npm ci --prefix web  # 安装独立前端依赖
-npm run build        # tsc + Web console 构建 + chmod；不清空整个 dist
+npm run build        # tsc + Web console + Node chmod；不清空整个 dist
 npm test             # build 然后跑 node:test
 npm run dev          # 带 source map 运行 CLI
 npm run server       # 启动常驻 API
-npm link             # 全局安装为 ai 命令
+npm run link         # 完整构建后全局链接为 ai 命令
 ```
 
 单个测试文件：
@@ -905,7 +927,9 @@ npm link             # 全局安装为 ai 命令
 npm run build && node --test test/core.test.js
 ```
 
-测试使用 Node.js 内置 `node:test`，文件在 `test/*.test.js`，跑的是编译后的 `dist/`。三个测试文件分别覆盖核心逻辑、服务和 Telegram 集成。
+测试使用 Node.js 内置 `node:test`，文件在 `test/*.test.js`，跑的是编译后的 `dist/`，覆盖核心逻辑、传输重试与切换、用量、图片、API、Telegram、Web、后台服务、SSH 与发布脚本。系统服务编排和远端部署的隔离测试不替代目标平台实机、真实 Provider 与公网链路验收。
+
+`npm run link` 先完整构建再执行 `npm link`。`npm run smoke:package` 在临时目录 pack/install 真正 npm 包，验证 CLI、鉴权 API、唯一账本迁移/备份/回滚和 Web HTML/JS/CSS；不调用真实 Provider、不写全局链接。CI 新增 Linux/macOS/Windows 打包 smoke matrix；配置 CI 不代表实机服务管理器或 OS 凭据库已验收。构建和 clean 使用 Node 文件 API，不依赖 Windows 缺少的 chmod/rm 命令。
 
 TypeScript 编译到 ES2022 + NodeNext modules。
 

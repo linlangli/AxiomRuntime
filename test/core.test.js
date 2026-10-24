@@ -1212,8 +1212,13 @@ test("usage proxy requires a new request before switching after partial output",
     let primaryRequests = 0;
     let backupRequests = 0;
     const primary = await startTestServer(async (req, res) => {
+      const body = await readRequestBody(req);
+      if (req.method !== "POST" || req.url !== "/v1/messages" || body.length === 0) {
+        res.setHeader("content-type", "application/json");
+        res.end("{}");
+        return;
+      }
       primaryRequests += 1;
-      await readRequestBody(req);
       res.setHeader("content-type", "text/event-stream");
       res.write('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}\n\n');
       setImmediate(() => res.destroy(new Error("stream interrupted")));
@@ -1253,6 +1258,19 @@ test("usage proxy requires a new request before switching after partial output",
       assert.equal(primaryRequests, 1);
       assert.equal(backupRequests, 0);
       assert.deepEqual(failovers.map((event) => event.type), ["confirmation_required"]);
+
+      for (const options of [
+        { path: "/v1/models" },
+        { path: "/v1/messages", method: "POST" },
+        { path: "/v1/messages/count_tokens", method: "POST", body: "{}" },
+        { path: "/v1/images/edits", method: "POST", headers: { "content-type": "multipart/form-data; boundary=test" }, body: "test" }
+      ]) {
+        const { path: requestPath, ...requestOptions } = options;
+        const probe = await fetch(`${proxy.baseUrl}${requestPath}`, requestOptions);
+        await probe.text();
+        assert.equal(backupRequests, 0);
+        assert.deepEqual(failovers.map((event) => event.type), ["confirmation_required"]);
+      }
 
       const second = await request();
       assert.match(await second.text(), /recovered/);
@@ -1860,7 +1878,9 @@ test("secret fingerprint identifies keys without exposing full value", () => {
   const fingerprint = getSecretFingerprint(key);
 
   assert.equal(fingerprint.includes(key), false);
-  assert.match(fingerprint, /^sk-TESTK\.\.\.QRSTUV len=42$/);
+  assert.match(fingerprint, /^sha256:[a-f0-9]{16}$/);
+  assert.equal(fingerprint, getSecretFingerprint(key));
+  assert.notEqual(fingerprint, getSecretFingerprint(`${key}changed`));
 });
 
 test("normalizes base URL per downstream tool", () => {

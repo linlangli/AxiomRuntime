@@ -2,12 +2,14 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getConfigRoot, getTelegramBotDir } from "../config/paths.js";
-import { readJsonFile, writeJsonFile, withJsonFileLock } from "../config/json-store.js";
+import { readJsonFile, writeJsonFile } from "../config/json-store.js";
 import { loadRuntimeConfig, setRuntimeFailover, setRuntimeProxy } from "../config/runtime-config.js";
 import { loadBotConfig, updateBotConfig } from "../config/telegram-config.js";
 import { SettingsInputError, loadServiceExposure, serviceExposureSummary } from "../config/service-exposure.js";
 import { checkProxyEndpoint, normalizeProxyUrl, configureGlobalProxy } from "../network/proxy.js";
 import { listProviders, setProviderProxy } from "../providers/provider-service.js";
+import { restoreProviders } from "../config/providers-store.js";
+import { withSettingsLock } from "../config/settings-lock.js";
 import { clearMemoryEmbeddingConfig, getMemoryEmbeddingConfig, setMemoryEmbeddingConfig } from "../memory/memory-config.js";
 import { checkMemoryEmbeddingConfig, checkAndRecordMemoryEmbeddingConfig } from "../memory/embedding-check.js";
 import { writeLog } from "../logs/log-service.js";
@@ -102,6 +104,10 @@ export async function applyLocalSettings(input: Record<string, unknown>) {
 }
 
 export async function createSettingsBackup() {
+  return withSettingsLock(createSettingsBackupUnlocked);
+}
+
+async function createSettingsBackupUnlocked() {
   const files: Record<string, unknown> = {};
   const names = [...MANAGED_FILES, ...(await listConfiguredBots()).map(name => `telegram/bots/${name}.json`)];
   for (const name of names) {
@@ -142,7 +148,7 @@ async function restoreSettingsBackup(id: string) {
     const state = await createSshTunnelManager().status();
     if (state.running || state.autostart) throw new SettingsInputError("恢复 SSH 配置前请先断开隧道并关闭隧道自启。");
   }
-  await withJsonFileLock(path.join(getConfigRoot(), ".web-restore"), async () => {
+  await withSettingsLock(async () => {
     const previous = await createSettingsBackup();
     const before = await readJsonFile<{ files: Record<string, unknown> }>(path.join(backupDirectory(), `${previous.id}.json`), { files: {} });
     try { await writeBackupFiles(backup.files); }
@@ -155,7 +161,8 @@ async function restoreSettingsBackup(id: string) {
 async function writeBackupFiles(files: Record<string, unknown>) {
   for (const [name, value] of Object.entries(files)) {
     const file = path.join(getConfigRoot(), name);
-    if (value === null) await fs.rm(file, { force: true });
+    if (name === "providers.json") await restoreProviders(value ?? []);
+    else if (value === null) await fs.rm(file, { force: true });
     else {
       const next = name === "service-exposure.json" ? { ...(value as object), credentials: (await loadServiceExposure()).credentials } : value;
       await writeJsonFile(file, next); await fs.chmod(file, 0o600);

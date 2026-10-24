@@ -28,7 +28,7 @@ const resultClass = (state: CallItem['state']) => state === 'succeeded' ? 'ok' :
 const providers = computed(() => [...new Set([
   ...props.data.providers.map(item => item.name),
   ...props.data.logs.flatMap(event => [event.provider, event.from, event.to]),
-  ...props.data.sessions.map(session => session.provider)
+  ...props.data.sessions.flatMap(session => [session.provider, ...(session.actualProvider ? [session.actualProvider] : [])])
 ].filter((name): name is string => Boolean(name)))].sort())
 const dayCalls = computed(() => props.data.calls.filter(call => (!props.selectedDay || call.events.some(event => event.timestamp.startsWith(props.selectedDay!))) && (!provider.value || call.route.includes(provider.value))))
 const totals = computed(() => [
@@ -42,15 +42,15 @@ const calls = computed(() => dayCalls.value.filter(call =>
   (status.value === 'all' || (status.value === 'switched' ? call.switchCount > 0 : status.value === 'retried' ? call.retryCount > 0 : call.state === status.value)) &&
   matches(`${call.id} ${call.model ?? ''} ${call.tool ?? ''} ${call.route.join(' ')} ${results[call.state]}`, queries.value.calls)))
 const sessions = computed(() => props.data.sessions.filter(session =>
-  (!props.selectedDay || session.startedAt.startsWith(props.selectedDay)) && (!provider.value || session.provider === provider.value) &&
-  matches(`${session.id} ${session.tool} ${session.provider} ${session.model}`, queries.value.sessions)))
+  (!props.selectedDay || session.startedAt.startsWith(props.selectedDay)) && (!provider.value || session.provider === provider.value || session.actualProvider === provider.value) &&
+  matches(`${session.id} ${session.tool} ${session.provider} ${session.model} ${session.actualProvider ?? ''} ${session.actualModel ?? ''}`, queries.value.sessions)))
 const actionLabels: Record<string, string> = {
   provider_resolved: '选定候选 Provider', provider_resolved_exact: '选定指定 Provider', fallback_skip_provider: '跳过不可用 Provider',
   failover_disabled: '已禁用自动切换', fallback_applied: '应用 Provider 切换', runtime_fallback_retry: '执行失败，转向下一 Provider',
   runtime_provider_fallback_retry: '任务失败，转向下一 Provider', runtime_server_provider_fallback: '请求失败，尝试下一 Provider',
   provider_failover_automatic: '自动切换 Provider', provider_failover_manual: '手动切换 Provider', provider_failover_confirmation_required: '切换等待确认',
   provider_retry: '在同一 Provider 上重试', tool_start: '开始工具执行', tool_spawn: '启动工具进程',
-  tool_run_settled: '工具执行成功', runtime_provider_settled: '模型任务执行成功', runtime_server_request_settled: '收到上游响应',
+  tool_run_settled: '工具执行成功', runtime_provider_settled: '模型任务执行成功', runtime_server_request_settled: '收到上游响应', openai_usage_proxy_request_settled: '模型请求结束',
   tool_candidates_exhausted: '所有工具候选执行失败', runtime_provider_candidates_exhausted: '所有任务候选执行失败',
   runtime_server_candidates_exhausted: '所有请求候选执行失败', runtime_server_request_failed: '请求执行失败', provider_candidates_unavailable: '没有可用 Provider',
   task_completed: '任务已完成', task_failed: '任务执行失败',
@@ -145,10 +145,10 @@ onBeforeUnmount(() => { drawer.value?.close(); restoreScroll() })
   </template>
 
   <template v-else-if="tab === 'sessions'">
-    <div class="info-banner"><TerminalSquare :size="17" /><p>显示最近 {{ data.sessions.length }} 次工具启动记录。模型和 Provider 为启动时配置；没有退出记录时无法确认进程是否仍在运行。日期按启动日筛选。</p></div>
-    <section class="card table-card"><div class="table-scroll"><table><thead><tr><th>工具 / 初始模型</th><th>初始 Provider</th><th>开始时间</th><th>运行时长</th><th>退出结果</th><th>关联记录</th></tr></thead><tbody>
+    <div class="info-banner"><TerminalSquare :size="17" /><p>显示最近 {{ data.sessions.length }} 次工具会话。实际 Provider 为最近成功的模型请求落点；没有成功请求记录时显示未知。没有退出记录时无法确认进程是否仍在运行。</p></div>
+    <section class="card table-card"><div class="table-scroll"><table><thead><tr><th>工具 / 最近实际模型</th><th>最近实际 Provider</th><th>开始时间</th><th>运行时长</th><th>退出结果</th><th>关联记录</th></tr></thead><tbody>
       <tr v-for="session in sessions" :key="session.id">
-        <td><strong>{{ session.tool }}</strong><small class="table-sub">{{ session.model }}</small></td><td>{{ session.provider }}</td><td>{{ date(session.startedAt) }}</td><td>{{ sessionDuration(session) }}</td>
+        <td><strong>{{ session.tool }}</strong><small class="table-sub">{{ session.actualModel ?? '未记录' }}</small></td><td>{{ session.actualProvider ?? '未记录' }}<small class="table-sub">启动：{{ session.provider }} / {{ session.model }}</small></td><td>{{ date(session.startedAt) }}</td><td>{{ sessionDuration(session) }}</td>
         <td><span class="pill" :class="!session.endedAt ? 'unknown' : session.status === 'failed' || (session.exitCode !== null && session.exitCode !== 0) ? 'error' : 'ok'">{{ sessionResult(session) }}</span><small v-if="session.exitCode !== null" class="table-sub">退出码 {{ session.exitCode }}</small></td>
         <td><details class="session-details"><summary>{{ sessionCalls(session.id).length ? `${sessionCalls(session.id).length} 条调用` : '会话详情' }}</summary><div><code>{{ session.id }}</code><p>结束：{{ date(session.endedAt) }}</p><p v-if="session.fallbackFrom">启动前从 {{ session.fallbackFrom }} 切换</p><button v-for="call in sessionCalls(session.id)" :key="call.id" class="link-button" @click="openCall(call.id)">查看关联调用 <ArrowRight :size="12" /></button><p v-if="!sessionCalls(session.id).length">日志窗口内暂无明确关联的调用。</p></div></details></td>
       </tr>
@@ -170,7 +170,8 @@ onBeforeUnmount(() => { drawer.value?.close(); restoreScroll() })
       <p class="drawer-note">结果 Provider 取自终止事件。工具执行可能包含多次请求，此处不能代表每次请求的实际承接者；未记录耗时时仅显示事件跨度。</p>
       <section class="drawer-section"><div class="drawer-section-heading"><h3>Provider 过程</h3><span>{{ detail.switchCount }} 次切换 · {{ detail.retryCount }} 次同 Provider 重试</span></div><div class="route-summary"><template v-for="(name, index) in detail.route" :key="`${index}-${name}`"><ArrowRight v-if="index" :size="14" /><span>{{ name }}</span></template><span v-if="!detail.route.length">暂无 Provider 过程</span></div><p class="drawer-note">按已记录事件展示，跳过候选不作为实际承接记录；重试和切换分别计数。</p></section>
       <section class="drawer-section"><h3>事件时间线</h3><div class="timeline history-timeline"><div v-for="(event, index) in detail.events" :key="index" class="timeline-row"><div class="timeline-dot" :class="event.level"></div><strong>{{ eventTitle(event) }}</strong><p v-if="event.provider || event.model">{{ event.provider ?? '' }}{{ event.model ? ` · ${event.model}` : '' }}</p><p v-if="event.from || event.to">{{ event.from ?? '—' }} → {{ event.to ?? '—' }}</p><p v-if="event.reason">{{ reasons[event.reason] ?? event.reason }}</p><small>{{ date(event.timestamp) }}<template v-if="event.status !== null"> · 状态 {{ event.status }}</template><template v-if="event.attempt !== null"> · 第 {{ event.attempt }} 次尝试</template></small><details class="event-raw"><summary>原始字段</summary><pre>{{ JSON.stringify(event, null, 2) }}</pre></details></div></div></section>
-      <details class="technical-details"><summary>调用 ID 与技术信息</summary><pre>{{ JSON.stringify({ traceId: detail.id, startedAt: detail.startedAt, endedAt: detail.endedAt, lastEventAt: detail.lastEventAt, sessionIds: detail.sessionIds }, null, 2) }}</pre><p>Token 和成本请在“用量统计”查看。现有记录未提供可靠的逐调用用量关联。</p></details>
+      <section class="drawer-section"><h3>本次记录用量</h3><p>Token：{{ detail.totalTokens ?? '未记录' }} · 成本：{{ detail.costUsd == null ? '未记录' : `$${detail.costUsd.toFixed(6)}` }}<template v-if="detail.costSource">（{{ detail.costSource === 'provider' ? 'Provider 返回' : '价格表估算' }}）</template></p><p class="drawer-note">仅显示相同请求 ID 下观测到的用量。旧记录缺少关联时保持未知。</p></section>
+      <details class="technical-details"><summary>调用 ID 与技术信息</summary><pre>{{ JSON.stringify({ traceId: detail.id, executionId: detail.executionId, startedAt: detail.startedAt, endedAt: detail.endedAt, lastEventAt: detail.lastEventAt, sessionIds: detail.sessionIds }, null, 2) }}</pre></details>
     </div>
   </dialog></Teleport>
 </template>

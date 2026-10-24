@@ -8,6 +8,7 @@ import test from "node:test";
 import { writeCache } from "../dist/core/config/cache-store.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
 import { startRuntimeServer } from "../dist/server/runtime-server.js";
+import { readUsage } from "../dist/core/config/usage-store.js";
 
 test("runtime server authenticates, lists models, and falls back between providers", async () => {
   const originalHome = process.env.AI_GATEWAY_HOME;
@@ -60,6 +61,16 @@ test("runtime server authenticates, lists models, and falls back between provide
     assert.equal((await completion.json()).choices[0].message.content, "ok");
     assert.equal(first.requests, 1);
     assert.equal(second.requests, 1);
+    const repeated = await fetch(`${server.baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { authorization: "Bearer internal-secret", "content-type": "application/json", "x-request-id": "req-test" },
+      body: JSON.stringify({ model: "gpt-test", messages: [{ role: "user", content: "another request" }] })
+    });
+    assert.equal(repeated.status, 200); await repeated.text();
+    const events = (await readUsage()).events;
+    assert.equal(events.length, 2);
+    assert.equal(new Set(events.map(event => event.id)).size, 2);
+    assert.ok(events.every(event => event.traceId === "req-test"));
 
     const unsafeWorkspace = await fetch(`${server.baseUrl}/v1/agent/runs`, {
       method: "POST",
