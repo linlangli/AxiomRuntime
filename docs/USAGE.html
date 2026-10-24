@@ -657,7 +657,7 @@ brew update</pre>
                 <td><span class="group-label">其它</span></td>
                 <td><code class="cmd">ai web</code></td>
                 <td>启动本机控制面板并打开浏览器；页面分为运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心。图表支持 7/30/70 天筛选、Provider 趋势、带圆角轻量涂鸦纹理且无分段间隔的占比图和 GitHub 式按周排列的小方格调用活动；短区间保留浅色日历上下文，统计数字只来自当前筛选区间。成本卡片右上角可编辑每个 Provider/模型的美元/百万 token 输入、输出和 Cache Read 价格，Provider 完整下拉列表合并当前配置、历史 usage 与已有价格键，直接选择即可切换；模型下拉合并缓存目录、默认模型、历史 usage 与已有价格键，并支持手动输入模型 ID。运行记录分为调用记录、工具会话、系统日志：调用详情以侧边抽屉展示结果与中文时间线，分别统计重试和切换；缺少终止事件显示结果未知。工具会话展示启动配置、时长和退出结果，仅按明确 sessionId 关联调用；系统日志支持分类、级别、Provider 筛选和原始字段展开。图表日期入口默认进入调用记录并保留日期。本地配置可编辑 Provider/Codex/代理/Telegram/embedding，对外服务可选择能力并生成反代示例。帮助中心的命令手册与本手册同源，完整覆盖全部分类、参数说明、运行规则和示例，支持跨分类搜索、命令分组筛选、内容展开与一键复制。</td>
-                <td>仅监听 127.0.0.1；访问链接含临时 token。配置写入前生成快照，凭证只在创建时显示一次。反代与 TLS 需要在自己的服务器部署，旧 Codex App 聊天不会随配置切换而迁移。编辑 Provider 的 model 若提示没有缓存，先执行 <code>ai models &lt;provider&gt;</code> 再编辑。本地源码或 npm link 安装若显示 Not found，请在项目根目录执行 <code>npm ci --prefix web</code> 和 <code>npm run build:web:console</code> 后刷新；仅运行 tsc 不生成控制面页面。</td>
+                <td>仅监听 127.0.0.1；访问链接含临时 token。配置写入前生成快照，凭证只在创建时显示一次。反代与 TLS 需要在自己的服务器部署，旧 Codex App 聊天不会随配置切换而迁移。编辑 Provider 的 model 若提示没有缓存，先执行 <code>ai models &lt;provider&gt;</code> 再编辑。控制面入口缺失或无法读取时会在启动前报错。本地源码或 npm link 安装请在项目根目录执行 <code>npm ci --prefix web</code> 和 <code>npm run build</code>，再运行 <code>ai web</code>；切换分支后也需重新构建。旧进程若显示 Not found，请先按 Ctrl+C 停止后再修复重启。仅运行 tsc 不生成控制面页面；npm 全局安装请重新安装 <code>@offerpilot/axiomruntime</code>。</td>
               </tr>
             </tbody>
           </table>

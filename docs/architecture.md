@@ -909,7 +909,7 @@ npm run build && node --test test/core.test.js
 
 TypeScript 编译到 ES2022 + NodeNext modules。
 
-本机 Web 静态入口为 `dist/web/control/console.html`，由 `npm run build:web:console` 生成；仅运行 `tsc` 不会生成控制面静态资源，缺失时首页返回 `404` 和 `{"error":"Not found."}`。
+本机 Web 静态入口为 `dist/web/control/console.html`，由 `npm run build:web:console` 生成；仅运行 `tsc` 不会生成控制面静态资源。`startLocalWebServer` 在监听端口前验证入口可读；缺失或无法读取时拒绝启动，CLI 显示源码构建或 npm 重装步骤，不打开不可用的页面。普通不存在的静态资源仍返回 `404`。
 
 ### 文档同步
 

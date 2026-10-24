@@ -82,6 +82,22 @@ test("Web usage exposes every historical model for each Provider", async () => {
   }
 });
 
+test("local Web rejects missing or unreadable console assets before listening", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-web-assets-test-"));
+  const startAndClose = async (assetRoot) => {
+    const server = await startLocalWebServer({ assetRoot });
+    await server.close();
+  };
+  try {
+    await assert.rejects(startAndClose(path.join(root, "missing")), /Local Web assets.*npm ci --prefix web.*npm run build.*reinstall/);
+    await assert.rejects(startAndClose(root), /Local Web assets/);
+    await fs.mkdir(path.join(root, "console.html"));
+    await assert.rejects(startAndClose(root), /Local Web assets/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("local Web serves the panel, protects mutations, and redacts secrets", async () => {
   const previousHome = process.env.AI_GATEWAY_HOME;
   const previousCodexHome = process.env.CODEX_HOME;
@@ -104,7 +120,15 @@ test("local Web serves the panel, protects mutations, and redacts secrets", asyn
     assert.match(token, /^[a-f0-9]{64}$/);
     const html = await fetch(baseUrl);
     assert.equal(html.status, 200);
-    assert.match(await html.text(), /AxiomRuntime/);
+    const document = await html.text();
+    assert.match(document, /AxiomRuntime/);
+    const assets = [...document.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)];
+    assert.ok(assets.length > 0);
+    for (const [, asset] of assets) {
+      const response = await fetch(new URL(asset, baseUrl));
+      assert.equal(response.status, 200, asset);
+      assert.ok((await response.arrayBuffer()).byteLength > 0, asset);
+    }
 
     assert.equal((await fetch(`${baseUrl}/api/state`)).status, 401);
     const state = await fetch(`${baseUrl}/api/state`, { headers: { authorization: `Bearer ${token}` } });

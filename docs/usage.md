@@ -608,7 +608,7 @@ ai --version
 
 ### 本地 Web 控制面板
 
-本地源码或 `npm link` 安装若打开后显示 `{"error":"Not found."}`，请在项目根目录执行 `npm ci --prefix web` 和 `npm run build:web:console`，然后刷新页面。控制面需要 `dist/web/control/console.html` 及其静态资源；只运行 `tsc` 不会生成这些文件。完整构建使用 `npm run build`。
+控制面需要 `dist/web/control/console.html` 及其静态资源；只运行 `tsc` 不会生成这些文件。入口缺失或无法读取时，`ai web` 会在启动前报错并提示修复步骤。本地源码或 `npm link` 安装请在项目根目录执行 `npm ci --prefix web` 和 `npm run build`，然后重新运行 `ai web`；切换分支后也应重新构建。若旧进程已经打开并显示 `{"error":"Not found."}`，请先在原终端按 `Ctrl+C` 停止，再执行上述步骤。npm 全局安装请重新安装 `@offerpilot/axiomruntime`。
 
 公网门户 [axiom.offerpilot.life](https://axiom.offerpilot.life/) 提供安装步骤、命令参考与当前能力边界，可复制安装命令。页面中的终端用量和 Telegram 对话均为示例；查看本机真实用量、日志或配置请使用下方 `ai web`。
 

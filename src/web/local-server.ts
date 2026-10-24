@@ -32,6 +32,11 @@ export type LocalWebServer = { url: string; close(): Promise<void> };
 
 export async function startLocalWebServer(options: { port?: number; assetRoot?: string } = {}): Promise<LocalWebServer> {
   const root = path.resolve(options.assetRoot ?? ASSET_ROOT);
+  try {
+    await fs.readFile(path.join(root, "console.html"));
+  } catch (error) {
+    throw new Error("Local Web assets are missing or unreadable. For a source checkout, run `npm ci --prefix web` and `npm run build` in the repository root, then run `ai web` again. For an npm installation, reinstall @offerpilot/axiomruntime.", { cause: error });
+  }
   const token = crypto.randomBytes(32).toString("hex");
   let port = 0;
   const server = http.createServer(async (request, response) => {
