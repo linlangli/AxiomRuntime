@@ -3,7 +3,6 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { imageSize } from "image-size";
-import { getDefaultImageOutputDir } from "../config/paths.js";
 import { planImageGeneration, validateImageModelSize, type ImagePlanInput } from "./image-generation-plan.js";
 import type { OpenAiUsageProxy } from "../runner/openai-usage-types.js";
 import { isProviderCircuitOpen, readCache, recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../config/cache-store.js";
@@ -343,7 +342,7 @@ export async function recoverGeneratedImages(responseFile: string, outputDir?: s
 }
 
 export function resolveImageOutputDir(outputDir?: string): string {
-  return outputDir ?? getDefaultImageOutputDir();
+  return outputDir ?? process.cwd();
 }
 
 async function prepareImageOutput(outputDir: string): Promise<string> {

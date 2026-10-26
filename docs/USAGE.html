@@ -543,7 +543,7 @@ brew update</pre>
               <tr data-search="image generate image prompt model b64 url">
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai image 51talk-image "一只戴墨镜的猫"</code></td>
-                <td>调用已配置的图片 Provider 和默认模型生成图片；项目存在 <code>assets/results/</code> 时默认保存到该目录。</td>
+                <td>调用已配置的图片 Provider 和默认模型生成图片；默认保存到当前工作目录。</td>
                 <td>支持 Provider fallback；真实 usage 写入 <code>usage.json</code>。</td>
               </tr>
               <tr data-search="use provider model named">
@@ -771,7 +771,7 @@ ai image recover "./.ai-image-recovery/响应记录.json"</pre>
                   <li>按健康/顺序选择一个 Provider；请求发出后不自动重试或向其他 Provider fallback。失败后先核实上游状态，再明确选择其他服务商重新运行。</li>
                   <li>第一个参数是 Provider 名；第二个参数匹配模型缓存时作为具体模型，否则从第二个参数开始作为提示词并使用默认模型。</li>
                   <li>命令执行前会自动刷新模型缓存；也可以先运行 <code>ai status</code> 检查。指定模型时建议给提示词加引号。</li>
-                  <li><code>b64_json</code> 会以 <code>0600</code> 权限保存到项目的 <code>assets/results/</code>（该目录存在时）并输出绝对路径；没有该目录时回退当前目录。远程响应只接受无凭证的 <code>https</code> URL。</li>
+                  <li><code>b64_json</code> 默认以 <code>0600</code> 权限保存到当前工作目录并输出绝对路径；core 调用显式指定 <code>outputDir</code> 时保存到指定目录。远程响应只接受无凭证的 <code>https</code> URL。</li>
                   <li>图片请求等待完整上游响应的默认期限为 10 分钟（<code>600000</code> 毫秒），可用正整数环境变量 <code>AI_GATEWAY_IMAGE_TIMEOUT_MS</code> 覆盖，覆盖响应头和响应体读取。</li>
                   <li>每次请求前先在输出目录建立 <code>.ai-image-recovery/&lt;uuid&gt;.json</code> 待完成记录；完整响应在 usage 处理和图片提取前私密保存，目录/文件权限为 <code>0700</code>/<code>0600</code>。失败时报告记录路径；使用 <code>ai image recover &lt;response-file&gt;</code> 可在本地重新提取，不刷新 Provider、不调用 API、不产生费用。记录存在不表示图片已生成，未收到的响应无法恢复，也不保证进程退出后的上游结果可取回。</li>
                   <li>请求经过 execution-scoped Transport Proxy，真实 usage 复用唯一 <code>UsageObserver</code> 账本。</li>

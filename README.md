@@ -162,7 +162,7 @@ ai image <provider> "一只戴墨镜的猫"
 ai image <provider> <model> "数字插画"
 ```
 
-图片生成调用已配置 Provider 的 OpenAI-compatible `/v1/images/generations`。项目存在 `assets/results/` 时，`b64_json` 会以 `0600` 权限保存到该目录；否则回退当前目录。远程 `https` 图片只输出 URL，不会自动下载不受信任的地址。图片请求最长等待 10 分钟，失败后不会自动重试或切换 Provider。
+图片生成调用已配置 Provider 的 OpenAI-compatible `/v1/images/generations`。`b64_json` 默认以 `0600` 权限保存到当前工作目录；core 调用显式指定 `outputDir` 时保存到指定目录。远程 `https` 图片只输出 URL，不会自动下载不受信任的地址。图片请求最长等待 10 分钟，失败后不会自动重试或切换 Provider。
 
 ### 凭据与历史维护
 

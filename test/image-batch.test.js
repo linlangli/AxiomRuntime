@@ -10,7 +10,6 @@ import { generateImages } from "../dist/core/images/image-generation-service.js"
 import { resolveImageCommandInput } from "../dist/cli/commands/image.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
-import { getDefaultImageOutputDir } from "../dist/core/config/paths.js";
 import { setRuntimeFailover } from "../dist/core/config/runtime-config.js";
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
@@ -19,13 +18,31 @@ const cache = { images: { status: "ok", models: [provider.model], lastCheckedAt:
 const noPrompt = async () => { throw new Error("Unexpected interactive prompt"); };
 const brief = "生成3张咖啡店宣传图：一张1024×1024方图、一张1536x1024横图、一张1024x1536竖图，保持统一风格";
 
-test("image output defaults to an existing project assets/results directory", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ai-image-output-"));
+test("image recovery defaults to cwd even with assets/results and honors an explicit output directory", async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ai-image-output-")));
   try {
     const results = path.join(root, "assets", "results");
     await fs.mkdir(results, { recursive: true });
-    assert.equal(getDefaultImageOutputDir(root), results);
-    assert.equal(getDefaultImageOutputDir(path.join(root, "without-results")), path.join(root, "without-results"));
+    await fs.writeFile(path.join(root, "response.json"), JSON.stringify({
+      version: 1, status: "completed", createdAt: new Date().toISOString(), provider: provider.name, model: provider.model,
+      responseStatus: 200, responseContentType: "application/json", responseText: JSON.stringify({ data: [{ b64_json: png.toString("base64") }] })
+    }));
+    const moduleUrl = new URL("../dist/core/images/image-generation-service.js", import.meta.url).href;
+    const script = `
+      globalThis.fetch = () => { throw new Error("Unexpected network request"); };
+      const { recoverGeneratedImages } = await import(${JSON.stringify(moduleUrl)});
+      const defaultImages = await recoverGeneratedImages("response.json");
+      const explicitImages = await recoverGeneratedImages("response.json", "assets/results/selected-task");
+      console.log(JSON.stringify({ defaultImages, explicitImages }));
+    `;
+    const child = spawnSync(process.execPath, ["--input-type=module", "--eval", script], { cwd: root, encoding: "utf8", timeout: 10_000 });
+    assert.equal(child.status, 0, child.stderr || child.error?.message);
+    const { defaultImages, explicitImages } = JSON.parse(child.stdout);
+    assert.equal(path.dirname(defaultImages[0].filePath), root);
+    assert.equal(path.dirname(explicitImages[0].filePath), path.join(results, "selected-task"));
+    assert.deepEqual(await fs.readFile(defaultImages[0].filePath), png);
+    assert.deepEqual(await fs.readFile(explicitImages[0].filePath), png);
+    assert.deepEqual(await fs.readdir(results), ["selected-task"]);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
