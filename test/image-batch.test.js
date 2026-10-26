@@ -10,6 +10,7 @@ import { generateImages } from "../dist/core/images/image-generation-service.js"
 import { resolveImageCommandInput } from "../dist/cli/commands/image.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
+import { getDefaultImageOutputDir } from "../dist/core/config/paths.js";
 import { setRuntimeFailover } from "../dist/core/config/runtime-config.js";
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
@@ -17,6 +18,18 @@ const provider = { name: "images", baseUrl: "https://images.test/v1", apiKey: "s
 const cache = { images: { status: "ok", models: [provider.model], lastCheckedAt: "now", lastError: null } };
 const noPrompt = async () => { throw new Error("Unexpected interactive prompt"); };
 const brief = "生成3张咖啡店宣传图：一张1024×1024方图、一张1536x1024横图、一张1024x1536竖图，保持统一风格";
+
+test("image output defaults to an existing project assets/results directory", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ai-image-output-"));
+  try {
+    const results = path.join(root, "assets", "results");
+    await fs.mkdir(results, { recursive: true });
+    assert.equal(getDefaultImageOutputDir(root), results);
+    assert.equal(getDefaultImageOutputDir(path.join(root, "without-results")), path.join(root, "without-results"));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("image planning recognizes explicit Chinese and English counts and ordered mixed sizes", () => {
   const plan = planImageGeneration({ prompt: brief });
@@ -201,7 +214,7 @@ test("known size constraints are checked before calls, and failover off keeps al
   });
 });
 
-test("text batch failover keeps actual provider attribution and shared usage across subsequent tasks", async () => {
+test("text batch failures never retry or fall back and still process distinct tasks", async () => {
   await fixture(async ({ directory, server }) => {
     let primaryCalls = 0;
     let backupCalls = 0;
@@ -213,13 +226,11 @@ test("text batch failover keeps actual provider attribution and shared usage acr
     });
     await writeProviders([{ ...provider, baseUrl }, { ...provider, name: "backup", baseUrl: backupUrl, level: 2 }]);
     const result = await generateImages({ provider: provider.name, prompt: "Generate two images of a cat" });
-    assert.equal(result.success, true);
-    assert.equal(primaryCalls, 1);
-    assert.equal(backupCalls, 2);
-    assert.deepEqual(result.images.map((image) => image.provider), ["backup", "backup"]);
-    const usage = JSON.parse(await fs.readFile(path.join(directory, "usage.json"), "utf8"));
-    assert.equal(usage.events.length, 2);
-    assert.ok(usage.events.every((event) => event.provider === "backup"));
+    assert.equal(result.success, false);
+    assert.equal(primaryCalls, 2);
+    assert.equal(backupCalls, 0);
+    assert.equal(result.images.length, 0);
+    assert.ok(result.tasks.every((task) => task.error));
   });
 });
 

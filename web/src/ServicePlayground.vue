@@ -2,8 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import { api, type ServiceExposure } from './console-api'
 
-const props = defineProps<{ exposure: ServiceExposure }>()
-const emit = defineEmits<{ verified: []; notice: [message: string] }>()
+const props = defineProps<{ exposure: ServiceExposure; disabled?: boolean }>()
+const emit = defineEmits<{ verified: []; notice: [message: string]; busy: [value: boolean] }>()
 const capability = ref('chat')
 const target = ref('local')
 const token = ref('')
@@ -26,10 +26,11 @@ const images = computed(() => {
 })
 watch(available, items => { if (!items.some(item => item.id === capability.value)) capability.value = items[0]?.id ?? '' }, { immediate: true })
 watch(capability, () => { result.value = null; error.value = '' })
+watch(() => props.exposure.publicBaseUrl, value => { if (!value && target.value === 'public') target.value = 'local'; result.value = null })
 function safeUrl(value?: string) { try { const url = new URL(value ?? ''); return url.protocol === 'https:' ? url.href : '' } catch { return '' } }
 async function submit() {
-  if (busy.value) return
-  busy.value = true; error.value = ''; result.value = null
+  if (busy.value || props.disabled) return
+  busy.value = true; emit('busy', true); error.value = ''; result.value = null
   try {
     let body: Record<string, unknown> = { model: model.value }
     if (capability.value === 'chat') body.messages = [{ role: 'user', content: prompt.value }]
@@ -50,16 +51,16 @@ async function submit() {
     if (result.value?.verified) emit('verified')
     emit('notice', result.value?.ok ? '授权调用成功。' : '调用失败，请查看响应和运行记录。')
   } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason) }
-  finally { busy.value = false }
+  finally { busy.value = false; emit('busy', false) }
 }
 </script>
 
 <template>
   <section class="card playground">
     <div class="card-head"><div><h2>实际调用工作台</h2><p>直接调用已有 Runtime API，验证授权与返回结果。真实模型及 Agent 请求会产生费用。</p></div><span class="pill" :class="result?.ok ? 'ok' : 'unknown'">{{ busy ? '执行中' : result ? `HTTP ${result.status}` : '等待调用' }}</span></div>
-    <div v-if="!available.length" class="empty">先在「能力开放」保存需要调用的接口，再创建调用凭证。</div>
+    <div v-if="!available.length" class="empty">先完成「开放能力」与「调用凭证」，再发起请求。</div>
     <form v-else @submit.prevent="submit">
-      <fieldset :disabled="busy"><div class="form-grid"><label>调用能力<select v-model="capability"><option v-for="item in available" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><label>调用目标<select v-model="target"><option value="local">本机 API · 127.0.0.1:8080</option><option value="public" :disabled="!exposure.publicBaseUrl">已保存的公网 HTTPS 入口</option></select></label></div>
+      <fieldset :disabled="busy || disabled"><div class="form-grid"><label>调用能力<select v-model="capability"><option v-for="item in available" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><label>调用目标<select v-model="target"><option value="local">本机 API · 127.0.0.1:8080</option><option value="public" :disabled="!exposure.publicBaseUrl">已保存的公网 HTTPS 入口</option></select></label></div>
       <label>调用凭证<input v-model="token" required type="password" autocomplete="off" placeholder="仅用于本次请求，不保存到配置或日志" /></label>
       <template v-if="!['models', 'tools'].includes(capability)"><div class="form-grid"><label>模型 ID<input v-model="model" :required="capability !== 'agent'" placeholder="填写 Provider 支持的模型 ID" /></label><label v-if="capability.startsWith('image')">图片尺寸<input v-model="size" placeholder="1024x1024" /></label></div><label>输入内容<textarea v-model="prompt" required rows="5" placeholder="输入问题、图片描述或任务指令" /></label></template>
       <label v-if="capability === 'image_edits'">参考图（PNG / JPEG / WebP）<input type="file" accept="image/png,image/jpeg,image/webp" multiple @change="files = Array.from(($event.target as HTMLInputElement).files ?? [])" /></label>

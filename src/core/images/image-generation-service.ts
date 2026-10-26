@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { imageSize } from "image-size";
-import { loadRuntimeConfig } from "../config/runtime-config.js";
+import { getDefaultImageOutputDir } from "../config/paths.js";
 import { planImageGeneration, validateImageModelSize, type ImagePlanInput } from "./image-generation-plan.js";
 import type { OpenAiUsageProxy } from "../runner/openai-usage-types.js";
 import { isProviderCircuitOpen, readCache, recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../config/cache-store.js";
@@ -13,7 +13,8 @@ import { startOpenAiUsageProxy } from "../runner/openai-usage-proxy.js";
 import type { Provider } from "../types.js";
 import { isRecord } from "../utils/is-record.js";
 
-const IMAGE_REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_IMAGE_REQUEST_TIMEOUT_MS = 600_000;
+const MAX_IMAGE_REQUEST_TIMEOUT_MS = 2_147_483_647;
 const MAX_IMAGE_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_REFERENCE_IMAGES = 8;
@@ -38,6 +39,7 @@ export type GeneratedImage = {
   revisedPrompt?: string;
   filePath?: string;
   url?: string;
+  recoveryPath?: string;
 };
 
 type ReferenceImage = { bytes: Uint8Array<ArrayBuffer>; mimeType: string; fileName: string };
@@ -101,11 +103,36 @@ export type GenerateImageInput = {
   size?: string;
 };
 
-export type ImageTaskResult = { index: number; size?: string; images: GeneratedImage[]; error?: string };
+export type ImageTaskResult = { index: number; size?: string; images: GeneratedImage[]; error?: string; recoveryPath?: string };
 export type ImageGenerationBatch = { tasks: ImageTaskResult[]; images: GeneratedImage[]; success: boolean };
 
 class PartialImageOutputError extends Error {
   constructor(message: string, readonly images: GeneratedImage[]) { super(message); }
+}
+
+type ImageRecoveryRecord = {
+  version: 1;
+  status: "pending" | "completed";
+  createdAt: string;
+  provider: string;
+  model: string;
+  size?: string;
+  responseStatus?: number;
+  responseContentType?: string;
+  responseText?: string;
+};
+
+type ImageRecoveryContext = { path: string; provider: string; model: string; size?: string };
+
+function imageRequestTimeoutMs(): number {
+  const raw = process.env.AI_GATEWAY_IMAGE_TIMEOUT_MS?.trim();
+  if (!raw) return DEFAULT_IMAGE_REQUEST_TIMEOUT_MS;
+  if (!/^\d+$/.test(raw)) throw new Error("AI_GATEWAY_IMAGE_TIMEOUT_MS must be a positive integer in milliseconds.");
+  const timeoutMs = Number(raw);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_IMAGE_REQUEST_TIMEOUT_MS) {
+    throw new Error(`AI_GATEWAY_IMAGE_TIMEOUT_MS must be between 1 and ${MAX_IMAGE_REQUEST_TIMEOUT_MS}.`);
+  }
+  return timeoutMs;
 }
 
 /** Sequential multi-output execution sharing one Transport Proxy and its authoritative UsageObserver.
@@ -113,24 +140,28 @@ class PartialImageOutputError extends Error {
  * Unknown provider size constraints are validated by the upstream API, never silently substituted.
  */
 export async function generateImages(input: GenerateImageInput & ImagePlanInput): Promise<ImageGenerationBatch> {
+  const timeoutMs = imageRequestTimeoutMs();
   const plan = planImageGeneration(input);
   const references = await readReferences(input);
-  const runtimeConfig = await loadRuntimeConfig();
+  const outputDir = resolveImageOutputDir(input.outputDir);
+  const recoveryDir = await prepareImageOutput(outputDir);
   const candidates = await resolveImageProviderCandidates(
     input.target ?? { providerName: input.provider, model: input.model },
-    !references.length && !runtimeConfig.failoverDisabled
+    false
   );
   if (!candidates.length) throw new Error("No usable image provider. Run `ai status` to refresh model lists.");
   for (const task of plan) validateImageModelSize(candidates[0]!.model, task.size);
-  let active = candidates[0]!;
+  const active = candidates[0]!;
+  let currentRecovery: ImageRecoveryContext | undefined;
   const proxy = await startOpenAiUsageProxy({
     provider: active.provider, model: active.model, tool: "image", engine: "codex",
-    fallbackRoutes: candidates.slice(1), upstreamHeadersTimeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
-    // Avoid duplicate generation after uncertain failures; safe HTTP failover remains available.
+    upstreamHeadersTimeoutMs: timeoutMs,
     maxAttemptsPerRoute: 1,
-    onFailover: (event) => { active = event.to; },
     onRouteResult: async (route, success, reason) => {
       if (!success) await recordProviderRuntimeFailure(route.provider.name, reason ?? "image_request_failed");
+    },
+    onBufferedResponse: async (response, route, requestModel) => {
+      if (currentRecovery) await completeImageRecovery(currentRecovery, response, route, requestModel);
     }
   });
   const tasks: ImageTaskResult[] = [];
@@ -141,19 +172,28 @@ export async function generateImages(input: GenerateImageInput & ImagePlanInput)
         tasks.push({ index: task.index, size: task.size, images: [], error: "Output limit reached because the provider returned extra images." });
         continue;
       }
+      let preserveRecoveryForLateResponse = false;
       try {
-        const images = await generateWithProvider(active, task.prompt, input.outputDir ?? process.cwd(), references, task.size, {
-          proxy, getCandidate: () => active, index: task.index, remaining
+        const recovery = await createPendingImageRecovery(recoveryDir, active, task.size);
+        currentRecovery = recovery;
+        const images = await generateWithProvider(active, task.prompt, outputDir, references, task.size, {
+          proxy, getCandidate: () => active, index: task.index, remaining, recovery, timeoutMs
         });
         await recordProviderRuntimeSuccess(active.provider.name);
         const mismatch = images.filter((image) => image.actualSize && task.size && task.size !== "auto" && image.actualSize !== task.size);
-        tasks.push({ index: task.index, size: task.size, images, ...(mismatch.length ? { error: "Provider returned a different image size; saved outputs were retained." } : {}) });
+        tasks.push({ index: task.index, size: task.size, images, recoveryPath: recovery.path,
+          ...(mismatch.length ? { error: "Provider returned a different image size; saved outputs were retained." } : {}) });
       } catch (error) {
+        preserveRecoveryForLateResponse = isImageRequestAbort(error);
         const message = summarizeError(error);
-        tasks.push({ index: task.index, size: task.size, images: error instanceof PartialImageOutputError ? error.images : [], error: message });
+        const recoveryPath = currentRecovery?.path;
+        tasks.push({ index: task.index, size: task.size, images: error instanceof PartialImageOutputError ? error.images : [], error: appendRecoveryHint(message, recoveryPath), ...(recoveryPath ? { recoveryPath } : {}) });
         await writeLog({ category: "provider", level: "warn", action: "image_generation_task_failed",
           message: "Image generation task failed.", metadata: { index: task.index, provider: active.provider.name, model: active.model, size: task.size } });
+      } finally {
+        if (!preserveRecoveryForLateResponse) currentRecovery = undefined;
       }
+      if (preserveRecoveryForLateResponse) break;
     }
     return { tasks, images: tasks.flatMap((task) => task.images), success: tasks.every((task) => !task.error) };
   } finally {
@@ -163,39 +203,35 @@ export async function generateImages(input: GenerateImageInput & ImagePlanInput)
 
 /** Backward-compatible single-output API; CLI batch planning lives in generateImages. */
 export async function generateImage(input: GenerateImageInput): Promise<GeneratedImage> {
+  const timeoutMs = imageRequestTimeoutMs();
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error("Image prompt is required.");
   const references = await readReferences(input);
+  const outputDir = resolveImageOutputDir(input.outputDir);
+  const recoveryDir = await prepareImageOutput(outputDir);
   if (input.size) validateImageModelSize(input.model ?? "", input.size);
 
   const selection = input.target ?? { providerName: input.provider, model: input.model };
-  const candidates = await resolveImageProviderCandidates(selection, !references.length);
+  const candidates = await resolveImageProviderCandidates(selection, false);
   if (!candidates.length) {
     const selectionName = input.target ?? input.provider ?? input.model ?? "(unknown)";
     throw new Error(`No usable provider offers image model for ${selectionName}. Run \`ai status\` to refresh model lists.`);
   }
 
-  const failures: string[] = [];
-  for (const candidate of candidates) {
-    try {
-      const result = await generateWithProvider(candidate, prompt, input.outputDir ?? process.cwd(), references, input.size);
-      await recordProviderRuntimeSuccess(candidate.provider.name);
-      return result[0]!;
-    } catch (error) {
-      const message = summarizeError(error);
-      failures.push(`${candidate.provider.name}: ${message}`);
-      await recordProviderRuntimeFailure(candidate.provider.name, message);
-      await writeLog({
-        level: "warn",
-        category: "provider",
-        action: "image_generation_provider_failed",
-        message: `Image generation failed for ${candidate.provider.name} / ${candidate.model}: ${message}`,
-        metadata: { provider: candidate.provider.name, model: candidate.model }
-      });
-    }
+  const candidate = candidates[0]!;
+  const recovery = await createPendingImageRecovery(recoveryDir, candidate, input.size);
+  try {
+    const result = await generateWithProvider(candidate, prompt, outputDir, references, input.size, { recovery, timeoutMs });
+    await recordProviderRuntimeSuccess(candidate.provider.name);
+    return result[0]!;
+  } catch (error) {
+    const message = summarizeError(error);
+    await recordProviderRuntimeFailure(candidate.provider.name, message);
+    await writeLog({ level: "warn", category: "provider", action: "image_generation_provider_failed",
+      message: `Image generation failed for ${candidate.provider.name} / ${candidate.model}: ${message}`,
+      metadata: { provider: candidate.provider.name, model: candidate.model } });
+    throw new Error(appendRecoveryHint(`Image generation failed: ${message}`, recovery.path));
   }
-
-  throw new Error(`Image generation failed. ${failures.join("; ")}`);
 }
 
 async function readReferences(input: GenerateImageInput): Promise<ReferenceImage[]> {
@@ -223,15 +259,15 @@ async function generateWithProvider(
   outputDir: string,
   references: ReferenceImage[],
   size?: string,
-  shared?: { proxy: OpenAiUsageProxy; getCandidate: () => ImageProviderCandidate; index: number; remaining: number }
+  shared?: { proxy?: OpenAiUsageProxy; getCandidate?: () => ImageProviderCandidate; index?: number; remaining?: number; recovery: ImageRecoveryContext; timeoutMs: number }
 ): Promise<GeneratedImage[]> {
+  const recovery = shared?.recovery;
   const usageProxy = shared?.proxy ?? await startOpenAiUsageProxy({
-    provider: candidate.provider,
-    model: candidate.model,
-    tool: "image",
-    engine: "codex",
-    upstreamHeadersTimeoutMs: IMAGE_REQUEST_TIMEOUT_MS,
-    ...(references.length ? { maxAttemptsPerRoute: 1 } : {})
+    provider: candidate.provider, model: candidate.model, tool: "image", engine: "codex",
+    upstreamHeadersTimeoutMs: shared?.timeoutMs ?? imageRequestTimeoutMs(), maxAttemptsPerRoute: 1,
+    onBufferedResponse: recovery
+      ? (response, route, requestModel) => completeImageRecovery(recovery, response, route, requestModel)
+      : undefined
   });
 
   try {
@@ -256,7 +292,7 @@ async function generateWithProvider(
         ...(references.length ? {} : { "content-type": "application/json" })
       },
       body
-    });
+    }, shared?.timeoutMs ?? imageRequestTimeoutMs());
     const text = await readBoundedResponseText(response, MAX_IMAGE_RESPONSE_BYTES);
     if (!response.ok && references.length && [404, 405, 415, 501].includes(response.status)) {
       throw new Error(`Provider does not support this image edit request (HTTP ${response.status}). Choose a provider/model supporting multipart /images/edits. The reference was not sent to fallback providers.`);
@@ -267,53 +303,124 @@ async function generateWithProvider(
     }
 
     const images = readImages(payload);
-    if (shared && images.length > shared.remaining) throw new Error("Provider response exceeds the remaining 8-image output limit.");
+    if (shared?.remaining !== undefined && images.length > shared.remaining) throw new Error("Provider response exceeds the remaining 8-image output limit.");
     if (!images.length) throw new Error("Provider response did not contain an image.");
-    const routed = shared?.getCandidate() ?? candidate;
+    const routed = shared?.getCandidate?.() ?? candidate;
     // Validate the entire response before writing any files.
-    const decoded = images.map((image) => {
-      if (!image.base64) return { image };
-      const buffer = decodeImage(image.base64);
-      const extension = detectImageExtension(buffer);
-      let actualSize: string | undefined;
-      if (size && size !== "auto") {
-        try { const dimensions = imageSize(buffer); actualSize = `${dimensions.width}x${dimensions.height}`; }
-        catch { throw new Error("Cannot verify generated image dimensions."); }
-      }
-      return { image, buffer, extension, actualSize };
-    });
     const results: GeneratedImage[] = [];
     try {
-      for (const [offset, entry] of decoded.entries()) {
-        const { image } = entry;
-        const result: GeneratedImage = {
-          provider: routed.provider.name, model: routed.model,
-          ...(size ? { requestedSize: size } : {}),
-          ...(entry.actualSize ? { actualSize: entry.actualSize } : {}),
-          ...(image.revisedPrompt ? { revisedPrompt: image.revisedPrompt } : {})
-        };
-        if (entry.buffer && entry.extension) {
-          result.filePath = await writeImageFile(outputDir, entry.buffer, entry.extension,
-            shared ? `${shared.index}-${offset + 1}${size ? `-${size}` : ""}` : undefined);
-          if (entry.actualSize && entry.actualSize !== size) result.warning = `Requested ${size}, received ${entry.actualSize}.`;
-        } else {
-          result.url = image.url;
-          if (size && size !== "auto") result.warning = "Remote URL size is unverified; the image was not downloaded.";
-        }
+      const saved = await saveImagePayload(images, routed.provider.name, routed.model, outputDir, size,
+        recovery?.path, shared?.index !== undefined ? `${shared.index}` : undefined);
+      for (const result of saved) {
         results.push(result);
         await writeLog({ category: "usage", action: result.filePath ? "image_generated" : "image_generated_url",
           message: `Generated image with ${routed.provider.name} / ${routed.model}.`,
           metadata: { provider: routed.provider.name, model: routed.model, index: shared?.index,
-            ...(result.filePath ? { filePath: result.filePath, bytes: entry.buffer?.length } : { urlHost: new URL(image.url!).host }),
-            requestedSize: size, actualSize: entry.actualSize } });
+            ...(result.filePath ? { filePath: result.filePath } : { urlHost: new URL(result.url!).host }),
+            recoveryPath: recovery?.path,
+            requestedSize: size, actualSize: result.actualSize } });
       }
     } catch (error) {
-      throw new PartialImageOutputError(summarizeError(error), results);
+      throw new PartialImageOutputError(summarizeError(error), [
+        ...results,
+        ...(error instanceof PartialImageOutputError ? error.images : [])
+      ]);
     }
     return results;
   } finally {
     if (!shared) await usageProxy.close().catch(() => undefined);
   }
+}
+
+export async function recoverGeneratedImages(responseFile: string, outputDir?: string): Promise<GeneratedImage[]> {
+  const record = JSON.parse(await fs.readFile(path.resolve(responseFile), "utf8")) as Partial<ImageRecoveryRecord>;
+  if (record.version !== 1 || record.status !== "completed" || typeof record.responseText !== "string") {
+    throw new Error("This recovery record is pending or incomplete; do not resubmit the request automatically.");
+  }
+  if (typeof record.provider !== "string" || typeof record.model !== "string") throw new Error("Invalid image recovery record.");
+  const payload = parseJsonResponse(record.responseText);
+  return saveImagePayload(readImages(payload), record.provider, record.model, resolveImageOutputDir(outputDir), record.size, path.resolve(responseFile));
+}
+
+export function resolveImageOutputDir(outputDir?: string): string {
+  return outputDir ?? getDefaultImageOutputDir();
+}
+
+async function prepareImageOutput(outputDir: string): Promise<string> {
+  const resolvedDir = path.resolve(outputDir);
+  await fs.mkdir(resolvedDir, { recursive: true, mode: 0o700 });
+  if (!(await fs.stat(resolvedDir)).isDirectory()) throw new Error("Image output path must be a directory.");
+  const recoveryDir = path.join(resolvedDir, ".ai-image-recovery");
+  await fs.mkdir(recoveryDir, { recursive: true, mode: 0o700 });
+  await fs.chmod(recoveryDir, 0o700).catch(() => undefined);
+  const probe = path.join(recoveryDir, `.probe-${process.pid}-${randomUUID()}`);
+  await fs.writeFile(probe, "", { mode: 0o600, flag: "wx" });
+  await fs.rm(probe, { force: true });
+  return recoveryDir;
+}
+
+async function createPendingImageRecovery(recoveryDir: string, candidate: ImageProviderCandidate, size?: string): Promise<ImageRecoveryContext> {
+  const filePath = path.join(recoveryDir, `image-response-${formatTimestamp(new Date())}-${randomUUID()}.json`);
+  const record: ImageRecoveryRecord = {
+    version: 1, status: "pending", createdAt: new Date().toISOString(), provider: candidate.provider.name, model: candidate.model,
+    ...(size ? { size } : {})
+  };
+  await writeRecoveryRecord(filePath, record);
+  return { path: filePath, provider: candidate.provider.name, model: candidate.model, ...(size ? { size } : {}) };
+}
+
+async function completeImageRecovery(recovery: ImageRecoveryContext, response: { status: number; statusText: string; contentType: string; body: Buffer }, route: ImageProviderCandidate, requestModel: string): Promise<void> {
+  await writeRecoveryRecord(recovery.path, {
+    version: 1, status: "completed", createdAt: new Date().toISOString(), provider: route.provider.name, model: requestModel,
+    ...(recovery.size ? { size: recovery.size } : {}), responseStatus: response.status, responseContentType: response.contentType,
+    responseText: response.body.toString("utf8")
+  });
+}
+
+async function writeRecoveryRecord(filePath: string, record: ImageRecoveryRecord): Promise<void> {
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(record), { mode: 0o600, flag: "wx" });
+  try { await fs.rename(temporaryPath, filePath); }
+  catch (error) { await fs.rm(temporaryPath, { force: true }).catch(() => undefined); throw error; }
+}
+
+async function saveImagePayload(images: { base64?: string; url?: string; revisedPrompt?: string }[], provider: string, model: string, outputDir: string, size?: string, recoveryPath?: string, label?: string): Promise<GeneratedImage[]> {
+  const decoded = images.map((image) => {
+    if (!image.base64) return { image };
+    const buffer = decodeImage(image.base64);
+    const extension = detectImageExtension(buffer);
+    let actualSize: string | undefined;
+    if (size && size !== "auto") {
+      try { const dimensions = imageSize(buffer); actualSize = `${dimensions.width}x${dimensions.height}`; }
+      catch { throw new Error("Cannot verify generated image dimensions."); }
+    }
+    return { image, buffer, extension, actualSize };
+  });
+  const results: GeneratedImage[] = [];
+  for (const [offset, entry] of decoded.entries()) {
+    const result: GeneratedImage = { provider, model, ...(recoveryPath ? { recoveryPath } : {}), ...(size ? { requestedSize: size } : {}), ...(entry.actualSize ? { actualSize: entry.actualSize } : {}), ...(entry.image.revisedPrompt ? { revisedPrompt: entry.image.revisedPrompt } : {}) };
+    try {
+      if (entry.buffer && entry.extension) {
+        result.filePath = await writeImageFile(outputDir, entry.buffer, entry.extension, label ? `${label}-${offset + 1}${size ? `-${size}` : ""}` : undefined);
+        if (entry.actualSize && entry.actualSize !== size) result.warning = `Requested ${size}, received ${entry.actualSize}.`;
+      } else {
+        result.url = entry.image.url;
+        if (size && size !== "auto") result.warning = "Remote URL size is unverified; the image was not downloaded.";
+      }
+    } catch (error) {
+      throw new PartialImageOutputError(summarizeError(error), results);
+    }
+    results.push(result);
+  }
+  return results;
+}
+
+function appendRecoveryHint(message: string, recoveryPath?: string): string {
+  return recoveryPath ? `${message} Check recovery record: ${recoveryPath}. Do not resubmit until it is checked.` : message;
+}
+
+function isImageRequestAbort(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 async function readReferenceImage(filePath: string): Promise<ReferenceImage> {
@@ -343,9 +450,9 @@ async function readReferenceImage(filePath: string): Promise<ReferenceImage> {
   }
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = imageRequestTimeoutMs()): Promise<Response> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), IMAGE_REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
@@ -453,6 +560,6 @@ function readProviderError(payload: unknown): string | null {
 }
 
 function summarizeError(error: unknown): string {
-  if (error instanceof Error && error.name === "AbortError") return "Image request timed out.";
+  if (error instanceof Error && error.name === "AbortError") return "Image request timed out; upstream result and billing status are unknown.";
   return (error instanceof Error ? error.message : String(error)).slice(0, 500);
 }

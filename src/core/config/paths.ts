@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -9,6 +10,16 @@ export function getConfigRoot(): string {
 
 export function getProjectRoot(): string {
   return process.cwd();
+}
+
+export function getDefaultImageOutputDir(root = getProjectRoot()): string {
+  const resultsDir = path.join(root, "assets", "results");
+  try {
+    if (fs.statSync(resultsDir).isDirectory()) return resultsDir;
+  } catch {
+    // Fall back to the historical current-directory behavior outside projects.
+  }
+  return root;
 }
 
 export function getProvidersPath(): string {

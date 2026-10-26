@@ -328,6 +328,12 @@ export async function startOpenAiUsageProxy(input: StartOpenAiUsageProxyInput): 
           if (decision === "retry" || decision === "failover") continue;
         }
         writeResponseHead(res, upstreamResponse);
+        await input.onBufferedResponse?.({
+          status: upstreamResponse.status,
+          statusText: upstreamResponse.statusText,
+          contentType,
+          body: responseBody
+        }, route, requestModel);
         const recordedUsage = await recordUsageFromResponse({
           text: responseText,
           contentType,
@@ -455,6 +461,12 @@ async function sendBufferedUsageResponse(
   res.statusCode = response.status;
   res.statusMessage = response.statusText;
   res.setHeader("content-type", response.contentType);
+  await input.onBufferedResponse?.({
+    status: response.status,
+    statusText: response.statusText,
+    contentType: response.contentType,
+    body: response.body
+  }, route, requestModel);
   const recordedUsage = await recordUsageFromResponse({
     text,
     contentType: response.contentType,

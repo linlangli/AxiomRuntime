@@ -1,364 +1,417 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
-import { ArrowRight, ArrowUpRight, Check, Copy, Globe2, KeyRound, Monitor, RefreshCw, Server, ShieldCheck, X } from 'lucide-vue-next'
-import { api, type ServiceExposure } from './console-api'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ArrowLeft, ArrowRight, Blocks, Check, CircleCheck, Copy, Globe2, Image, LoaderCircle, Monitor, RefreshCw, Server, ShieldCheck, Sparkles, Terminal, X } from 'lucide-vue-next'
+import { api, type Dashboard, type ServiceExposure } from './console-api'
+import ExposureCredentials from './ExposureCredentials.vue'
 import ServicePlayground from './ServicePlayground.vue'
 import SshSetup from './SshSetup.vue'
 import RemoteDeployment from './RemoteDeployment.vue'
 
 const props = defineProps<{ exposure: ServiceExposure }>()
 const emit = defineEmits<{ reload: []; notice: [message: string] }>()
-const tab = ref('反代接入')
-const tabs = ['反代接入', '能力开放', '访问控制', '接入测试']
-const publicBaseUrl = ref(props.exposure.publicBaseUrl)
-const connectionMode = ref<'ssh' | 'local'>(props.exposure.connectionMode ?? (props.exposure.updatedAt !== null && props.exposure.upstreamUrl === 'http://127.0.0.1:8080' ? 'local' : 'ssh'))
-const upstreamUrl = computed(() => connectionMode.value === 'ssh' ? 'http://127.0.0.1:18080' : 'http://127.0.0.1:8080')
-const capabilities = ref([...props.exposure.capabilities])
-const credentialName = ref('')
-const credentialCapabilities = ref<string[]>([])
-const credentialPolicy = ref({ providers: '', models: '', expiresAt: '', requestsPerMinute: '', requestQuota: '' })
-const verification = ref({ verified: false, verifiedAt: null as string | null })
-type ConnectionStep = 'placement' | 'server' | 'entry'
-const connectionStep = ref<ConnectionStep>('placement')
-const saveNext = ref<ConnectionStep | 'test' | null>(null)
-const newToken = ref('')
+type Step = 'capabilities' | 'credentials' | 'connection' | 'verify'
+type ServiceState = { supported: boolean; running: boolean; autostart: boolean; installed: boolean; manager: string; logPath: string; baseUrl: string; detail: string }
+type SshConfig = { host: string; user: string; port: number; identityFile: string }
+type TunnelState = ServiceState & { connected: boolean; config: SshConfig | null }
+type ExposureInput = { publicBaseUrl: string; upstreamUrl?: string; connectionMode?: 'ssh' | 'local'; capabilities: string[] }
+type SavePlan = { input: ExposureInput; next: 'credentials' | 'connect' | null; title: string }
+const saved = ref(props.exposure)
+const step = ref<Step>('capabilities')
+const navigated = ref(false)
 const busy = ref(false)
+const credentialBusy = ref(false)
+const sshBusy = ref(false)
+const playgroundBusy = ref(false)
+const deploymentBusy = ref(false)
+const pending = computed(() => loading.value || busy.value || credentialBusy.value || sshBusy.value || playgroundBusy.value || deploymentBusy.value)
+const progress = ref('')
 const error = ref('')
-const confirmSave = ref(false)
-const connection = ref<{ ok: boolean; target: string; durationMs: number } | null>(null)
-const exampleCapability = ref('')
-const service = ref<{ supported: boolean; running: boolean; autostart: boolean; installed: boolean; manager: string; logPath: string; baseUrl: string; detail: string } | null>(null)
-type TunnelState = { supported: boolean; running: boolean; connected: boolean; autostart: boolean; installed: boolean; logPath: string; detail: string; config: null | { host: string; user: string; port: number; identityFile: string } }
+const message = ref('')
+const loading = ref(true)
+const currentTime = ref(Date.now())
+const expiryTimer = setInterval(() => { currentTime.value = Date.now() }, 15_000)
+onBeforeUnmount(() => clearInterval(expiryTimer))
+const service = ref<ServiceState | null>(null)
 const tunnel = ref<TunnelState | null>(null)
-const prerequisites = computed(() => [
-  { title: '开放能力', ready: props.exposure.capabilities.length > 0, target: '能力开放' },
-  { title: '调用凭证', ready: props.exposure.credentials.some(item => (!item.policy?.expiresAt || new Date(item.policy.expiresAt).getTime() > Date.now()) && item.capabilities.some(capability => props.exposure.capabilities.includes(capability))), target: '访问控制' },
-  { title: 'API 服务', ready: !!service.value?.running, target: 'service' },
-])
-const missingServicePreparation = computed(() => prerequisites.value.slice(0, 2).find(item => !item.ready))
-const servicePreparationHint = computed(() => missingServicePreparation.value?.target === '能力开放'
-  ? '尚未保存开放能力。先选择需要提供的能力（例如图片生成），再创建调用凭证，最后启动 API。'
-  : '尚无匹配开放能力的有效调用凭证。请在「访问控制」创建凭证并保存 Token，再启动 API。')
-const placementDirty = computed(() => connectionMode.value !== props.exposure.connectionMode || upstreamUrl.value !== props.exposure.upstreamUrl)
-const connectionSteps = computed(() => [
-  { id: 'placement' as const, title: '选择部署位置', detail: '确定 Runtime 和反代的位置', complete: !placementDirty.value },
-  ...(connectionMode.value === 'ssh' ? [{ id: 'server' as const, title: '连接服务器', detail: '填写 SSH 信息并连接', complete: !!tunnel.value?.connected && !tunnelDirty.value }] : []),
-  { id: 'entry' as const, title: '设置访问地址', detail: '内部调用或公网 HTTPS', complete: verification.value.verified },
-])
-function openPreparation(target: string) {
-  error.value = ''
-  if (target === 'service' && missingServicePreparation.value) tab.value = missingServicePreparation.value.target
-  else if (target === 'service') document.getElementById('exposure-service')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  else tab.value = target
-}
-function returnToConnection() {
-  tab.value = '反代接入'
-  connectionStep.value = connectionMode.value === 'ssh' ? 'server' : 'entry'
-}
-function continuePlacement() {
-  const destination = connectionMode.value === 'ssh' ? 'server' : 'entry'
-  if (dirty.value) { saveNext.value = destination; confirmSave.value = true }
-  else connectionStep.value = destination
-}
-function continueEntry() {
-  if (dirty.value) { saveNext.value = 'test'; confirmSave.value = true }
-  else tab.value = '接入测试'
-}
-const ssh = ref({ host: '', user: 'root', port: 22, identityFile: '' })
+const verification = ref({ verified: false, verifiedAt: null as string | null })
+const capabilities = ref([...props.exposure.capabilities])
+const mode = ref<'ssh' | 'local'>(props.exposure.connectionMode ?? (props.exposure.updatedAt && props.exposure.upstreamUrl === 'http://127.0.0.1:8080' ? 'local' : 'ssh'))
+const publicAccess = ref(!!props.exposure.publicBaseUrl)
+const publicBaseUrl = ref(props.exposure.publicBaseUrl)
+const ssh = ref<SshConfig>({ host: '', user: 'root', port: 22, identityFile: '' })
+const sshEdited = ref(false)
+const savePlan = ref<SavePlan | null>(null)
+const connection = ref<{ ok: boolean; target: string; durationMs: number } | null>(null)
 const tunnelCheck = ref('')
+const exampleCapability = ref('')
+const stepPanel = ref<HTMLElement | null>(null)
+const activeCredentials = computed(() => saved.value.credentials.filter(item => (!item.policy?.expiresAt || Date.parse(item.policy.expiresAt) > currentTime.value) && item.capabilities.some(capability => saved.value.capabilities.includes(capability))))
+const selectedCapabilities = computed(() => saved.value.catalog.filter(item => saved.value.capabilities.includes(item.id)))
+const capabilitiesDirty = computed(() => JSON.stringify([...capabilities.value].sort()) !== JSON.stringify([...saved.value.capabilities].sort()))
+const upstream = computed(() => mode.value === 'ssh' ? 'http://127.0.0.1:18080' : 'http://127.0.0.1:8080')
+const placementDirty = computed(() => mode.value !== saved.value.connectionMode || upstream.value !== saved.value.upstreamUrl)
 const tunnelDirty = computed(() => !tunnel.value?.config || JSON.stringify(ssh.value) !== JSON.stringify(tunnel.value.config))
-const sshPreparation = computed(() => {
-  const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`
-  return `ssh -F /dev/null -o StrictHostKeyChecking=ask -o PreferredAuthentications=publickey -i ${quote(ssh.value.identityFile || '/absolute/path/to/key')} -p ${quote(String(ssh.value.port))} -l ${quote(ssh.value.user)} -- ${quote(ssh.value.host || 'YOUR_SERVER')} true`
+const tunnelLocked = computed(() => !!(tunnel.value?.running || tunnel.value?.autostart))
+const entryUrl = computed(() => publicAccess.value ? publicBaseUrl.value.trim() : '')
+const entryDirty = computed(() => entryUrl.value !== saved.value.publicBaseUrl)
+const connectionReady = computed(() => !!service.value?.running && !!saved.value.connectionMode && (saved.value.connectionMode === 'local' || !!tunnel.value?.connected))
+const needsPreparation = computed(() => !saved.value.capabilities.length ? 'capabilities' : !activeCredentials.value.length ? 'credentials' : null)
+const steps = computed(() => [
+  { id: 'capabilities' as const, title: '开放能力', detail: saved.value.capabilities.length ? `已保存 ${saved.value.capabilities.length} 项能力` : '选择应用需要的接口', complete: saved.value.capabilities.length > 0 },
+  { id: 'credentials' as const, title: '调用凭证', detail: activeCredentials.value.length ? `${activeCredentials.value.length} 个有效凭证` : '为调用方分配权限', complete: activeCredentials.value.length > 0 },
+  { id: 'connection' as const, title: '启动与连接', detail: connectionReady.value ? (saved.value.connectionMode === 'ssh' ? 'API 与服务器已连接' : '本机 API 已运行') : '连接应用所在的服务器', complete: connectionReady.value },
+  { id: 'verify' as const, title: '验证与调用', detail: verification.value.verified ? '公网授权调用已验证' : '获取地址并发起真实请求', complete: verification.value.verified },
+])
+const currentStep = computed(() => steps.value.find(item => item.id === step.value)!)
+const connectLabel = computed(() => {
+  if (busy.value) return progress.value || '操作中…'
+  if (mode.value === 'local') return service.value?.running ? '前往验证与调用' : '启动 API 并继续'
+  if (tunnel.value?.running && !tunnel.value.connected) return '刷新连接状态'
+  if (tunnel.value?.connected && !tunnelDirty.value && !placementDirty.value && service.value?.running) return '前往验证与调用'
+  return service.value?.running ? '保存并连接服务器' : '启动 API 并连接服务器'
 })
-async function refreshTunnel() {
-  try {
-    tunnel.value = await api<TunnelState>('/api/exposure/tunnel')
-    if (tunnel.value.config) ssh.value = { ...tunnel.value.config }
-  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason) }
+const connectBlocked = computed(() => {
+  if (loading.value) return '正在读取本机服务状态。'
+  if (!service.value) return '服务状态读取失败，请刷新状态后再试。'
+  if (!service.value.supported) return service.value.detail
+  if (needsPreparation.value) return needsPreparation.value === 'capabilities' ? '先完成第 1 步，保存至少一项开放能力。' : '先完成第 2 步，创建未过期且包含开放能力的调用凭证。'
+  if (mode.value === 'ssh' && !tunnel.value?.supported) return tunnel.value?.detail || '无法读取 SSH 隧道状态，请刷新后再试。'
+  if (mode.value === 'ssh' && tunnelLocked.value && (tunnelDirty.value || placementDirty.value)) return '请先在运行管理中断开隧道并关闭自启，再修改配置。'
+  return ''
+})
+const capabilityDetails: Record<string, { description: string; icon: typeof Image }> = {
+  images: { description: '根据文字描述生成图片', icon: Image }, image_edits: { description: '上传参考图，按指令编辑图片', icon: Sparkles },
+  chat: { description: 'OpenAI 兼容的聊天接口', icon: Blocks }, responses: { description: '通过 Responses 协议处理输入', icon: Blocks },
+  models: { description: '查询可用模型目录', icon: Blocks }, embeddings: { description: '将文本转换为向量', icon: Blocks },
+  agent: { description: '在隔离工作区执行任务，按需开放', icon: Terminal }, tools: { description: '调用已注册的只读 Runtime 工具', icon: Blocks },
 }
-async function saveTunnel() {
-  const result = await run<TunnelState>('/api/exposure/tunnel', ssh.value, 'PUT')
-  if (result) { tunnel.value = result; tunnelCheck.value = ''; emit('notice', 'SSH 配置已保存，可稍后完成 API 准备再连接。') }
-  return !!result
-}
-async function submitTunnel(event: SubmitEvent) {
-  if ((event.submitter as HTMLButtonElement | null)?.value === 'save') await saveTunnel()
-  else await connectTunnel()
-}
-async function connectTunnel() {
-  if (busy.value) return
-  if (missingServicePreparation.value) { openPreparation(missingServicePreparation.value.target); return }
-  if (!service.value?.running) { openPreparation('service'); return }
-  if (tunnelDirty.value && !await saveTunnel()) return
-  await controlTunnel('start')
-}
-async function controlTunnel(action: string) {
-  if (action === 'test') {
-    const result = await run<{ ok: boolean; detail: string }>('/api/exposure/tunnel', { action })
-    if (result) tunnelCheck.value = result.ok ? result.detail : '服务器健康检查响应不符合 Runtime 协议。'
-  } else {
-    const result = await run<TunnelState>('/api/exposure/tunnel', { action })
-    if (result) { tunnel.value = result; tunnelCheck.value = ''; emit('notice', result.detail) }
+const nginx = computed(() => selectedCapabilities.value.map(item => `location = ${item.path} {\n    proxy_pass ${saved.value.upstreamUrl};\n    proxy_http_version 1.1;\n    proxy_set_header Authorization $http_authorization;\n    proxy_set_header X-Request-ID $request_id;\n    proxy_buffering off;\n    proxy_read_timeout 600s;\n    client_max_body_size 58m;\n}`).join('\n\n') + `\n\nlocation = /health/live {\n    proxy_pass ${saved.value.upstreamUrl};\n}\n\nlocation / { return 404; }`)
+const curl = computed(() => {
+  const item = selectedCapabilities.value.find(item => item.id === exampleCapability.value) ?? selectedCapabilities.value[0]
+  if (!item) return '请先保存至少一项开放能力。'
+  const address = `${saved.value.publicBaseUrl || saved.value.upstreamUrl}${item.path}`
+  if (item.id === 'image_edits') return `curl ${address} \\\n  -H 'Authorization: Bearer YOUR_SERVICE_TOKEN' \\\n  -F 'model=YOUR_IMAGE_MODEL' \\\n  -F 'prompt=将背景改为蓝色' -F 'image=@reference.png'`
+  const payloads: Record<string, unknown> = {
+    images: { model: 'YOUR_IMAGE_MODEL', prompt: '画一只猫', n: 1, size: '1024x1024', response_format: 'b64_json' },
+    chat: { model: 'YOUR_MODEL', messages: [{ role: 'user', content: 'hello' }] },
+    agent: { engine: 'codex', prompt: 'hello', workspace_id: 'demo', permission_mode: 'read_only' },
+    embeddings: { model: 'YOUR_MODEL', input: 'hello' }, tools: { name: 'runtime.status' },
   }
+  return `curl ${address} \\\n  -H 'Authorization: Bearer YOUR_SERVICE_TOKEN'${item.method === 'POST' ? ` \\\n  -H 'Content-Type: application/json' \\\n  -d '${JSON.stringify(payloads[item.id] ?? { model: 'YOUR_MODEL', input: 'hello' })}'` : ''}`
+})
+function receiveExposure(value: ServiceExposure) {
+  if (!capabilitiesDirty.value) capabilities.value = [...value.capabilities]
+  if (!placementDirty.value && value.connectionMode) mode.value = value.connectionMode
+  if (!entryDirty.value) { publicAccess.value = !!value.publicBaseUrl; publicBaseUrl.value = value.publicBaseUrl }
+  saved.value = value
 }
-async function refreshService() {
-  try { service.value = await api('/api/exposure/service') }
-  catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason) }
+watch(() => props.exposure, receiveExposure)
+watch(() => saved.value.updatedAt, () => { connection.value = null; void refreshVerification() })
+function go(destination: Step) {
+  if (pending.value) return
+  navigated.value = true; step.value = destination; error.value = ''; message.value = ''
+  void nextTick(() => stepPanel.value?.focus({ preventScroll: true }))
+}
+function describe(reason: unknown) { return reason instanceof Error ? reason.message : String(reason) }
+async function operate(label: string, action: () => Promise<void>) {
+  if (pending.value) return
+  busy.value = true; progress.value = label; error.value = ''; message.value = ''
+  try { await action() } catch (reason) { error.value = describe(reason) }
+  finally { busy.value = false; progress.value = '' }
+}
+async function reloadExposure() {
+  try { receiveExposure((await api<Dashboard>('/api/state')).settings.exposure); currentTime.value = Date.now(); await refreshVerification(); emit('reload'); return true }
+  catch (reason) { error.value = `配置已变更，但读取最新状态失败：${describe(reason)}。请刷新状态，不要重复创建凭证。`; return false }
+}
+async function refreshVerification() { verification.value = await api<typeof verification.value>('/api/exposure/verification').catch(() => ({ verified: false, verifiedAt: null })) }
+async function readStatus() {
+  const results = await Promise.allSettled([api<ServiceState>('/api/exposure/service'), api<TunnelState>('/api/exposure/tunnel')])
+  if (results[0].status === 'fulfilled') service.value = results[0].value
+  if (results[1].status === 'fulfilled') {
+    const firstRead = !tunnel.value
+    tunnel.value = results[1].value
+    if (firstRead && !sshEdited.value && tunnel.value.config) ssh.value = { ...tunnel.value.config }
+  }
+  if (results[0].status === 'rejected') throw results[0].reason
+  if (mode.value === 'ssh' && results[1].status === 'rejected') throw results[1].reason
+}
+async function refreshStatus() { await operate('刷新状态…', async () => { await readStatus(); await reloadExposure() }) }
+onMounted(async () => {
+  try { await Promise.all([readStatus(), refreshVerification()]) } catch (reason) { error.value = describe(reason) }
+  finally { loading.value = false; if (!navigated.value) step.value = needsPreparation.value ?? (connectionReady.value ? 'verify' : 'connection') }
+})
+function persistedInput(): ExposureInput { return { publicBaseUrl: saved.value.publicBaseUrl, upstreamUrl: saved.value.upstreamUrl, ...(saved.value.connectionMode ? { connectionMode: saved.value.connectionMode } : {}), capabilities: [...saved.value.capabilities] } }
+function prepareCapabilities() {
+  if (capabilitiesDirty.value) savePlan.value = { input: { ...persistedInput(), capabilities: [...capabilities.value] }, next: capabilities.value.length ? 'credentials' : null, title: '确认开放能力' }
+  else if (saved.value.capabilities.length) go('credentials')
+}
+async function persist(input: ExposureInput) {
+  await api('/api/exposure', { method: 'POST', body: JSON.stringify(input) })
+  saved.value = { ...saved.value, ...input, upstreamUrl: input.connectionMode === 'ssh' ? 'http://127.0.0.1:18080' : input.connectionMode === 'local' ? 'http://127.0.0.1:8080' : saved.value.upstreamUrl, updatedAt: new Date().toISOString() }
+  verification.value = { verified: false, verifiedAt: null }; emit('reload')
+}
+async function confirmSave() {
+  const plan = savePlan.value
+  if (!plan) return
+  await operate('保存配置…', async () => {
+    await persist(plan.input); savePlan.value = null; message.value = '配置已保存。'
+    if (plan.next === 'credentials') step.value = 'credentials'
+    else if (plan.next === 'connect') await startConnection()
+  })
+}
+async function continueCredentials() {
+  await operate('读取凭证状态…', async () => {
+    if (!await reloadExposure()) return
+    if (!activeCredentials.value.length) throw new Error('请先创建有效调用凭证，再继续连接。')
+    step.value = 'connection'; navigated.value = true
+  })
+}
+async function saveSsh() { tunnel.value = await api<TunnelState>('/api/exposure/tunnel', { method: 'PUT', body: JSON.stringify(ssh.value) }); tunnelCheck.value = '' }
+async function saveSshOnly() { await operate('保存 SSH 配置…', async () => { await saveSsh(); message.value = 'SSH 配置已保存。稍后可继续启动与连接。' }) }
+async function beginConnection() {
+  currentTime.value = Date.now()
+  if (connectBlocked.value || pending.value) return
+  if (placementDirty.value) { savePlan.value = { input: { ...persistedInput(), connectionMode: mode.value }, next: 'connect', title: '确认接入方式并启动' }; return }
+  await operate('准备连接…', startConnection)
+}
+async function startConnection() {
+  navigated.value = true
+  if (mode.value === 'ssh' && tunnelDirty.value) { progress.value = '保存 SSH 配置…'; await saveSsh() }
+  progress.value = '检查服务状态…'; await readStatus()
+  if (!service.value?.running) {
+    progress.value = '启动 API…'
+    service.value = await api<ServiceState>('/api/exposure/service', { method: 'POST', body: JSON.stringify({ action: 'start' }) })
+    if (!service.value.running) throw new Error('API 尚未运行，请刷新状态或展开运行管理查看日志。SSH 尚未启动。')
+  }
+  if (mode.value === 'ssh') {
+    if (!tunnel.value?.running) {
+      progress.value = '连接服务器…'
+      tunnel.value = await api<TunnelState>('/api/exposure/tunnel', { method: 'POST', body: JSON.stringify({ action: 'start' }) })
+    }
+    if (!tunnel.value?.connected) { message.value = 'API 已运行，SSH 隧道正在连接。请稍后刷新连接状态；若持续未连接，展开运行管理查看日志。'; return }
+  }
+  step.value = 'verify'; message.value = '服务已就绪。现在可以获取调用地址，发送一次授权请求。'
+}
+function prepareEntry() {
+  if (!entryDirty.value) { message.value = '访问地址已保存。'; return }
+  savePlan.value = { input: { ...persistedInput(), publicBaseUrl: entryUrl.value }, next: null, title: '确认访问地址' }
 }
 async function controlService(action: string) {
-  if (['start', 'restart', 'enable'].includes(action) && missingServicePreparation.value) {
-    openPreparation(missingServicePreparation.value.target)
-    return
-  }
-  const result = await run<NonNullable<typeof service.value>>('/api/exposure/service', { action })
-  if (result) { service.value = result; emit('notice', result.detail) }
+  if (['start', 'restart', 'enable'].includes(action) && needsPreparation.value) { go(needsPreparation.value); return }
+  await operate('更新 API 服务…', async () => { service.value = await api<ServiceState>('/api/exposure/service', { method: 'POST', body: JSON.stringify({ action }) }); message.value = service.value.detail })
 }
-onMounted(refreshService)
-onMounted(refreshTunnel)
-async function refreshVerification() { verification.value = await api<typeof verification.value>('/api/exposure/verification').catch(() => ({ verified: false, verifiedAt: null })) }
-onMounted(refreshVerification)
-watch(() => props.exposure.updatedAt, refreshVerification)
-const selectedCapabilities = computed(() => props.exposure.catalog.filter(item => props.exposure.capabilities.includes(item.id)))
-const dirty = computed(() => connectionMode.value !== props.exposure.connectionMode || publicBaseUrl.value !== props.exposure.publicBaseUrl || upstreamUrl.value !== props.exposure.upstreamUrl || JSON.stringify([...capabilities.value].sort()) !== JSON.stringify([...props.exposure.capabilities].sort()))
-const nginx = computed(() => selectedCapabilities.value.map(item => `location = ${item.path} {\n    proxy_pass ${props.exposure.upstreamUrl};\n    proxy_http_version 1.1;\n    proxy_set_header Authorization $http_authorization;\n    proxy_set_header X-Request-ID $request_id;\n    proxy_buffering off;\n    proxy_read_timeout 600s;\n    client_max_body_size 58m;\n}`).join('\n\n') + `\n\nlocation = /health/live {\n    proxy_pass ${props.exposure.upstreamUrl};\n}\n\nlocation / { return 404; }`)
-const curl = computed(() => {
-  const item = selectedCapabilities.value.find(capability => capability.id === exampleCapability.value) ?? selectedCapabilities.value[0]
-  if (!item) return '请先选择并保存至少一项开放能力。'
-  if (item.id === 'image_edits') return `curl ${props.exposure.publicBaseUrl || props.exposure.upstreamUrl}/v1/images/edits -H 'Authorization: Bearer YOUR_SERVICE_TOKEN' -F 'model=YOUR_IMAGE_MODEL' -F 'prompt=将背景改为蓝色' -F 'image=@reference.png'`
-  if (item.id === 'images') return `curl ${props.exposure.publicBaseUrl || props.exposure.upstreamUrl}/v1/images/generations -H 'Authorization: Bearer YOUR_SERVICE_TOKEN' -H 'Content-Type: application/json' -d '{"model":"YOUR_IMAGE_MODEL","prompt":"画一只猫","n":1,"size":"1024x1024","response_format":"b64_json"}'`
-  const payload = item.id === 'agent' ? '{"engine":"codex","prompt":"hello","workspace_id":"demo","permission_mode":"read_only"}' : item.id === 'chat' ? '{"model":"YOUR_MODEL","messages":[{"role":"user","content":"hello"}]}' : item.id === 'embeddings' ? '{"model":"YOUR_MODEL","input":"hello"}' : item.id === 'tools' ? '{"name":"runtime.status"}' : '{"model":"YOUR_MODEL","input":"hello"}'
-  return `curl ${props.exposure.publicBaseUrl || props.exposure.upstreamUrl}${item.path} \\\n  -H 'Authorization: Bearer YOUR_SERVICE_TOKEN'${item.method === 'POST' ? ` \\\n  -H 'Content-Type: application/json' \\\n  -d '${payload}'` : ''}`
-})
-async function run<T>(url: string, body: unknown, method = 'POST'): Promise<T | null> {
-  if (busy.value) return null
-  busy.value = true; error.value = ''
-  try { return await api<T>(url, { method, body: JSON.stringify(body) }) }
-  catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); return null }
-  finally { busy.value = false }
+async function controlTunnel(action: string) {
+  await operate(action === 'test' ? '验证服务器端口…' : '更新 SSH 连接…', async () => {
+    if (action === 'test') { const result = await api<{ ok: boolean; detail: string }>('/api/exposure/tunnel', { method: 'POST', body: JSON.stringify({ action }) }); tunnelCheck.value = result.ok ? result.detail : '服务器健康检查未通过，请检查隧道与 API 状态。' }
+    else { tunnel.value = await api<TunnelState>('/api/exposure/tunnel', { method: 'POST', body: JSON.stringify({ action }) }); message.value = tunnel.value.detail }
+  })
 }
-async function save() {
-  const result = await run<{ effect: string }>('/api/exposure', { publicBaseUrl: publicBaseUrl.value, connectionMode: connectionMode.value, capabilities: capabilities.value })
-  if (result) {
-    emit('notice', result.effect); emit('reload'); confirmSave.value = false; connection.value = null
-    if (saveNext.value === 'test') tab.value = '接入测试'
-    else if (saveNext.value) connectionStep.value = saveNext.value
-    saveNext.value = null
-  }
-}
-async function createCredential() {
-  const policy = credentialPolicy.value
-  const result = await run<{ token: string }>('/api/exposure/credentials', { name: credentialName.value, capabilities: credentialCapabilities.value, policy: { providers: policy.providers.split(/[,，\n]/).map(item => item.trim()).filter(Boolean), models: policy.models.split(/[,，\n]/).map(item => item.trim()).filter(Boolean), ...(policy.expiresAt ? { expiresAt: new Date(policy.expiresAt).toISOString() } : {}), ...(policy.requestsPerMinute ? { requestsPerMinute: Number(policy.requestsPerMinute) } : {}), ...(policy.requestQuota ? { requestQuota: Number(policy.requestQuota) } : {}) } })
-  if (result) { newToken.value = result.token; credentialName.value = ''; credentialCapabilities.value = []; emit('reload') }
-}
-async function revoke(id: string) {
-  if (!confirm('撤销这个调用凭证？对应应用将无法继续访问。')) return
-  if (await run(`/api/exposure/credentials/${id}`, {}, 'DELETE')) { emit('notice', '调用凭证已撤销。'); emit('reload') }
-}
-async function rotate(id: string) {
-  if (!confirm('立即轮换凭证？旧 Token 将立即失效，新 Token 只显示一次。')) return
-  const result = await run<{ token: string }>(`/api/exposure/credentials/${id}/rotate`, {})
-  if (result) { newToken.value = result.token; emit('reload'); void refreshVerification() }
-}
-async function test(target: string) {
-  connection.value = await run('/api/exposure/test', { target })
-}
+async function test(target: string) { await operate('检查连通性…', async () => { connection.value = await api('/api/exposure/test', { method: 'POST', body: JSON.stringify({ target }) }) }) }
 function copy(value: string) { void navigator.clipboard.writeText(value).then(() => emit('notice', '已复制。')).catch(() => { error.value = '复制失败，请手动复制。' }) }
 </script>
 
 <template>
-  <div class="exposure-settings">
-  <section id="exposure-service" class="card service-overview" aria-label="API 后台服务">
-    <div class="service-summary"><span class="exposure-icon"><Server :size="22" /></span><div><div class="title-line"><h2>API 后台服务</h2><span class="state-badge" :class="{ ready: service?.running }"><i />{{ service ? (service.running ? '运行中' : '未运行') : '读取状态中' }}</span></div><p>独立后台运行，关闭管理页面后服务继续保持。</p></div><button class="icon-button" :disabled="busy" aria-label="刷新服务状态" @click="refreshService"><RefreshCw :size="15" /></button></div>
-    <template v-if="service">
-      <div class="service-toolbar"><div class="service-endpoint"><span>本机 API</span><code>{{ service.baseUrl }}</code><span class="autostart-label">自启{{ service.autostart ? '已开启' : '已关闭' }}</span></div><div v-if="service.supported" class="button-row"><button class="button primary" :disabled="busy || service.running" @click="controlService('start')">{{ service.running ? '服务已启动' : '启动服务' }}</button><button class="button" :disabled="busy" @click="controlService(service.autostart ? 'disable' : 'enable')">{{ service.autostart ? '关闭自启' : '开启自启并启动' }}</button></div></div>
-      <details class="advanced-panel"><summary>服务详情与管理</summary><p>{{ service.detail }} · {{ service.manager }}</p><p>日志：<code>{{ service.logPath }}</code></p><div v-if="service.supported" class="button-row"><button class="button" :disabled="busy || !service.installed" @click="controlService('restart')">重启服务</button><button class="button danger" :disabled="busy || !service.installed" @click="controlService('stop')">停止并关闭自启</button></div><p>先保存能力并创建凭证。macOS 登录后自启；Linux 无登录长期运行需管理员配置 linger。服务固定监听 127.0.0.1:8080。</p></details>
-    </template>
-  </section>
-  <div class="subnav" aria-label="对外服务分类"><button v-for="item in tabs" :key="item" :class="{ active: tab === item }" :aria-pressed="tab === item" @click="tab = item">{{ item }}</button></div>
-  <div class="exposure-security"><ShieldCheck :size="16" /><p>仅开放授权的 API 能力，管理页面始终保留在本机。反代与 HTTPS 在服务器部署。</p></div>
-  <div v-if="error" class="error-banner" role="alert">{{ error }}</div>
-    <div class="setup-prerequisites" aria-label="接入前准备">
-      <span>接入前准备</span>
-      <div class="prerequisite-list"><button v-for="item in prerequisites" :key="item.target" type="button" :class="{ ready: item.ready }" @click="openPreparation(item.target)"><Check v-if="item.ready" :size="13" /><span v-else class="prerequisite-dot" />{{ item.title }}<small>{{ item.ready ? '已就绪' : '去完成' }}</small><ArrowUpRight v-if="!item.ready" :size="12" /></button></div>
+  <div class="exposure-workspace">
+    <header class="exposure-overview">
+      <div class="overview-title"><span class="overview-icon"><Globe2 :size="21" /></span><div><h2>把 Runtime 连接到你的应用</h2><p>选择能力、分配凭证，然后连接服务器并验证调用。</p></div></div>
+      <div class="overview-status"><span class="status-pill" :class="{ ready: service?.running }"><i />API {{ loading ? '检查中' : service?.running ? '运行中' : '未启动' }}</span><button class="icon-button" :disabled="pending || loading" aria-label="刷新服务与连接状态" @click="refreshStatus"><RefreshCw :size="15" /></button></div>
+    </header>
+    <div class="exposure-layout">
+      <aside class="setup-sidebar">
+        <div class="sidebar-heading"><span>接入配置</span><small>{{ steps.filter(item => item.complete).length }} / 4 已完成</small></div>
+        <nav aria-label="对外服务配置步骤"><ol><li v-for="(item, index) in steps" :key="item.id"><button :class="{ active: step === item.id, complete: item.complete }" :aria-current="step === item.id ? 'step' : undefined" :disabled="pending || loading" @click="go(item.id)"><span class="step-index"><Check v-if="item.complete" :size="15" /><template v-else>{{ index + 1 }}</template></span><span class="step-label"><strong>{{ item.title }}</strong><small>{{ item.detail }}</small></span><ArrowRight v-if="step === item.id" class="step-arrow" :size="14" /></button></li></ol></nav>
+        <div class="sidebar-security"><ShieldCheck :size="18" /><p>只开放你授权的 API。<br />管理页面始终留在本机。</p></div>
+      </aside>
+      <div ref="stepPanel" class="setup-content" tabindex="-1" role="region" aria-label="当前配置步骤" :aria-busy="pending || loading">
+        <div v-if="error" class="feedback error-feedback" role="alert"><X :size="17" /><p>{{ error }}</p></div>
+        <div v-if="message" class="feedback success-feedback" role="status"><CircleCheck :size="17" /><p>{{ message }}</p></div>
+        <div v-if="busy" class="operation-progress" role="status"><LoaderCircle :size="15" class="spinning" />{{ progress }}</div>
+        <header class="step-heading"><span class="step-eyebrow">STEP 0{{ steps.findIndex(item => item.id === step) + 1 }}</span><h2>{{ currentStep.title }}</h2><p>{{ step === 'capabilities' ? '你的应用需要哪些能力？只勾选实际使用的接口。' : step === 'credentials' ? '为调用方创建专用凭证，用它访问已开放的能力。' : step === 'connection' ? '选择 Runtime 所在的位置，一次完成启动与服务器连接。' : '使用下面的地址和凭证，验证一次完整的授权调用。' }}</p></header>
+        <section v-show="step === 'capabilities'" aria-label="开放能力配置">
+          <div class="capability-options"><label v-for="item in saved.catalog" :key="item.id" class="capability-option" :class="{ selected: capabilities.includes(item.id) }"><span class="capability-symbol"><component :is="capabilityDetails[item.id]?.icon ?? Blocks" :size="20" /></span><span class="capability-copy"><strong>{{ item.name }}</strong><small>{{ capabilityDetails[item.id]?.description ?? '使用 Runtime 已实现的接口' }}</small></span><input v-model="capabilities" type="checkbox" :value="item.id" :disabled="pending" /><span class="selection-indicator"><Check v-if="capabilities.includes(item.id)" :size="13" /></span></label></div>
+          <details class="technical-details"><summary>查看接口路径与能力说明</summary><div v-for="item in saved.catalog" :key="item.id" class="endpoint-row"><strong>{{ item.name }}</strong><code>{{ item.method }} {{ item.path }}</code></div><p>新增能力默认关闭，旧凭证不会自动扩权。Agent 执行有资源与权限影响；记忆检索尚未提供独立 API。</p></details>
+          <footer class="step-footer"><p>{{ capabilities.length ? `已选择 ${capabilities.length} 项${capabilitiesDirty ? ' · 尚未保存' : ' · 已保存'}` : '尚未选择能力。保存空范围会关闭所有 API 能力。' }}</p><button class="button primary" :disabled="pending || (!capabilities.length && !capabilitiesDirty)" @click="prepareCapabilities">{{ capabilitiesDirty ? (capabilities.length ? '预览并继续' : '预览并关闭全部能力') : '下一步：调用凭证' }}<ArrowRight :size="15" /></button></footer>
+        </section>
+        <section v-show="step === 'credentials'" aria-label="调用凭证配置"><ExposureCredentials :exposure="saved" :disabled="busy || sshBusy" @busy="credentialBusy = $event" @reload="reloadExposure" @notice="emit('notice', $event)" @continue="continueCredentials" /><button class="text-button back-link" :disabled="pending" @click="go('capabilities')"><ArrowLeft :size="14" />返回开放能力</button></section>
+        <section v-show="step === 'connection'" aria-label="启动与连接配置">
+          <form @submit.prevent="beginConnection">
+            <fieldset class="placement-choices" :disabled="pending || tunnelLocked"><legend>Runtime 运行在哪里？</legend><label :class="{ selected: mode === 'ssh' }"><input v-model="mode" type="radio" value="ssh" /><Monitor :size="23" /><strong>我的电脑</strong><small>通过 SSH 连接另一台服务器</small><span class="radio-dot" /></label><label :class="{ selected: mode === 'local' }"><input v-model="mode" type="radio" value="local" /><Server :size="23" /><strong>应用所在的服务器</strong><small>API 与反代同机，无需 SSH</small><span class="radio-dot" /></label></fieldset>
+            <p v-if="tunnelLocked" class="configuration-note">隧道运行或已开启自启，连接配置暂时锁定。修改前请展开下方「运行管理与连接详情」，断开隧道并关闭自启。</p>
+            <p v-if="!saved.connectionMode && !['http://127.0.0.1:8080', 'http://127.0.0.1:18080'].includes(saved.upstreamUrl)" class="configuration-note">旧版自定义上游 {{ saved.upstreamUrl }} 会在确认接入方式后替换为 {{ upstream }}；当前配置尚未修改。</p>
+            <div v-show="mode === 'ssh'" class="ssh-configuration"><div class="subsection-heading"><h3>连接哪台服务器？</h3><span class="inline-state" :class="{ ready: tunnel?.connected }">{{ tunnel?.connected ? '已连接' : tunnel?.running ? '连接中' : '未连接' }}</span></div><fieldset class="ssh-fields" :disabled="pending || tunnelLocked || mode !== 'ssh'" @input="sshEdited = true"><label class="host-field">服务器 IP 或域名<input v-model.trim="ssh.host" required placeholder="例如 154.201.73.41" autocomplete="off" /></label><label>SSH 用户<input v-model.trim="ssh.user" required placeholder="root" autocomplete="off" /></label><label class="identity-field">本机 SSH 私钥路径<input v-model.trim="ssh.identityFile" required placeholder="填写已有私钥的绝对路径，不含 .pub" autocomplete="off" /><small>使用运行 Runtime 的这台电脑上的密钥。</small></label><label>SSH 端口<input v-model.number="ssh.port" required type="number" min="1" max="65535" /></label></fieldset><div class="ssh-save-row"><span>{{ tunnelDirty ? '服务器信息尚未保存' : '服务器信息已保存' }}</span><button type="button" class="text-button" :disabled="pending || !tunnel || !tunnelDirty || tunnelLocked" @click="saveSshOnly">仅保存 SSH 配置</button></div></div>
+            <div v-if="mode === 'local'" class="local-explanation"><Server :size="25" /><div><strong>直接使用本机 API</strong><p>无需服务器地址或密钥。启动后，应用通过 <code>127.0.0.1:8080</code> 和调用凭证访问。</p></div></div>
+            <div class="connection-preview"><span><Monitor :size="15" />Runtime API</span><span class="route-line">{{ mode === 'ssh' ? 'SSH 隧道' : '直接连接' }}</span><span><Server :size="15" />{{ mode === 'ssh' ? '远端服务器' : '本机应用' }}</span></div>
+            <div v-if="connectBlocked" class="inline-guidance"><p>{{ connectBlocked }}</p><button v-if="needsPreparation" type="button" class="text-button" :disabled="pending" @click="go(needsPreparation)">{{ needsPreparation === 'capabilities' ? '去开放能力' : '去创建凭证' }}<ArrowRight :size="14" /></button></div>
+            <footer class="step-footer"><div><button type="button" class="text-button" :disabled="pending" @click="go('credentials')"><ArrowLeft :size="14" />上一步</button><p>关闭 Web 后继续运行。首次连接不会开启自启。</p></div><button class="button primary" :disabled="pending || !!connectBlocked">{{ connectLabel }}<ArrowRight v-if="!busy" :size="15" /></button></footer>
+          </form>
+          <div v-show="mode === 'ssh'"><SshSetup :config="ssh" :disabled="busy || credentialBusy" :mutation-locked="tunnelLocked" @busy="sshBusy = $event" @identity="ssh.identityFile = $event; sshEdited = true" @notice="emit('notice', $event)" /></div>
+          <details class="technical-details management-details"><summary>运行管理与连接详情</summary><div class="manager-section"><div class="subsection-heading"><h3>API 后台服务</h3><span class="inline-state" :class="{ ready: service?.running }">{{ service?.running ? '运行中' : '未运行' }}</span></div><p>{{ service?.detail || '读取服务状态中' }} · {{ service?.manager || '—' }}</p><code>{{ service?.baseUrl || 'http://127.0.0.1:8080' }}</code><p>日志：<code>{{ service?.logPath || '—' }}</code></p><div class="button-row"><button class="button" :disabled="pending || !service?.supported" @click="controlService(service?.autostart ? 'disable' : 'enable')">{{ service?.autostart ? '关闭 API 自启' : '开启 API 自启并启动' }}</button><button class="button" :disabled="pending || !service?.installed" @click="controlService('restart')">重启 API</button><button class="button danger" :disabled="pending || !service?.installed" @click="controlService('stop')">停止 API 并关闭自启</button></div></div><div v-if="mode === 'ssh'" class="manager-section"><div class="subsection-heading"><h3>SSH 隧道</h3><span class="inline-state" :class="{ ready: tunnel?.connected }">{{ tunnel?.connected ? '已连接' : '未确认连接' }}</span></div><p>{{ tunnel?.detail || '读取连接状态中' }}</p><p>服务器上游：<code>{{ upstream }}</code></p><p>日志：<code>{{ tunnel?.logPath || '—' }}</code></p><div class="button-row"><button class="button" :disabled="pending || !tunnel?.connected" @click="controlTunnel('test')">验证服务器端口</button><button class="button" :disabled="pending || !tunnel?.supported || (!tunnel.autostart && (tunnelDirty || placementDirty || !service?.running || !!needsPreparation))" @click="controlTunnel(tunnel?.autostart ? 'disable' : 'enable')">{{ tunnel?.autostart ? '关闭隧道自启' : '开启隧道自启并连接' }}</button><button class="button danger" :disabled="pending || !tunnel?.installed" @click="controlTunnel('stop')">断开隧道并关闭自启</button></div><p v-if="tunnelCheck" role="status">{{ tunnelCheck }}</p><p>修改部署位置、服务器或密钥前，先断开隧道并关闭自启。电脑休眠、断网或密钥代理不可用会影响连接；服务器需允许 TCP 远程转发。</p></div><button class="text-button" :disabled="pending" @click="refreshStatus"><RefreshCw :size="14" />刷新运行状态</button><p>macOS 登录后自启；Linux 无登录长期运行需管理员启用 linger。Windows 用户任务需要登录，适配尚待实机验收。</p></details>
+        </section>
+        <section v-show="step === 'verify'" class="verification-panel" aria-label="验证与调用配置">
+          <div v-if="!connectionReady" class="inline-guidance"><p>API 或服务器尚未就绪。可先设置访问地址，发起调用前请完成连接。</p><button class="text-button" :disabled="pending" @click="go('connection')">返回启动与连接<ArrowRight :size="14" /></button></div>
+          <section class="access-card"><div class="subsection-heading"><h3>从哪里调用？</h3><span v-if="verification.verified" class="inline-state ready"><Check :size="13" />公网调用已验证</span></div><div class="access-switch" role="group" aria-label="访问范围"><button :class="{ active: !publicAccess }" :aria-pressed="!publicAccess" :disabled="pending" @click="publicAccess = false">仅服务器内部</button><button :class="{ active: publicAccess }" :aria-pressed="publicAccess" :disabled="pending" @click="publicAccess = true">公网 HTTPS</button></div><form @submit.prevent="prepareEntry"><label v-if="publicAccess">公网 HTTPS 入口<input v-model="publicBaseUrl" required type="url" placeholder="https://ai.example.com" :disabled="pending" /><small>使用指向服务器的域名，保存后再部署 Nginx 与证书。</small></label><p v-else class="access-description">在{{ saved.connectionMode === 'ssh' ? '远端服务器' : '本机' }}内部，通过下面的地址和调用凭证访问。无需域名或 HTTPS 证书。</p><div class="endpoint-display"><div><span>{{ entryDirty ? '当前已保存的调用地址' : '调用地址' }}</span><code>{{ saved.publicBaseUrl || saved.upstreamUrl }}</code></div><button type="button" class="icon-button" aria-label="复制调用地址" @click="copy(saved.publicBaseUrl || saved.upstreamUrl)"><Copy :size="15" /></button></div><div v-if="entryDirty" class="entry-save"><span>访问范围或地址尚未保存</span><button class="button" :disabled="pending">预览并保存地址</button></div></form></section>
+          <details v-if="saved.connectionMode === 'ssh' && saved.publicBaseUrl" class="technical-details deployment-details"><summary>部署公网入口 · Nginx 与 HTTPS</summary><RemoteDeployment :disabled="busy || playgroundBusy" @busy="deploymentBusy = $event" @notice="emit('notice', $event)" /></details>
+          <ServicePlayground :exposure="saved" :disabled="busy || deploymentBusy" @busy="playgroundBusy = $event" @verified="refreshVerification" @notice="emit('notice', $event)" />
+          <details class="technical-details"><summary>调用示例与手动反代配置</summary><label>示例能力<select v-model="exampleCapability"><option value="">默认能力</option><option v-for="item in selectedCapabilities" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><p>{{ saved.publicBaseUrl ? '在已部署的公网入口调用：' : '在应用服务器上执行以下命令：' }}</p><pre>{{ curl }}</pre><button class="button" @click="copy(curl)"><Copy :size="14" />复制调用示例</button><h3>Nginx 配置片段</h3><p>放入已配置 TLS 的独立 server 块，上游由接入方式自动生成。</p><pre>{{ nginx }}</pre><button class="button" @click="copy(nginx)"><Copy :size="14" />复制 Nginx 配置</button></details>
+          <details class="technical-details"><summary>连通性检查与故障排查</summary><p>健康检查不调用模型，也不能证明凭证权限或模型可用。</p><div class="button-row"><button class="button" :disabled="pending" @click="test('upstream')">检查本机 API</button><button class="button" :disabled="pending || !saved.publicBaseUrl" @click="test('public')">检查公网入口</button><button v-if="saved.connectionMode === 'ssh'" class="button" :disabled="pending || !tunnel?.connected" @click="controlTunnel('test')">检查服务器转发端口</button></div><p v-if="connection" role="status">{{ connection.target === 'public' ? '公网入口' : '本机 API' }}：{{ connection.ok ? '健康检查通过' : '未连通或响应不符合 Runtime 协议' }} · {{ connection.durationMs }} ms</p><p v-if="tunnelCheck" role="status">{{ tunnelCheck }}</p><p>401：检查凭证是否过期或撤销；403：检查能力和模型范围；429：检查请求限流和额度。请求超时后先查看运行记录再重试。</p></details>
+          <button class="text-button back-link" :disabled="pending" @click="go('connection')"><ArrowLeft :size="14" />返回启动与连接</button>
+        </section>
+      </div>
     </div>
-    <div v-if="missingServicePreparation" class="preparation-help" role="status"><p>{{ servicePreparationHint }}SSH 信息可先单独保存。</p><button class="button" :disabled="busy" @click="openPreparation(missingServicePreparation.target)">{{ missingServicePreparation.target === '能力开放' ? '选择并保存开放能力' : '去创建调用凭证' }}<ArrowRight :size="14" /></button></div>
-    <div v-else-if="tab === '能力开放' || tab === '访问控制'" class="preparation-help" role="status"><p>{{ service?.running ? 'API 已运行，可以继续连接配置。' : '能力和凭证已就绪。点击上方「启动服务」，然后返回连接配置。' }}</p><button class="button" :disabled="busy || placementDirty" @click="returnToConnection">返回连接配置<ArrowRight :size="14" /></button></div>
-  <template v-if="tab === '反代接入'">
-    <section class="card connection-wizard" aria-label="配置服务器接入">
-      <div class="guide-heading"><div><h2>配置服务器接入</h2><p>按下面这一条流程操作，每次只需完成当前步骤。</p></div><span class="guide-count">{{ connectionSteps.findIndex(step => step.id === connectionStep) + 1 }} / {{ connectionSteps.length }}</span></div>
-      <nav aria-label="反代接入配置步骤"><ol class="wizard-steps" :style="{ '--wizard-step-count': connectionSteps.length }"><li v-for="(step, index) in connectionSteps" :key="step.id"><button type="button" :class="{ active: connectionStep === step.id, complete: step.complete }" :aria-current="connectionStep === step.id ? 'step' : undefined" :disabled="busy || (step.id !== 'placement' && placementDirty)" :title="step.id !== 'placement' && placementDirty ? '先保存部署位置再继续' : undefined" @click="connectionStep = step.id"><span class="step-number"><Check v-if="step.complete" :size="15" /><template v-else>{{ index + 1 }}</template></span><span><strong>{{ step.title }}</strong><small>{{ step.detail }}</small></span></button></li></ol></nav>
-      <div v-show="connectionStep === 'placement'" class="wizard-panel">
-        <div class="card-head"><div><h3>Runtime 和反代服务器在哪里？</h3><p>这是接入方式的选择；需要 SSH 时，下一步再填写服务器信息。</p></div><Globe2 :size="22" /></div>
-        <p v-if="!exposure.connectionMode && !['http://127.0.0.1:8080', 'http://127.0.0.1:18080'].includes(exposure.upstreamUrl)" class="note-paper">检测到旧版自定义上游 {{ exposure.upstreamUrl }}。保存部署位置后会替换为自动上游；原配置尚未修改。</p>
-        <form class="deployment-form" @submit.prevent="continuePlacement">
-          <fieldset class="deployment-choices" :disabled="busy || tunnel?.running || tunnel?.autostart"><legend class="sr-only">Runtime 和 Nginx 的部署位置</legend><label class="deployment-option" :class="{ selected: connectionMode === 'ssh' }"><input v-model="connectionMode" type="radio" value="ssh" /><span class="choice-icon"><Monitor :size="21" /></span><span><strong>Runtime 在我的电脑上</strong><small>通过 SSH 连接另一台服务器，由它转发请求</small></span><span class="radio-indicator" /></label><label class="deployment-option" :class="{ selected: connectionMode === 'local' }"><input v-model="connectionMode" type="radio" value="local" /><span class="choice-icon"><Server :size="21" /></span><span><strong>Runtime 就在反代服务器上</strong><small>两者在同一台机器，自动跳过 SSH 配置</small></span><span class="radio-indicator" /></label></fieldset>
-          <p class="wizard-hint">{{ connectionMode === 'ssh' ? '接下来只需准备服务器地址、SSH 账户和本机密钥。连接端口由 Runtime 自动配置。' : '无需填写远端服务器或 SSH 密钥，下一步直接设置访问地址。' }}</p>
-          <p v-if="tunnel?.running || tunnel?.autostart" class="note-paper">部署位置已锁定。需要切换时，先到「连接服务器 → 连接管理」断开并关闭自启。</p>
-          <div class="form-footer"><p>反代上游自动生成，无需填写。</p><button class="button primary" :disabled="busy">{{ dirty ? '保存并继续' : '下一步' }}<ArrowRight :size="14" /></button></div>
-        </form>
-      </div>
-      <div v-if="connectionMode === 'ssh'" v-show="connectionStep === 'server'" class="wizard-panel">
-        <div class="card-head"><div><h3>填写服务器信息并连接</h3><p>连接从运行 Runtime 的这台电脑发起。首次使用时，展开下方准备指纹和密钥。</p></div><span class="state-badge" :class="{ ready: tunnel?.connected }"><i />{{ tunnel?.connected ? '已连接' : tunnel?.running ? '连接中' : '未连接' }}</span></div>
-        <form id="exposure-ssh-form" class="ssh-form" @submit.prevent="submitTunnel">
-          <fieldset class="ssh-fields" :disabled="busy || tunnel?.running || tunnel?.autostart">
-            <label>服务器 IP 或域名<input v-model="ssh.host" required placeholder="例如：154.201.73.41" /></label>
-            <label>SSH 用户<input v-model="ssh.user" required placeholder="root" /></label>
-            <label>SSH 端口<input v-model.number="ssh.port" required type="number" min="1" max="65535" /></label>
-            <label>本机 SSH 私钥路径<input v-model="ssh.identityFile" required placeholder="已有密钥填绝对路径；没有密钥可在下方生成" /></label>
-          </fieldset>
-        </form>
-        <SshSetup :config="ssh" :disabled="busy" :mutation-locked="!!(tunnel?.running || tunnel?.autostart)" @identity="ssh.identityFile = $event" @notice="emit('notice', $event)" />
-        <p v-if="!service?.running" id="ssh-api-preparation" class="note-paper">{{ missingServicePreparation ? '连接前请按上方提示完成开放能力与调用凭证，再启动 API。' : '能力和凭证已就绪，点击上方「启动服务」后即可连接。' }}你可以先保存 SSH 配置；切换分类补齐准备项时，已填写的信息也会保留。</p>
-        <div v-if="tunnel?.supported" class="button-row connect-actions"><button form="exposure-ssh-form" type="submit" class="button" value="save" :disabled="busy || !tunnelDirty || tunnel.running || tunnel.autostart">{{ tunnelDirty ? '仅保存 SSH 配置' : 'SSH 配置已保存' }}</button><button form="exposure-ssh-form" type="submit" class="button primary" :aria-describedby="!service?.running ? 'ssh-api-preparation' : undefined" :disabled="busy || !!missingServicePreparation || !service?.running || tunnel.running || (tunnel.autostart && tunnelDirty) || placementDirty">{{ tunnel.connected ? '服务器已连接' : tunnel.running ? '正在连接…' : tunnelDirty ? '保存并连接服务器' : '连接服务器' }}</button><button class="button" :disabled="busy" @click="refreshTunnel">刷新连接状态</button></div>
-        <template v-if="tunnel">
-          <details class="advanced-panel"><summary>连接管理：自启、验证与断开</summary><p>{{ tunnel.detail }}</p><p>自启{{ tunnel.autostart ? '已开启' : '已关闭' }} · 日志：<code>{{ tunnel.logPath }}</code></p><div v-if="tunnel.supported" class="button-row"><button class="button" :disabled="busy || !tunnel.connected" @click="controlTunnel('test')">验证服务器端口</button><button class="button" :disabled="busy || (!tunnel.autostart && (tunnelDirty || placementDirty || !service?.running))" @click="controlTunnel(tunnel.autostart ? 'disable' : 'enable')">{{ tunnel.autostart ? '关闭隧道自启' : '开启隧道自启并连接' }}</button><button class="button danger" :disabled="busy || !tunnel.installed" @click="controlTunnel('stop')">断开并关闭自启</button></div><p>关闭 Web 不会断开；更换服务器前先断开并关闭自启。电脑休眠、断网或 SSH 权限仍会影响连接。自动上游为服务器的 127.0.0.1:18080。</p></details>
-          <p v-if="!tunnel.supported" class="note-paper">{{ tunnel.detail }}</p>
-          <p v-if="tunnelCheck" class="note-paper" role="status">{{ tunnelCheck }}</p>
-        </template>
-        <details class="advanced-panel"><summary>使用终端准备 SSH（可选）</summary><p>也可使用已授权的密钥，在本机终端核对指纹。带口令的密钥需确保后台服务能访问已解锁的密钥代理。服务器需允许 TCP 远程转发，远端健康验证需要 curl。固定的服务器 18080 端口需保持可用。</p><pre>{{ sshPreparation }}</pre><button class="button" @click="copy(sshPreparation)">复制首次连接命令</button></details>
-        <div class="form-footer wizard-footer"><button class="button" :disabled="busy" @click="connectionStep = 'placement'">上一步</button><div><p>{{ tunnel?.connected ? '连接已建立，下一步选择从哪里访问。' : '连接成功后继续；也可点击上方「设置访问地址」先保存入口。' }}</p><button class="button primary" :disabled="busy || !tunnel?.connected || tunnelDirty" @click="connectionStep = 'entry'">下一步：设置访问地址<ArrowRight :size="14" /></button></div></div>
-      </div>
-      <div v-show="connectionStep === 'entry'" class="wizard-panel">
-        <div class="card-head"><div><h3>设置调用方使用的访问地址</h3><p>仅服务器内部调用可留空；需要公网访问时，填写自己的 HTTPS 域名。</p></div><ShieldCheck :size="22" /></div>
-        <div class="connection-route" aria-label="服务连接路径"><span><Globe2 :size="16" />{{ connectionMode === 'ssh' ? '远端服务器' : '本机服务器' }}</span><ArrowRight :size="16" /><span v-if="connectionMode === 'ssh'">SSH 隧道</span><ArrowRight v-if="connectionMode === 'ssh'" :size="16" /><span><Server :size="16" />Runtime API</span></div>
-        <form class="deployment-form entry-form" @submit.prevent="continueEntry">
-          <div class="deployment-fields"><label>公网 HTTPS 入口 <span class="optional-label">选填</span><input v-model="publicBaseUrl" type="url" placeholder="https://ai.example.com" :disabled="busy" /><small>有域名时，在下一页部署 Nginx 与证书，再发起授权测试。</small></label><div class="upstream-preview"><span>服务器上的反代上游 <span class="auto-label">自动配置</span></span><code>{{ upstreamUrl }}</code><small>{{ connectionMode === 'ssh' ? '服务器通过这个地址访问电脑上的 Runtime。' : '反代直接连接同一台机器上的 Runtime。' }}</small></div></div>
-          <p v-if="!publicBaseUrl" class="note-paper">仅服务器内部使用：在服务器上通过上游地址和调用凭证请求 API，无需配置公网反代或证书。</p>
-          <p v-if="connectionMode === 'ssh' && !tunnel?.connected" class="note-paper">服务器尚未确认连接。可以先保存地址，发起调用前请回到上一步完成连接。</p>
-          <p v-if="verification.verified" class="note-paper" role="status">当前配置已通过公网授权调用验证。</p>
-          <div class="form-footer wizard-footer"><button type="button" class="button" :disabled="busy" @click="connectionStep = connectionMode === 'ssh' ? 'server' : 'placement'">上一步</button><div><p>下一页提供部署计划、调用示例和实际请求测试。</p><button class="button primary" :disabled="busy">{{ dirty ? '保存并前往接入测试' : '前往接入测试' }}<ArrowRight :size="14" /></button></div></div>
-        </form>
-      </div>
-    </section>
-  </template>
-  <template v-else-if="tab === '能力开放'"><div class="section-heading"><div><h2>按能力开放，而不是开放整个本机</h2><p>新增能力默认关闭。保存后，已启用此配置的 API 服务逐请求读取开放范围。</p></div><button class="button primary" :disabled="busy || !dirty" @click="saveNext = null; confirmSave = true">预览并保存</button></div><div class="capability-grid"><label v-for="item in exposure.catalog" :key="item.id" class="card capability-card" :class="{ checked: capabilities.includes(item.id) }"><div class="card-head"><span class="capability-icon"><ArrowUpRight :size="19" /></span><input v-model="capabilities" type="checkbox" :value="item.id" /></div><h2>{{ item.name }}</h2><code>{{ item.method }} {{ item.path }}</code><p>{{ item.id === 'agent' ? '远程执行有资源与权限影响，按需开启。' : '复用已实现的 Runtime API 接口。' }}</p></label><section v-for="name in ['记忆检索']" :key="name" class="card capability-card unavailable"><span class="pill unknown">尚未提供独立 API</span><h2>{{ name }}</h2><p>接口与权限边界完成后才能开放。</p></section></div><p class="footnote">当前开放控制粒度为接口能力。凭证支持 Provider／模型白名单、请求频率与总请求额度；embedding 路由仍受模型兼容性限制。</p></template>
-  <template v-else-if="tab === '访问控制'"><section class="card form-card"><div class="card-head"><div><h2>为调用方创建独立凭证</h2><p>权限取“服务开放范围”与“凭证能力”的交集，可独立撤销。</p></div><KeyRound :size="22" /></div><form @submit.prevent="createCredential"><label>调用方名称<input v-model="credentialName" required maxlength="80" placeholder="例如：我的服务器" /></label><div class="checkbox-list"><label v-for="item in selectedCapabilities" :key="item.id"><input v-model="credentialCapabilities" type="checkbox" :value="item.id" />{{ item.name }}</label></div><p v-if="!selectedCapabilities.length" class="footnote">先在「能力开放」选择并保存至少一项能力。</p><details class="advanced-panel"><summary>有效期、模型范围与请求额度</summary><div class="form-grid"><label>Provider 白名单<input v-model="credentialPolicy.providers" placeholder="逗号分隔，留空不限" /></label><label>模型 ID 白名单<input v-model="credentialPolicy.models" placeholder="逗号分隔，留空不限" /></label><label>到期时间<input v-model="credentialPolicy.expiresAt" type="datetime-local" /></label><label>每分钟请求上限<input v-model="credentialPolicy.requestsPerMinute" type="number" min="1" placeholder="留空不限" /></label><label>总请求额度<input v-model="credentialPolicy.requestQuota" type="number" min="1" placeholder="留空不限；失败请求也计数" /></label></div><p>请求计数按凭证 ID 持久化，重启或轮换不会重置。这里限制请求次数，不是 Token 或金额预算。受限 Agent 必须显式指定获准的 Provider/模型。</p></details><button class="button primary" :disabled="busy || !credentialCapabilities.length">创建调用凭证</button></form></section><section class="card spaced"><h2>已创建凭证</h2><div v-for="credential in exposure.credentials" :key="credential.id" class="file-row"><div><strong>{{ credential.name }}</strong><small class="table-sub">{{ credential.capabilities.join(' · ') }} · {{ new Date(credential.createdAt).toLocaleDateString('zh-CN') }}</small></div><div><small class="table-sub">{{ credential.policy?.expiresAt ? `到期：${new Date(credential.policy.expiresAt).toLocaleString()}` : '长期有效' }} · {{ credential.policy?.requestsPerMinute ? `${credential.policy.requestsPerMinute} 次/分钟` : '不限频率' }} · {{ credential.policy?.requestQuota ? `总额度 ${credential.policy.requestQuota} 次` : '不限次数' }}</small><div class="button-row"><button class="button" :disabled="busy" @click="rotate(credential.id)">轮换 Token</button><button class="button danger" :disabled="busy" @click="revoke(credential.id)">撤销</button></div></div></div><div v-if="!exposure.credentials.length" class="empty">还没有调用凭证。密钥只在创建时显示一次，落盘仅保存 SHA-256 摘要。</div><p class="footnote">托管 API 只接受这里创建的调用凭证；旧环境变量服务 Token 仅适用于前台启动方式。</p></section></template>
-  <template v-else><div class="equal-grid"><section class="card"><div class="card-head"><div><h2>检查服务连接</h2><p>测试已保存地址的 /health/live，不发送模型请求。</p></div></div><div class="button-row"><button class="button" :disabled="busy || !exposure.updatedAt" @click="test('upstream')">检查本机 API</button><button class="button" :disabled="busy || !exposure.publicBaseUrl" @click="test('public')">检查公网</button></div><div v-if="connection" class="note-paper">{{ connection.target === 'public' ? '公网' : '上游' }}：{{ connection.ok ? '已连通' : '未连通或响应不符合 Runtime 健康协议' }} · {{ connection.durationMs }} ms</div><p class="footnote">反代片段同时提供 /health/live 健康检查。连通后仍需使用真实授权调用验证能力；连接检查不证明凭证权限或模型可用。</p><h2 class="spaced">调用示例</h2><label>示例能力<select v-model="exampleCapability"><option value="">默认</option><option v-for="item in selectedCapabilities" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><pre>{{ curl }}</pre><button class="button" @click="copy(curl)"><Copy :size="14" />复制示例</button></section><section class="card"><div class="card-head"><div><h2>Nginx 配置片段</h2><p>放入你为此域名配置好 TLS 的独立 server 块。</p></div><button class="icon-button" aria-label="复制反代配置" @click="copy(nginx)"><Copy :size="15" /></button></div><pre class="code-panel">{{ nginx }}</pre><p class="footnote">按已保存能力生成精确路径，禁用响应缓冲以支持流式输出；其余路径返回 404。可复制手动部署；SSH 模式也可在上方预览并确认执行远端部署。</p></section></div><section class="card spaced"><h2>启动与生效</h2><p class="body-copy">保存开放能力并创建凭证后，点击上方「启动服务」，或执行 <code>ai server start</code>。后台服务固定监听 127.0.0.1:8080；关闭管理页面后继续运行。能力修改与凭证撤销逐请求生效。反代上游按部署方式自动生成。远端隧道端口请在「反代接入」验证；本页的本机检查不会访问远端 loopback。</p></section></template>
-  <RemoteDeployment v-if="tab === '接入测试' && exposure.connectionMode === 'ssh' && !!exposure.publicBaseUrl" @notice="emit('notice', $event)" />
-  <ServicePlayground v-if="tab === '接入测试'" :exposure="exposure" @verified="refreshVerification" @notice="emit('notice', $event)" />
-  <div v-if="confirmSave" class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-label="确认服务开放配置"><div class="card-head"><div><h2>保存服务开放配置</h2><p>不会自动部署反代，也不会启动 API 服务。</p></div><button class="icon-button" :disabled="busy" aria-label="取消保存" @click="confirmSave = false; saveNext = null"><X :size="16" /></button></div><div class="file-row"><span>公网入口</span><strong>{{ publicBaseUrl || '未设置' }}</strong></div><div class="file-row"><span>上游地址</span><strong>{{ upstreamUrl }}</strong></div><div class="file-row"><span>开放能力</span><strong>{{ capabilities.join(' · ') || '全部关闭' }}</strong></div><p v-if="error" class="error-banner">{{ error }}</p><div class="button-row"><button class="button" :disabled="busy" @click="confirmSave = false; saveNext = null">取消</button><button class="button primary" :disabled="busy" @click="save">{{ busy ? '保存中…' : '确认保存' }}</button></div></section></div>
-  <div v-if="newToken" class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-label="新调用凭证"><h2>保存好你的调用凭证</h2><p class="body-copy">只显示这一次。关闭后无法再次查看，遗失时需要创建新凭证。</p><pre class="secret-value">{{ newToken }}</pre><div class="button-row"><button class="button" @click="copy(newToken)"><Copy :size="14" />复制凭证</button><button class="button primary" @click="newToken = ''">已保存，关闭</button></div></section></div>
+    <div v-if="savePlan" class="modal-backdrop"><section class="modal exposure-confirm" role="dialog" aria-modal="true" aria-label="确认服务配置"><header class="card-head"><div><span class="step-eyebrow">REVIEW</span><h2>{{ savePlan.title }}</h2></div><button class="icon-button" :disabled="pending" aria-label="取消保存" @click="savePlan = null"><X :size="17" /></button></header><div class="review-row"><span>开放能力</span><strong>{{ saved.catalog.filter(item => savePlan?.input.capabilities.includes(item.id)).map(item => item.name).join('、') || '全部关闭' }}</strong></div><div class="review-row"><span>部署位置</span><strong>{{ savePlan.input.connectionMode === 'ssh' ? '我的电脑 → SSH 服务器' : savePlan.input.connectionMode === 'local' ? '与应用同机' : '保留现有接入方式' }}</strong></div><div class="review-row"><span>反代上游</span><strong>{{ savePlan.input.connectionMode === 'ssh' ? 'http://127.0.0.1:18080' : savePlan.input.connectionMode === 'local' ? 'http://127.0.0.1:8080' : savePlan.input.upstreamUrl }}</strong></div><div class="review-row"><span>公网入口</span><strong>{{ savePlan.input.publicBaseUrl || '仅服务器内部调用' }}</strong></div><p class="review-note">{{ savePlan.next === 'connect' ? (savePlan.input.connectionMode === 'local' ? '确认后保存接入方式并启动本机 API。已经运行的服务会跳过；不会开启自启或部署 Nginx。' : '确认后保存接入方式，启动 API 并连接服务器。已经完成的操作会跳过；不会开启自启或部署 Nginx。') : '保存后按新的范围检查请求。不会启动服务、连接 SSH 或部署反代。' }}</p><p v-if="error" class="feedback error-feedback" role="alert">{{ error }}</p><footer class="button-row"><button class="button" :disabled="pending" @click="savePlan = null">取消</button><button class="button primary" :disabled="pending" @click="confirmSave">{{ pending ? '保存中…' : savePlan.next === 'connect' ? '确认并启动连接' : '确认保存' }}</button></footer></section></div>
   </div>
 </template>
 
 <style scoped>
-.exposure-settings { display: grid; gap: 20px; --exposure-muted: #817b70; }
-.exposure-settings .spaced { margin-top: 0; }
-.exposure-settings .card { padding: 26px; }
-.exposure-settings .card h2 { font-size: 16px; letter-spacing: 0; }
-.exposure-settings .card-head p, .exposure-settings .card > p, .exposure-settings .footnote { font-size: 12px; line-height: 1.8; color: var(--exposure-muted); }
-.exposure-settings .card-head > svg { color: var(--accent); }
-.service-overview { border-top: 3px solid #b4a4c9; }
-.service-summary { display: flex; align-items: center; gap: 14px; }
-.service-summary > div { flex: 1; min-width: 0; }
-.service-summary p { font-size: 12px; color: var(--exposure-muted); margin: 6px 0 0; }
-.exposure-icon, .choice-icon { width: 44px; height: 44px; border-radius: 12px; background: #eee9f4; color: #7a6595; display: inline-grid; place-items: center; flex: none; }
-.title-line { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.title-line h2 { margin: 0; }
-.state-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 20px; background: #f0eee7; color: #857d70; font-size: 11px; padding: 5px 10px; white-space: nowrap; }
-.state-badge i { height: 6px; width: 6px; background: currentColor; border-radius: 50%; }
-.state-badge.ready { background: #e9f1e9; color: #53785b; }
-.service-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 22px; }
-.service-endpoint { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--exposure-muted); }
-.service-endpoint code { color: var(--ink); }
-.autostart-label { border-left: 1px solid var(--border); padding-left: 12px; }
-.exposure-settings .button { min-height: 37px; font-size: 12px; box-shadow: none; border-radius: 8px; }
-.exposure-settings .button-row { margin: 0; gap: 8px; }
-.exposure-settings .subnav { margin: 0; }
-.exposure-security { display: flex; align-items: center; gap: 9px; color: #7e826e; }
-.exposure-security svg { flex: none; }
-.exposure-security p { font-size: 12px; margin: 0; line-height: 1.7; }
-.guide-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
-.guide-heading h2 { font-size: 17px; margin: 0 0 6px; font-weight: 620; }
-.guide-heading p { font-size: 12px; color: var(--exposure-muted); margin: 0; }
-.guide-count { color: var(--accent); background: #ede8f3; border-radius: 20px; padding: 6px 12px; font-size: 11px; white-space: nowrap; }
-.setup-prerequisites { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 2px 0; color: var(--exposure-muted); font-size: 12px; }
-.prerequisite-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.prerequisite-list button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 18px; background: var(--paper); padding: 7px 10px; font-size: 11px; color: var(--ink); }
-.prerequisite-list button.ready { color: #53785b; background: #eff4ed; border-color: #dce7d8; }
-.prerequisite-list small { color: var(--exposure-muted); font-size: 10px; }
-.prerequisite-dot { width: 6px; height: 6px; border-radius: 50%; background: #b69d7b; }
-.preparation-help { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 14px 18px; border: 1px solid var(--border); border-radius: 9px; background: #f7f5ef; }
-.preparation-help p { flex: 1 1 260px; margin: 0; font-size: 12px; line-height: 1.8; color: var(--exposure-muted); }
-.wizard-steps { display: grid; grid-template-columns: repeat(var(--wizard-step-count), minmax(0, 1fr)); gap: 8px; padding: 0; margin: 24px 0 0; list-style: none; }
-.wizard-steps button { width: 100%; height: 100%; display: flex; align-items: center; gap: 10px; padding: 15px 12px; border: 1px solid transparent; border-bottom: 2px solid var(--border); border-radius: 9px 9px 0 0; background: #f7f5ef; text-align: left; color: var(--ink); }
-.wizard-steps button.active { background: #f2edf7; border-bottom-color: #9279aa; }
-.wizard-steps button:disabled { opacity: .5; cursor: not-allowed; }
-.step-number { width: 27px; height: 27px; flex: none; display: grid; place-items: center; background: #ece8df; color: #8c8171; border-radius: 50%; font-size: 12px; }
-.active .step-number { background: #8a72a4; color: white; }
-.complete:not(.active) .step-number { background: #e6efe3; color: #60805b; }
-.wizard-steps strong { display: block; font-size: 12px; font-weight: 600; }
-.wizard-steps small { display: block; font-size: 11px; color: var(--exposure-muted); margin-top: 5px; line-height: 1.5; }
-.wizard-panel { padding-top: 28px; }
-.wizard-panel h3 { font-size: 15px; margin: 0; }
-.wizard-panel .card-head { margin-bottom: 22px; }
-.wizard-panel .card-head > svg { color: var(--accent); }
-.wizard-panel .card-head p { font-size: 12px; line-height: 1.8; color: var(--exposure-muted); margin: 7px 0 0; }
-.wizard-hint { font-size: 12px; color: var(--exposure-muted); margin: 0; line-height: 1.8; }
-.connect-actions { padding-top: 20px; }
-.wizard-footer { margin-top: 24px; }
-.wizard-footer > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; }
-.wizard-footer p { max-width: 350px; }
-.entry-form { margin-top: 24px; }
-.exposure-settings form { max-width: none; }
-.deployment-form { display: grid; gap: 22px; }
-.deployment-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 0; padding: 0; border: 0; min-width: 0; }
-.deployment-option { position: relative; display: flex; align-items: center; gap: 13px; padding: 20px 18px; margin: 0; border: 1px solid var(--border); border-radius: 11px; cursor: pointer; background: #fdfcf9; }
-.deployment-option.selected { background: #f4eff9; border-color: #b5a1cc; box-shadow: 0 0 0 1px #b5a1cc; }
-.deployment-option input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.deployment-option:has(input:focus-visible) { outline: 3px solid #b7a8d3; outline-offset: 3px; }
-.deployment-choices:disabled .deployment-option { opacity: .65; cursor: not-allowed; }
-.deployment-option strong { display: block; font-size: 13px; font-weight: 600; line-height: 1.6; }
-.deployment-option small { display: block; color: var(--exposure-muted); font-size: 11px; margin-top: 5px; line-height: 1.6; }
-.choice-icon { width: 39px; height: 39px; background: #efede6; color: #918676; }
-.selected .choice-icon { background: #e7ddf1; color: #806696; }
-.radio-indicator { width: 16px; height: 16px; flex: none; border: 1px solid #cdc6ba; border-radius: 50%; margin-left: auto; }
-.selected .radio-indicator { border: 5px solid #8a72a4; background: #fff; }
-.connection-route { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 16px; background: #f7f5ef; border-radius: 9px; padding: 18px; font-size: 12px; color: #817767; }
-.connection-route > span { display: inline-flex; align-items: center; gap: 8px; }
-.connection-route > svg { color: #b7ad9b; flex: none; }
-.connection-route code { font-size: 11px; color: #9b8c72; }
-.deployment-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: start; }
-.exposure-settings label { font-size: 12px; }
-.deployment-fields label { margin: 0; }
-.deployment-fields small, .upstream-preview small { display: block; font-size: 11px; color: var(--exposure-muted); margin-top: 9px; line-height: 1.7; }
-.optional-label { color: #a39b8c; font-size: 10px; margin-left: 6px; font-weight: 400; }
-.upstream-preview > span { font-size: 12px; color: #817767; display: flex; align-items: center; gap: 8px; }
-.auto-label { font-size: 10px; padding: 2px 6px; color: #698269; background: #edf2e8; border-radius: 4px; }
-.upstream-preview > code { display: block; margin-top: 9px; padding: 12px 14px; border: 1px dashed #dcd6c9; border-radius: 8px; background: #f9f7f1; font-size: 13px; overflow-wrap: anywhere; }
-.form-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; border-top: 1px solid var(--border); padding-top: 18px; }
-.form-footer p { margin: 0; font-size: 11px; color: var(--exposure-muted); line-height: 1.7; }
-.ssh-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 16px; }
+.exposure-workspace { --exposure-muted: #817b72; font-size: 13px; }
+.exposure-overview { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px; padding: 0 0 26px; }
+.overview-title, .overview-status { display: flex; align-items: center; gap: 12px; }
+.overview-icon { width: 44px; height: 44px; display: grid; place-items: center; color: #7b6594; background: #ece6f2; border: 1px solid #e0d6e9; border-radius: 13px; flex: none; }
+.overview-title h2 { margin: 0 0 6px; font-size: 17px; font-weight: 620; }
+.overview-title p { margin: 0; color: var(--exposure-muted); font-size: 12px; line-height: 1.8; }
+.status-pill { display: inline-flex; gap: 7px; align-items: center; padding: 7px 10px; background: #eeece5; border-radius: 20px; color: #8d8271; font-size: 11px; white-space: nowrap; }
+.status-pill i { width: 6px; height: 6px; background: currentColor; border-radius: 50%; }
+.status-pill.ready { color: #58785d; background: #e8eee5; }
+.exposure-layout { display: grid; grid-template-columns: 222px minmax(0, 1fr); gap: 30px; align-items: start; }
+.setup-sidebar { padding-top: 5px; position: sticky; top: 24px; }
+.sidebar-heading { display: flex; justify-content: space-between; align-items: center; padding: 0 12px 18px; color: #82786a; font-size: 11px; }
+.sidebar-heading small { color: #a49a89; font-size: 10px; }
+.setup-sidebar ol { padding: 0; margin: 0; list-style: none; display: grid; gap: 8px; }
+.setup-sidebar nav button { width: 100%; display: flex; align-items: center; gap: 12px; padding: 16px 12px; text-align: left; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 11px; }
+.setup-sidebar nav button:hover { background: #f0ede5; }
+.setup-sidebar nav button.active { background: #ece6f2; border-color: #ded3e8; }
+.step-index { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid #ddd7cb; background: #f9f7f1; color: #9b8e78; border-radius: 50%; font-size: 12px; flex: none; }
+.active .step-index { background: #847095; color: white; border-color: #847095; }
+.complete:not(.active) .step-index { background: #e7eee3; color: #66805c; border-color: #d7e2d1; }
+.step-label { flex: 1; min-width: 0; }
+.step-label strong { font-weight: 600; font-size: 13px; }
+.step-label small { display: block; color: #9a9081; font-size: 10px; line-height: 1.7; margin-top: 5px; }
+.active .step-label small { color: #9c8ca6; }
+.step-arrow { color: #9380a2; flex: none; }
+.sidebar-security { display: flex; gap: 10px; border-top: 1px solid var(--border); margin: 24px 12px 0; padding-top: 20px; color: #8d937e; }
+.sidebar-security svg { flex: none; margin-top: 3px; }
+.sidebar-security p { margin: 0; font-size: 11px; line-height: 1.9; }
+.setup-content { min-width: 0; padding: 30px; border: 1px solid var(--border); border-radius: 15px; background: var(--paper); outline: none; }
+.step-heading { padding-bottom: 24px; }
+.step-eyebrow { display: block; color: #9c8eac; font-size: 10px; letter-spacing: 1.8px; font-weight: 600; margin-bottom: 12px; }
+.step-heading h2 { font-size: 23px; margin: 0 0 10px; letter-spacing: .3px; font-weight: 630; }
+.step-heading p { margin: 0; color: var(--exposure-muted); font-size: 13px; line-height: 1.8; }
+.capability-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.capability-option { display: flex; align-items: center; gap: 12px; position: relative; padding: 19px 16px; border: 1px solid var(--border); border-radius: 11px; margin: 0; cursor: pointer; background: #fffefa; }
+.capability-option:hover { border-color: #c7b9d2; }
+.capability-option.selected { border-color: #b6a3c7; background: #f6f1fa; }
+.capability-symbol { width: 36px; height: 36px; display: grid; place-items: center; color: #9b8b75; background: #f2eee6; border-radius: 9px; flex: none; }
+.selected .capability-symbol { color: #8a6ba2; background: #ece2f3; }
+.capability-copy { flex: 1; min-width: 0; }
+.capability-copy strong { display: block; font-weight: 570; font-size: 13px; }
+.capability-copy small { display: block; font-size: 11px; color: var(--exposure-muted); line-height: 1.7; margin-top: 6px; }
+.capability-option input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.capability-option:has(input:focus-visible) { outline: 3px solid #b7a8d3; outline-offset: 3px; }
+.selection-indicator { width: 17px; height: 17px; border: 1px solid #d8d0c1; border-radius: 5px; display: grid; place-items: center; flex: none; }
+.selected .selection-indicator { color: white; background: #8b739f; border-color: #8b739f; }
+.step-footer { border-top: 1px solid var(--border); margin-top: 28px; padding-top: 22px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.step-footer p { font-size: 11px; color: var(--exposure-muted); line-height: 1.8; margin: 0; }
+.step-footer > div > p { margin-top: 10px; }
+.exposure-workspace :deep(.button) { min-height: 39px; font-size: 12px; box-shadow: none; padding: 10px 15px; }
+.exposure-workspace :deep(.button.primary) { background: #806b91; border-color: #806b91; }
+.exposure-workspace :deep(.button.primary:hover) { background: #6e5a80; }
+.exposure-workspace :deep(.text-button) { font-size: 12px; }
+.exposure-workspace :deep(label) { font-size: 12px; }
+.exposure-workspace :deep(input:not([type='checkbox']):not([type='radio'])), .exposure-workspace :deep(select), .exposure-workspace :deep(textarea) { font-size: 13px; }
+.exposure-workspace :deep(pre) { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.9; max-height: 450px; overflow: auto; }
+.exposure-workspace :deep(code) { overflow-wrap: anywhere; }
+.technical-details { border-top: 1px solid var(--border); margin-top: 22px; padding-top: 17px; font-size: 12px; }
+.technical-details > summary { cursor: pointer; color: #8b7e94; line-height: 1.8; font-size: 12px; }
+.technical-details[open] > summary { margin-bottom: 20px; }
+.technical-details p { color: var(--exposure-muted); font-size: 12px; line-height: 1.9; overflow-wrap: anywhere; }
+.technical-details h3 { margin: 22px 0 10px; font-size: 13px; font-weight: 600; }
+.endpoint-row { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 11px 0; border-bottom: 1px solid #f0ece4; font-size: 11px; }
+.endpoint-row strong { font-weight: 500; }
+.endpoint-row code { color: var(--exposure-muted); }
+.placement-choices { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; min-width: 0; }
+.placement-choices legend { margin-bottom: 15px; font-size: 13px; font-weight: 570; }
+.placement-choices > label { position: relative; display: grid; justify-items: start; gap: 9px; border: 1px solid var(--border); border-radius: 11px; padding: 22px 18px; margin: 0; cursor: pointer; }
+.placement-choices > label.selected { background: #f6f1fa; border-color: #b6a3c7; }
+.placement-choices input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.placement-choices label:has(input:focus-visible) { outline: 3px solid #b7a8d3; outline-offset: 3px; }
+.placement-choices svg { color: #9b8b75; margin-bottom: 6px; }
+.placement-choices .selected svg { color: #8a6ba2; }
+.placement-choices strong { font-size: 13px; font-weight: 570; }
+.placement-choices small { font-size: 11px; line-height: 1.8; color: var(--exposure-muted); }
+.placement-choices:disabled label { opacity: .65; cursor: not-allowed; }
+.configuration-note { font-size: 11px; line-height: 1.9; color: var(--exposure-muted); margin: 15px 0 0; }
+.radio-dot { position: absolute; top: 18px; right: 16px; border: 1px solid #d2c9ba; width: 17px; height: 17px; border-radius: 50%; }
+.selected .radio-dot { border: 5px solid #89729e; background: white; }
+.ssh-configuration { margin-top: 28px; }
+.subsection-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.subsection-heading h3 { margin: 0; font-size: 14px; font-weight: 580; }
+.inline-state { display: inline-flex; gap: 5px; align-items: center; color: #9b8d77; font-size: 11px; }
+.inline-state.ready { color: #65815f; }
+.ssh-fields { display: grid; grid-template-columns: minmax(0, 1fr) 135px; gap: 18px; border: 0; margin: 0; padding: 0; min-width: 0; }
 .ssh-fields label { margin: 0; }
-.ssh-fields label:last-child { grid-column: 1 / -1; }
-.ssh-form .form-footer { margin-top: 18px; }
-.advanced-panel { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 18px; font-size: 12px; color: var(--exposure-muted); }
-.advanced-panel summary { cursor: pointer; width: fit-content; line-height: 1.7; }
-.advanced-panel p { font-size: 12px; line-height: 1.9; overflow-wrap: anywhere; }
-.advanced-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-.exposure-settings .file-row strong { overflow-wrap: anywhere; }
-#exposure-service { scroll-margin-top: 20px; }
-.sr-only { position: absolute; height: 1px; width: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-@media (max-width: 1150px) {
-  .deployment-choices, .deployment-fields { grid-template-columns: 1fr; }
+.ssh-fields small, .access-card small { display: block; font-size: 11px; color: var(--exposure-muted); font-weight: 400; margin-top: 7px; line-height: 1.7; }
+.ssh-save-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+.ssh-save-row > span { color: #a49a89; font-size: 11px; }
+.connection-preview { display: flex; align-items: center; justify-content: center; gap: 18px; background: #f7f5ef; padding: 17px 12px; border-radius: 8px; margin-top: 24px; color: #857b6d; font-size: 11px; }
+.connection-preview > span:not(.route-line) { display: inline-flex; align-items: center; gap: 7px; }
+.route-line { font-size: 10px; color: #9f91a8; display: flex; align-items: center; gap: 8px; }
+.route-line:before, .route-line:after { content: ''; height: 1px; width: 20px; background: #d4c9dd; }
+.local-explanation { display: flex; gap: 16px; align-items: center; padding: 24px 0 0; }
+.local-explanation > svg { color: #92829f; flex: none; }
+.local-explanation strong { font-size: 13px; font-weight: 550; }
+.local-explanation p { font-size: 12px; color: var(--exposure-muted); line-height: 1.9; margin: 7px 0 0; }
+.inline-guidance { padding: 16px; border: 1px solid #e7dcc5; background: #fbf6e9; border-radius: 9px; margin: 20px 0; }
+.inline-guidance p { color: #9c8764; font-size: 12px; line-height: 1.8; margin: 0; }
+.inline-guidance .text-button { margin-top: 10px; }
+.manager-section { margin-bottom: 24px; }
+.manager-section .button-row { margin-top: 16px; }
+.feedback { display: flex; align-items: flex-start; gap: 10px; padding: 13px 15px; border-radius: 9px; margin-bottom: 20px; font-size: 12px; line-height: 1.9; overflow-wrap: anywhere; }
+.feedback svg { flex: none; margin-top: 3px; }
+.feedback p { margin: 0; }
+.error-feedback { background: #faeeea; color: #b16d60; border: 1px solid #ecd3c9; }
+.success-feedback { background: #edf3e9; color: #69805b; border: 1px solid #dce6d4; }
+.operation-progress { display: flex; gap: 8px; align-items: center; font-size: 12px; color: #8c789b; margin-bottom: 18px; }
+.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.access-card { padding: 22px; border: 1px solid var(--border); border-radius: 11px; background: #fdfbf6; }
+.access-switch { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid #e4ddd1; border-radius: 9px; background: #efebe3; margin-bottom: 20px; }
+.access-switch button { border: 1px solid transparent; background: transparent; color: #948773; font-size: 12px; border-radius: 6px; padding: 9px 16px; }
+.access-switch button.active { background: var(--paper); border-color: #e3dbce; color: #776481; box-shadow: 0 1px 3px #5a49380a; }
+.access-description { font-size: 12px; color: var(--exposure-muted); line-height: 1.9; margin: 0 0 18px; }
+.endpoint-display { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #f2eee5; border-radius: 8px; padding: 15px; }
+.endpoint-display > div { min-width: 0; }
+.endpoint-display span { display: block; font-size: 10px; color: #a49780; margin-bottom: 7px; }
+.endpoint-display code { font-size: 13px; color: #73684f; }
+.entry-save { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 16px; }
+.entry-save > span { font-size: 11px; color: #ac9271; }
+.back-link { margin-top: 24px; }
+.exposure-workspace :deep(.setup-panel) { border: 0; border-top: 1px solid var(--border); padding: 17px 0 0; border-radius: 0; margin-top: 22px; }
+.exposure-workspace :deep(.setup-panel > summary) { font-weight: 400; color: #8b7e94; }
+.exposure-workspace :deep(.playground) { border: 0; border-radius: 0; box-shadow: none; padding: 28px 0 0; margin: 26px 0 0; border-top: 1px solid var(--border); }
+.exposure-workspace :deep(.playground h2) { font-size: 15px; }
+.exposure-workspace :deep(.playground .card-head p) { font-size: 12px; }
+.deployment-details :deep(.card) { border: 0; padding: 0; margin: 0; box-shadow: none; }
+.exposure-confirm { max-width: 540px; }
+.exposure-confirm h2 { font-size: 20px; margin: 0; }
+.review-row { display: flex; justify-content: space-between; gap: 20px; padding: 15px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.review-row > span { color: var(--exposure-muted); flex: none; }
+.review-row > strong { font-weight: 500; overflow-wrap: anywhere; text-align: right; }
+.review-note { font-size: 12px; line-height: 1.9; color: var(--exposure-muted); margin: 20px 0; }
+.exposure-confirm .button-row { justify-content: flex-end; }
+@media (max-width: 1200px) { .exposure-layout { grid-template-columns: 190px minmax(0, 1fr); gap: 20px; } .setup-content { padding: 26px; } .capability-options { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .exposure-layout { grid-template-columns: 1fr; gap: 18px; } .setup-sidebar { position: static; padding: 0; } .sidebar-heading, .sidebar-security { display: none; }
+  .setup-sidebar ol { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; } .setup-sidebar nav button { flex-direction: column; text-align: center; gap: 8px; padding: 12px 4px; }
+  .step-label small, .step-arrow { display: none; } .step-label strong { font-size: 11px; } .capability-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-@media (max-width: 650px) {
-  .exposure-settings .card { padding: 20px; }
-  .guide-heading { align-items: flex-start; }
-  .guide-heading h2 { font-size: 15px; }
-  .guide-count { font-size: 10px; padding: 5px 8px; }
-  .wizard-steps { grid-template-columns: 1fr; gap: 6px; }
-  .wizard-steps button { padding: 12px; border-radius: 8px; border-bottom-width: 1px; }
-  .wizard-steps button.active { border-color: #b5a1cc; }
-  .wizard-steps small { display: none; }
-  .wizard-footer > div { width: 100%; align-items: flex-start; flex-direction: column; }
-  .deployment-option { padding: 16px 12px; gap: 10px; }
-  .ssh-fields { grid-template-columns: 1fr 1fr; }
-  .ssh-fields label:first-child { grid-column: 1 / -1; }
-  .connection-route { gap: 10px; padding: 14px 10px; }
-  .service-summary { gap: 10px; }
-  .service-summary .exposure-icon { display: none; }
-  .service-endpoint { font-size: 11px; }
+@media (max-width: 600px) {
+  .overview-icon { display: none; } .overview-title h2 { font-size: 16px; } .overview-title p { font-size: 11px; } .exposure-overview { gap: 12px; padding-bottom: 18px; }
+  .setup-content { padding: 22px 18px; border-radius: 12px; } .step-heading h2 { font-size: 21px; } .step-heading p { font-size: 12px; }
+  .capability-options { grid-template-columns: 1fr; } .capability-option { padding: 16px 13px; } .placement-choices { grid-template-columns: 1fr; gap: 10px; }
+  .placement-choices > label { padding: 17px; grid-template-columns: 28px 1fr; gap: 6px 10px; } .placement-choices svg { grid-row: span 2; margin: 0; align-self: center; } .placement-choices small { grid-column: 2; padding-right: 15px; }
+  .ssh-fields { grid-template-columns: minmax(0, 1fr) 95px; gap: 16px 12px; } .host-field, .identity-field { grid-column: 1 / -1; } .ssh-fields label:nth-child(2) { grid-row: 3; }
+  .step-footer { align-items: stretch; gap: 18px; } .step-footer > .button { width: 100%; } .connection-preview { gap: 8px; font-size: 10px; } .route-line { gap: 5px; } .route-line:before, .route-line:after { width: 10px; }
+  .access-card { padding: 18px 14px; } .access-switch { display: flex; } .access-switch button { flex: 1; padding: 9px 8px; }
 }
+@media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }
 </style>

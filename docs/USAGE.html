@@ -543,7 +543,7 @@ brew update</pre>
               <tr data-search="image generate image prompt model b64 url">
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai image 51talk-image "一只戴墨镜的猫"</code></td>
-                <td>调用已配置的图片 Provider 和默认模型生成图片并保存到当前目录。</td>
+                <td>调用已配置的图片 Provider 和默认模型生成图片；项目存在 <code>assets/results/</code> 时默认保存到该目录。</td>
                 <td>支持 Provider fallback；真实 usage 写入 <code>usage.json</code>。</td>
               </tr>
               <tr data-search="use provider model named">
@@ -682,24 +682,29 @@ brew update</pre>
             <h2>向服务器开放图片 API</h2>
             <p>新模型请求在「运行记录 → 调用记录」显示独立 traceId、父 executionId、已观测 Token、成本及来源和终止耗时；旧记录缺少关联时显示未知，辅助请求不进入模型调用汇总。工具会话区分启动配置与最近成功的实际 Provider/模型，信号退出按失败记录。历史存储、备份与回滚的完整命令见「凭据与历史」分类。</p>
             <h3>按引导连接服务器</h3>
-            <p>「接入测试 → 实际调用工作台」支持对话、Responses、向量、图片生成/参考图上传编辑、隔离工作区 Agent，以及 <code>tools</code> 注册工具执行。凭证仅用于本次本机或公网请求，不保存；真实调用会产生费用，响应限 40 MiB。公网授权调用成功且响应符合协议才标记部署验证通过；配置变化后验证失效。当前工具只提供 <code>runtime.status</code> 与 <code>providers.list</code>，请求 <code>POST /v1/tools/execute</code>，请求体为 <code>{"name":"runtime.status"}</code>，不执行任意 Shell 命令。</p>
+            <p>「验证与调用 → 实际调用工作台」支持对话、Responses、向量、图片生成/参考图上传编辑、隔离工作区 Agent，以及 <code>tools</code> 注册工具执行。工作台始终保留，凭证仅用于本次本机或公网请求，不保存；真实调用会产生费用，响应限 40 MiB。公网授权调用成功且响应符合协议才标记部署验证通过；配置变化后验证失效。当前工具只提供 <code>runtime.status</code> 与 <code>providers.list</code>，请求 <code>POST /v1/tools/execute</code>，请求体为 <code>{"name":"runtime.status"}</code>，不执行任意 Shell 命令。</p>
             <p>「本地配置 → 工具配置」可备份并持久保存 Claude 用户连接，保留其他字段；「消息接入」支持 Bot 启动、停止、重启、删除配置（保留数据库与日志）。「运行记录」与「用量统计」提供完整历史分页、CSV/JSON 下载及每 2 秒实时刷新，内容为安全字段投影；SQLite 用量/会话可索引分页，日志页仅保留当前页；完整调用聚合仍需扫描，长期容量尚待验收。SSH 连接参数进入快照，但专用私钥、主机信任、请求计数、部署验证证据不进入快照；恢复 SSH 配置前需断开隧道并关闭自启。</p>
-            <p>「反代接入」只有一条配置流程：选择部署位置 → 连接服务器 → 设置访问地址，每次只显示当前步骤；同机部署自动跳过 SSH。上方「接入前准备」仅显示能力、凭证、API 状态并提供补齐入口。SSH 信息准备好后点击「保存并连接服务器」，自启、端口验证和断开收在「连接管理」，首次指纹与密钥准备可展开查看。窄屏下卡片与表单自动纵向排列。</p>
+            <p>「对外服务」使用唯一四步导航：「开放能力 → 调用凭证 → 启动与连接 → 验证与调用」。侧栏显示各步已保存状态与摘要，可自由返回；首次进入根据保存的能力、有效凭证和 API/隧道状态定位首个未完成步骤，状态刷新不会切走当前步骤，切步保留草稿。技术参数、指纹与密钥准备及「运行管理与连接详情」按需展开；窄屏使用横向紧凑四步导航，表单纵向排列。</p>
             <p>旧版启动的 Bot 若缺少进程归属标识，Web 与新版具名 CLI 会拒绝向该 PID 发送停止信号。先在系统进程列表核实 Bot 的入口与 PID，再手动停止旧进程，之后从新版启动；不要直接依据过期 PID 文件结束进程。</p>
-            <p>完成「选择能力 → 创建凭证 → 启动 API」后，在「反代接入」选择部署方式。上游不需要填写：同机反代自动使用 <code>http://127.0.0.1:8080</code>；不同电脑选择 SSH 隧道，自动使用服务器的 <code>http://127.0.0.1:18080</code>。18080 是服务器的 loopback；固定端口被占用时先处理冲突。旧自定义上游保存新部署方式前保留，保存时会提示替换。</p>
-            <p>也可先填写并「仅保存 SSH 配置」，无需启动 API，不会发起连接。「接入前准备」在四个分类中持续显示，按“保存开放能力 → 创建有效调用凭证 → 启动 API”指出当前缺项并提供入口；准备不足时点击「启动服务」会先进入对应配置。凭证须未过期，且与已保存能力至少有一项交集。切换分类保留 SSH 草稿，完成准备后点击「返回连接配置」，再连接服务器。API 未运行只阻止连接，不阻止保存 SSH 信息。</p>
-            <p>填写服务器 IPv4/域名、SSH 用户、端口（默认 22）、本机私钥绝对路径，点击「保存并连接服务器」。公钥需已加入服务器 authorized_keys；首次连接可在 Web 扫描指纹，独立核对后确认信任；冲突拒绝覆盖。可在未填写服务器时生成或复用本机专用密钥，不覆盖已有私钥。扫描指纹需要服务器地址、SSH 用户与有效端口；诊断还需私钥路径。缺少信息或操作锁定时，按钮下方显示原因。隧道运行或开启自启时仍可扫描和诊断；修改密钥、信任与公钥授权需先断开并关闭自启。公钥可手动授权或使用一次性服务器密码授权，要求服务器允许密码登录。页面不保存密码或私钥内容、不自动信任主机；后台使用系统 OpenSSH 并忽略个人 SSH 配置，要求非交互密钥认证，带口令的密钥需提前解锁并确保服务可访问密钥代理。服务器需允许 TCP 远程转发，不需要将 GatewayPorts 设置为公网监听。</p>
-            <p>隧道独立由 launchd/systemd 用户服务托管，退出 Web 不会断开；断线由系统重新启动（30 秒心跳、连续 3 次无响应退出）。API 与隧道分别自启，默认均关闭；Windows 使用当前用户交互登录的任务计划程序（需 OpenSSH，适配尚待 Windows 实机验收）；无用户服务管理器的平台暂不支持托管。修改连接配置或切换部署方式前先「断开并关闭自启」。电脑休眠或网络中断仍影响连接。</p>
-            <p>「刷新连接状态」区分进程运行与 SSH 控制连接；「验证服务器端口」通过 SSH 执行固定的 curl 健康检查，服务器需安装 curl，不会发送模型请求或调用凭证。「检查本机 API」固定检查本机 8080，「检查公网」检查 HTTPS 入口。最后部署生成的 Nginx 片段并用真实凭证调用。仅服务器内部使用时可直接请求自动上游，无需公网入口，仍需授权。SSH 模式可预览部署计划，确认后部署独立 Nginx/HTTPS 站点并通过 Certbot 申请和续期证书；需要 root、systemd、有效域名与 80/443，可选 apt/dnf 安装依赖。失败恢复原 Nginx 配置，已安装软件包和证书不自动删除。复杂网关/同机部署请由管理员使用配置片段处理。</p>
-            <p>先配置支持图片模型的 Provider，并通过 <code>ai status</code> 刷新目录。在「对外服务 → 能力开放」启用「图片生成」（<code>images</code>）和按需启用「图片编辑」（<code>image_edits</code>），再为服务器创建对应权限的独立凭证。旧凭证不会自动扩权。点击「启动服务」或执行 <code>ai server start</code> 即可后台运行，无需源码目录或 npm。托管服务固定监听 <code>127.0.0.1:8080</code>，只使用开放能力凭证；关闭管理页面和终端后继续运行。能力关闭和凭证撤销逐请求生效。</p>
+            <ol>
+              <li><strong>开放能力</strong>：选择需要的接口，预览变更并确认保存后继续。</li>
+              <li><strong>调用凭证</strong>：创建最小权限凭证，复制仅显示一次的 Token，确认已经保存后继续；已有有效凭证可直接继续。有效凭证须未过期，且与已保存能力至少有一项交集，旧凭证不会自动扩权。</li>
+              <li><strong>启动与连接</strong>：选择同机或本机通过 SSH 连接服务器。SSH 信息填好后点击「启动 API 并连接服务器」，依次保存接入配置与 SSH 配置、启动 API、连接隧道；接入配置变更需先预览确认，已完成操作会跳过，失败停止后续操作并保留成功状态。同机模式跳过 SSH。此操作不会开启自启或部署远端 Nginx；「仅保存 SSH 配置」无需 API 运行，也不会连接。</li>
+              <li><strong>验证与调用</strong>：选择服务器内部调用或公网 HTTPS。内部调用无需域名，直接使用自动上游；公网模式保存入口后可预览远端部署或使用 Nginx 片段。展开健康检查与调用示例，最后用真实凭证完成授权调用。</li>
+            </ol>
+            <p>上游不需要填写：同机自动使用 <code>http://127.0.0.1:8080</code>；SSH 模式使用服务器的 <code>http://127.0.0.1:18080</code>。18080 是服务器的 loopback；固定端口被占用时先处理冲突。旧自定义上游保存新部署方式前保留，保存时会提示替换。保存与步骤切换不会启动 API、连接 SSH 或修改远端服务器。</p>
+            <p>SSH 需要服务器 IPv4/域名、SSH 用户、端口（默认 22）、本机私钥绝对路径。公钥需已加入服务器 authorized_keys；首次连接可展开准备区扫描指纹，独立核对后确认信任；冲突拒绝覆盖。可在未填写服务器时生成或复用本机专用密钥，不覆盖已有私钥。扫描指纹需要服务器地址、SSH 用户与有效端口；诊断还需私钥路径。缺少信息或操作锁定时，按钮下方显示原因。隧道运行或开启自启时仍可扫描和诊断；修改密钥、信任与公钥授权需先断开并关闭自启。公钥可手动授权或使用一次性服务器密码授权，要求服务器允许密码登录。页面不保存密码或私钥内容、不自动信任主机；后台使用系统 OpenSSH 并忽略个人 SSH 配置，要求非交互密钥认证，带口令的密钥需提前解锁并确保服务可访问密钥代理。服务器需允许 TCP 远程转发，不需要将 GatewayPorts 设置为公网监听。</p>
+            <p>隧道独立由 launchd/systemd 用户服务托管，退出 Web 不会断开；断线由系统重新启动（30 秒心跳、连续 3 次无响应退出）。API 与隧道分别自启，默认均关闭；Windows 使用当前用户交互登录的任务计划程序（需 OpenSSH，适配尚待 Windows 实机验收）；无用户服务管理器的平台暂不支持托管。修改连接配置或切换部署方式前先「断开隧道并关闭自启」。电脑休眠或网络中断仍影响连接。</p>
+            <p>「刷新服务与连接状态」和「刷新运行状态」区分进程运行与 SSH 控制连接；「验证服务器端口」通过 SSH 执行固定的 curl 健康检查，服务器需安装 curl，不会发送模型请求或调用凭证。「验证与调用」的本机 API 检查固定访问本机 8080，公网检查访问保存的 HTTPS 入口。仅服务器内部使用时无需公网入口，仍需授权。公网模式下，SSH 可预览部署计划，确认后部署独立 Nginx/HTTPS 站点并通过 Certbot 申请和续期证书；需要 root、systemd、有效域名与 80/443，可选 apt/dnf 安装依赖。失败恢复原 Nginx 配置，已安装软件包和证书不自动删除。复杂网关/同机部署请由管理员使用配置片段处理。进程运行、隧道连通与健康检查不能代替真实授权调用。</p>
+            <p>先配置支持图片模型的 Provider，并通过 <code>ai status</code> 刷新目录。在「对外服务 → 开放能力」启用「图片生成」（<code>images</code>）和按需启用「图片编辑」（<code>image_edits</code>），再为服务器创建对应权限的独立凭证。在「启动与连接」启动 API 或执行 <code>ai server start</code> 即可后台运行，无需源码目录或 npm。托管服务固定监听 <code>127.0.0.1:8080</code>，只使用开放能力凭证；关闭管理页面和终端后继续运行。能力关闭和凭证撤销逐请求生效。</p>
             <pre>ai server start     # 后台启动
 ai server status    # 状态与日志位置
 ai server restart   # 重启；升级后刷新安装路径
 ai server enable    # 开启自启并启动
 ai server disable   # 关闭自启，保持运行
 ai server stop      # 停止并关闭自启</pre>
-            <p>Web「API 后台服务」提供相同操作。macOS 使用 launchd，开启自启后在用户登录时启动；Linux 使用 systemd 用户服务，无登录持续运行或开机启动需管理员配置 <code>loginctl enable-linger USER</code>。Windows 支持当前用户登录任务计划（需 OpenSSH，尚待实机验收）；无用户服务管理器的 Linux 和容器暂不支持托管。状态来自系统管理器，不代表真实模型调用成功；启动后刷新状态并检查日志。macOS 日志在配置目录的 <code>api-service.log</code>，Linux 使用状态返回的 <code>journalctl --user -u ...</code> 命令。多份配置不能占用同一端口，启动前停止原前台服务。开发调试仍可在源码目录执行 <code>npm run server</code>，用旧服务 Token 或能力凭证；<code>AI_GATEWAY_SERVER_HOST</code> / <code>AI_GATEWAY_SERVER_PORT</code> 仅对前台方式生效。日志轮转、复杂网关和系统权限仍需部署环境配置。</p>
-            <p>选择部署方式并填写 HTTPS 公网入口，上游自动生成，使用「接入测试」生成的 Nginx 片段部署 TLS。Runtime 在电脑上时先建立 VPN 或反向 SSH 隧道。管理页面 <code>ai web</code> 不对外开放；保存配置不会部署服务器，健康检查不代表模型调用成功。</p>
+            <p>Web「启动与连接 → 运行管理与连接详情」提供相同操作。macOS 使用 launchd，开启自启后在用户登录时启动；Linux 使用 systemd 用户服务，无登录持续运行或开机启动需管理员配置 <code>loginctl enable-linger USER</code>。Windows 支持当前用户登录任务计划（需 OpenSSH，尚待实机验收）；无用户服务管理器的 Linux 和容器暂不支持托管。状态来自系统管理器，不代表真实模型调用成功；启动后刷新状态并检查日志。macOS 日志在配置目录的 <code>api-service.log</code>，Linux 使用状态返回的 <code>journalctl --user -u ...</code> 命令。多份配置不能占用同一端口，启动前停止原前台服务。开发调试仍可在源码目录执行 <code>npm run server</code>，用旧服务 Token 或能力凭证；<code>AI_GATEWAY_SERVER_HOST</code> / <code>AI_GATEWAY_SERVER_PORT</code> 仅对前台方式生效。日志轮转、复杂网关和系统权限仍需部署环境配置。</p>
+            <p>公网使用时，在「验证与调用」保存 HTTPS 入口，再显式部署 Nginx/TLS；仅服务器内部使用时直接请求自动上游，无需域名。Runtime 在电脑上时，可在「启动与连接」建立反向 SSH 隧道。管理页面 <code>ai web</code> 不对外开放。</p>
             <pre>curl https://ai.example.com/v1/images/generations \
   -H "Authorization: Bearer $AXIOM_SERVICE_TOKEN" \
   -H 'Content-Type: application/json' \
@@ -710,7 +715,7 @@ curl https://ai.example.com/v1/images/edits \
   -F 'model=YOUR_IMAGE_MODEL' -F 'prompt=将背景改为蓝色' \
   -F 'image=@reference.png'</pre>
             <p>生成接收 JSON，编辑接收 multipart；必须包含 <code>model</code> 和 <code>prompt</code>，<code>n</code> 为 1–8，<code>size</code> 为像素尺寸或 <code>auto</code>，<code>response_format</code> 为 <code>url</code> 或 <code>b64_json</code>，具体支持取决于 Provider。其余参数原样传递，不推断提示词中的张数或尺寸。编辑上传字段为 <code>image</code> 或重复的 <code>image[]</code>，1–8 张 PNG/JPEG/WebP，每张最多 20 MiB，含可选 <code>mask</code> 合计最多 40 MiB；不读取本机路径或下载请求中的图片 URL。</p>
-            <p>默认整个请求体最多 42 MiB（含 multipart 开销），调大 <code>AI_GATEWAY_MAX_REQUEST_BYTES</code> 时也须调整 Nginx 的 <code>client_max_body_size</code>。图片响应头等待至少 120 秒，可调高 <code>AI_GATEWAY_UPSTREAM_HEADERS_TIMEOUT_MS</code>。响应原样返回 <code>data[].url</code> 或 <code>data[].b64_json</code>，调用方下载或解码；Runtime 不托管图片，URL 有效期由 Provider 决定。请求只尝试首个健康模型候选一次，不自动重试或切换；超时、断网或 5xx 后先核实上游任务，避免重复计费。</p>
+            <p>默认整个请求体最多 42 MiB（含 multipart 开销），调大 <code>AI_GATEWAY_MAX_REQUEST_BYTES</code> 时也须调整 Nginx 的 <code>client_max_body_size</code>。Runtime server 的图片响应头等待由 <code>AI_GATEWAY_UPSTREAM_HEADERS_TIMEOUT_MS</code> 控制。响应原样返回 <code>data[].url</code> 或 <code>data[].b64_json</code>，调用方下载或解码；Runtime 不托管图片，URL 有效期由 Provider 决定。请求只尝试首个健康模型候选一次，不自动重试或切换；超时、断网或 5xx 后先核实上游任务，避免重复计费。</p>
             <p>无凭证 401、无能力 403、参数无效 400、体积超限 413、无可用模型 503、传输失败 502；响应已开始发送后若中断则关闭连接。凭证可设置 Provider/模型白名单、有效期、每分钟请求数和总请求额度，并可轮换 Token。额度为请求次数，失败请求也计数，重启/轮换/恢复不会重置；不是 Token 或金额预算。超限返回 429。</p>
           </section>
           <section id="use" class="panel">
@@ -751,22 +756,24 @@ ai image 51talk-image "生成3张咖啡店宣传图：一张1024x1024方图、�
 ai image 51talk-image "咖啡店宣传海报" --count 3 --size 1024x1024
 ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"
 ai image 51talk-image "保持人物一致，改成水彩风格" --image "./参考图.png"
-ai image 51talk-image "将图1人物融入图2场景" --image "./人物.png" --image "./场景.jpg"</pre>
+ai image 51talk-image "将图1人物融入图2场景" --image "./人物.png" --image "./场景.jpg"
+ai image recover "./.ai-image-recovery/响应记录.json"</pre>
                 <ul>
                   <li>直接运行 <code>ai image</code> 时，会依次选择 Provider、具体模型和生成方式（文生图 / 参考本地图片）；参考图模式逐张输入文件路径，留空结束（达到 8 张自动结束），最后输入提示词。已有提示词的旧用法不增加交互。</li>
                   <li>交互式只需在 <code>Image prompt</code> 描述明确数量和像素尺寸。支持“生成三张图片”、<code>Generate three images</code> 以及逐图尺寸列表，用逗号、顿号或分号分隔；未说明数量默认 1 张，未说明尺寸使用 Provider 默认。按明确句式解析，不调用额外模型，不保证理解任意自由表达。</li>
                   <li><code>--count 1..8</code> / <code>--count=3</code> 指定数量，<code>--size WIDTHxHEIGHT</code> / <code>--size=auto</code> 指定尺寸，可放在位置参数前后；与提示词明确数量/尺寸冲突时报错。宽高限制 64–8192 像素，总像素 ≤16,777,216，Provider 可有更小限制。</li>
                   <li>“多张/一套”但没有数量，或“多张不同尺寸”却没有像素尺寸，交互式按缺失字段追问数量或尺寸，保留原始提示词和参考图，已有提示词的命令行用法直接报错。场景内物体数量和引号内文字不作为输出数量，不从横竖版或宽高比猜尺寸。独立分句中的“2张图片”可被识别，“参考这几张图片”不算输出数量。数量追问直接回答 <code>2</code> 只补数量；尺寸追问按输出顺序填写 <code>2160x3840,3840x2160</code>，仅补尺寸。4K、手机或 PC 屏幕未给像素尺寸时会追问并提供示例，不自动猜测；纯数字不能替代图片描述。</li>
-                  <li>每张独立请求 <code>n: 1</code> 并传各自 <code>size</code>，顺序生成并共享整批 Transport Proxy；共同风格保留，但不保证跨图人物/版式完全一致。生成请求不原地重试；文生图自动切换受 <code>ai failover on/off</code> 控制。</li>
+                  <li>每张独立请求 <code>n: 1</code> 并传各自 <code>size</code>，顺序生成并共享整批 Transport Proxy；共同风格保留，但不保证跨图人物/版式完全一致。文生图和参考图均只向一个 Provider 尝试一次，不因超时、断网、HTTP 错误或保存失败自动重试或切换，避免重复计费。</li>
                   <li>已知 DALL·E 尺寸限制在请求前校验，其他模型以上游实际响应为准，不静默换尺寸。base64 实际尺寸不符时保留文件、报告差异并标记任务失败；远程 URL 不下载，尺寸标记未验证。</li>
                   <li>全部响应项在整批 8 张上限内保存或报告，文件名包含任务序号和请求尺寸；逐任务汇报结果，失败继续后续任务并保留已成功文件，任一任务失败退出码 1，不自动重跑整批。上游额外图片计入上限，余量耗尽不再请求。</li>
                   <li>重复 <code>--image &lt;path&gt;</code> 或 <code>--image=&lt;path&gt;</code> 指定多张本地参考图，按输入顺序上传；最多 8 张，单张最大 20 MiB，合计最大 40 MiB。支持 PNG、JPEG、WebP，所有文件上传前按内容校验。路径有空格请加引号；不支持 GIF、URL 或 mask。原图不修改，结果另存新文件。</li>
                   <li>参考图上传给所选 Provider，调用 multipart <code>/v1/images/edits</code>。Provider / 模型须支持相应的单图或多图编辑；模型列表存在不代表支持该接口。服务端仍可能拒绝格式、尺寸或能力。非兼容的 Responses 图片工具接口不在此功能范围。</li>
-                  <li>参考图不自动重试、不向其他 Provider fallback；所选 Provider 不健康时直接失败。只指定模型时按健康/顺序选择一个可用 Provider。仅使用可信服务商；失败后明确选其他服务商重新运行。文生图仅在开启自动降级时允许 fallback。</li>
+                  <li>按健康/顺序选择一个 Provider；请求发出后不自动重试或向其他 Provider fallback。失败后先核实上游状态，再明确选择其他服务商重新运行。</li>
                   <li>第一个参数是 Provider 名；第二个参数匹配模型缓存时作为具体模型，否则从第二个参数开始作为提示词并使用默认模型。</li>
                   <li>命令执行前会自动刷新模型缓存；也可以先运行 <code>ai status</code> 检查。指定模型时建议给提示词加引号。</li>
-                  <li><code>b64_json</code> 会以 <code>0600</code> 权限保存到当前目录并输出绝对路径；远程响应只接受无凭证的 <code>https</code> URL。</li>
-                  <li>图片请求等待响应头上限为 120 秒；参考图失败直接报告，文生图可尝试下一个 Provider。</li>
+                  <li><code>b64_json</code> 会以 <code>0600</code> 权限保存到项目的 <code>assets/results/</code>（该目录存在时）并输出绝对路径；没有该目录时回退当前目录。远程响应只接受无凭证的 <code>https</code> URL。</li>
+                  <li>图片请求等待完整上游响应的默认期限为 10 分钟（<code>600000</code> 毫秒），可用正整数环境变量 <code>AI_GATEWAY_IMAGE_TIMEOUT_MS</code> 覆盖，覆盖响应头和响应体读取。</li>
+                  <li>每次请求前先在输出目录建立 <code>.ai-image-recovery/&lt;uuid&gt;.json</code> 待完成记录；完整响应在 usage 处理和图片提取前私密保存，目录/文件权限为 <code>0700</code>/<code>0600</code>。失败时报告记录路径；使用 <code>ai image recover &lt;response-file&gt;</code> 可在本地重新提取，不刷新 Provider、不调用 API、不产生费用。记录存在不表示图片已生成，未收到的响应无法恢复，也不保证进程退出后的上游结果可取回。</li>
                   <li>请求经过 execution-scoped Transport Proxy，真实 usage 复用唯一 <code>UsageObserver</code> 账本。</li>
                 </ul>
               </div>

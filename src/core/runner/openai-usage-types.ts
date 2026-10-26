@@ -62,6 +62,12 @@ export type StartOpenAiUsageProxyInput = {
   onRouteResult?: (route: OpenAiUsageProxyRoute, success: boolean, reason?: string) => void | Promise<void>;
   onUsage?: (record: OpenAiUsageProxyRecord) => void | Promise<void>;
   onRequestSettled?: (request: SettledProxyRequest) => void | Promise<void>;
+  onBufferedResponse?: (response: {
+    status: number;
+    statusText: string;
+    contentType: string;
+    body: Buffer;
+  }, route: OpenAiUsageProxyRoute, requestModel: string) => void | Promise<void>;
   upstreamHeadersTimeoutMs?: number;
   /** 同一个 Provider 上的最大尝试次数（含首次）。瞬时失败先原地重试，耗尽后才换 Provider。 */
   maxAttemptsPerRoute?: number;

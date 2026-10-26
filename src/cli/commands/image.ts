@@ -1,6 +1,6 @@
 import { planImageGeneration, ImagePlanClarificationError, normalizeImageSize } from "../../core/images/image-generation-plan.js";
 import { readCache } from "../../core/config/cache-store.js";
-import { generateImages, MAX_REFERENCE_IMAGES } from "../../core/images/image-generation-service.js";
+import { generateImages, MAX_REFERENCE_IMAGES, recoverGeneratedImages } from "../../core/images/image-generation-service.js";
 import { listProviders, refreshAllProviders } from "../../core/providers/provider-service.js";
 import type { CacheFile, Provider } from "../../core/types.js";
 import { promptSelect, promptText } from "../prompts/prompt.js";
@@ -17,6 +17,17 @@ export type ImageCommandInput = {
 };
 
 export async function runImageCommand(args: string[]): Promise<void> {
+  if (args[0] === "recover") {
+    const responseFile = args[1];
+    if (!responseFile || args.length > 3) throw new Error("Usage: ai image recover <recovery-record.json> [output-directory]");
+    const images = await recoverGeneratedImages(responseFile, args[2]);
+    for (const image of images) {
+      if (image.filePath) console.log(`Image recovered: ${image.filePath}`);
+      if (image.url) console.log(`Image URL: ${image.url}`);
+    }
+    console.log(`Recovered ${images.length} image(s) locally; no provider request was sent.`);
+    return;
+  }
   await refreshAllProviders();
   const [providers, cache] = await Promise.all([listProviders(), readCache()]);
   const input = await resolveImageCommandInput(args, providers, cache.providers);

@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { api } from './console-api'
 const props = defineProps<{ config: { host: string; user: string; port: number; identityFile: string }; disabled?: boolean; mutationLocked?: boolean }>()
-const emit = defineEmits<{ identity: [value: string]; notice: [message: string] }>()
+const emit = defineEmits<{ identity: [value: string]; notice: [message: string]; busy: [value: boolean] }>()
 const busy = ref(false)
 const password = ref('')
 const scanId = ref('')
@@ -26,7 +26,7 @@ async function run(action: string) {
   if (reason) { error.value = reason; return }
   if (action === 'trust' && !confirm('已从服务器控制台或管理员核对指纹，确认信任此服务器？')) return
   if (action === 'authorize' && !confirm('使用本次输入的账户密码，将专用公钥追加到该账户的 authorized_keys？密码不会保存。')) return
-  busy.value = true; error.value = ''
+  busy.value = true; emit('busy', true); error.value = ''
   try {
     const result = await api<{ detail?: string; identityFile?: string; publicKey?: string; scanId?: string; fingerprints?: string; checks?: typeof checks.value }>('/api/exposure/ssh-setup', { method: 'POST', body: JSON.stringify({ action, config: { ...props.config, identityFile: props.config.identityFile || '/unused-key-path' }, ...(action === 'authorize' ? { password: password.value } : {}), scanId: scanId.value }) })
     if (result.identityFile) emit('identity', result.identityFile)
@@ -36,7 +36,7 @@ async function run(action: string) {
     detail.value = result.detail ?? ''; emit('notice', detail.value)
     if (action === 'trust') { scanId.value = ''; fingerprints.value = '' }
   } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason) }
-  finally { password.value = ''; busy.value = false }
+  finally { password.value = ''; busy.value = false; emit('busy', false) }
 }
 </script>
 <template>
@@ -53,7 +53,7 @@ async function run(action: string) {
     <div v-if="publicKey"><label>服务器需授权的公钥<textarea :value="publicKey" readonly rows="3" /></label><p>可以复制到服务器的 authorized_keys，或在下方使用账户密码授权。仅支持允许 SSH 密码登录的服务器；不会修改服务器认证策略。</p><label>本次授权用的服务器账户密码<input v-model="password" type="password" autocomplete="off" :disabled="busy || disabled || mutationLocked" /></label><button type="button" class="button" :disabled="!!blockedReason('authorize')" :title="blockedReason('authorize')" @click="run('authorize')">用密码授权专用公钥</button><small v-if="blockedReason('authorize')" class="action-hint">{{ blockedReason('authorize') }}</small></div>
     <p v-if="busy" role="status">正在执行 SSH 准备操作，请稍候…</p>
     <p v-if="error" class="error-banner" role="alert">{{ error }}</p><p v-if="detail" role="status">{{ detail }}</p><ul v-if="checks.length"><li v-for="check in checks" :key="check.name">{{ check.ok ? '✓' : '!' }} {{ check.name }}：{{ check.detail }}</li></ul>
-    <p>专用私钥保存在本机受限权限文件中；页面只显示公钥和路径。准备完成后，点击「保存并连接服务器」。</p>
+    <p>专用私钥保存在本机受限权限文件中；页面只显示公钥和路径。准备完成后，使用上方的启动与连接按钮继续。</p>
   </details>
 </template>
 <style scoped>
