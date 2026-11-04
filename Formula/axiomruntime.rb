@@ -1,8 +1,8 @@
 class Axiomruntime < Formula
   desc "CLI-first enterprise AI Runtime with governed provider routing"
   homepage "https://github.com/linlangli/AxiomRuntime"
-  url "https://registry.npmjs.org/@offerpilot/axiomruntime/-/axiomruntime-0.0.1.tgz"
-  sha256 "3fad27599b615f36f962084055c72879eed8ac13328ad28b3155bd69e646bde9"
+  url "https://registry.npmjs.org/@offerpilot/axiomruntime/-/axiomruntime-0.0.7.tgz"
+  sha256 "020962afebabb0343640d3621554b0c4b7bc89c0c55ab838d66eae2385659867"
 
   depends_on "python@3.13" => :build
   depends_on "node@22"
