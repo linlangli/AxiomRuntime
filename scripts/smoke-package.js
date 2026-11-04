@@ -7,7 +7,16 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-package-smoke-"));
+// Native addons remain loaded until process exit on Windows, so the parent owns cleanup.
+const temporary = process.env.AXIOM_SMOKE_TEMP ?? await fs.mkdtemp(path.join(os.tmpdir(), "axiom-package-smoke-"));
+if (!process.env.AXIOM_SMOKE_TEMP) {
+  const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+    env: { ...process.env, AXIOM_SMOKE_TEMP: temporary }, stdio: "inherit", timeout: 600_000
+  });
+  await fs.rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+  if (child.error) throw child.error;
+  process.exit(child.status ?? 1);
+}
 const npmCli = process.env.npm_execpath;
 assert.ok(npmCli, "Run this check with `npm run smoke:package`.");
 let api;
@@ -75,5 +84,4 @@ try {
   if (upstream) await new Promise(resolve => upstream.close(resolve));
   if (previousHome === undefined) delete process.env.AI_GATEWAY_HOME; else process.env.AI_GATEWAY_HOME = previousHome;
   if (previousCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousCodex;
-  await fs.rm(temporary, { recursive: true, force: true });
 }
