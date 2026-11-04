@@ -16,15 +16,15 @@ export async function getProviderStatuses(options: { refresh?: boolean } = {}): 
 
 export async function getProviderStatus(
   providerName: string,
-  options: { refresh?: boolean } = {}
+  options: { refresh?: boolean; discover?: boolean } = {}
 ): Promise<ProviderStatus> {
   const providers = await readProviders();
   const provider = providers.find((candidate) => candidate.name === providerName.trim());
   if (!provider) {
     throw new Error(`Provider not found: ${providerName}`);
   }
-  if (options.refresh) {
-    await refreshProvider(provider, { verifyRepresentativeModels: true });
+  if (options.refresh || options.discover) {
+    await refreshProvider(provider, { verifyRepresentativeModels: !!options.refresh, preserveCatalogOnFailure: !!options.discover });
   }
   return (await buildProviderStatuses([provider]))[0]!;
 }

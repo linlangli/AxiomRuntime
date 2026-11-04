@@ -89,7 +89,7 @@ export interface Dashboard {
   }
   pricing: Record<string, ModelPrice>
   calls: CallItem[]; logs: LogItem[]; sessions: SessionItem[]
-  codex: { providerId: string; model: string | null; proxy: string | null; authConfigured: boolean; configPresent: boolean; configPath: string; authPath: string }
+  codex: { accountEmail: string | null; authMode: string | null; providerName: string | null; baseUrl: string | null; reasoningEffort: string | null; sandboxMode: string | null; approvalPolicy: string | null; configError: string | null; providerId: string; runtimeProviderName: string | null; model: string | null; proxy: string | null; authConfigured: boolean; configPresent: boolean; configPath: string; authPath: string }
   settings: LocalSettings
   codexUsage: CodexUsageStatus
 }

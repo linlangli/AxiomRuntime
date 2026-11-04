@@ -13,6 +13,25 @@ import { startSession, finishSession } from "../dist/core/sessions/session-servi
 import { startLocalWebServer } from "../dist/web/local-server.js";
 import { getWebDashboard } from "../dist/core/web/dashboard-service.js";
 
+test("Codex dashboard exposes only the ChatGPT account email, never credentials", async () => {
+  const oldRuntime = process.env.AI_GATEWAY_HOME, oldCodex = process.env.CODEX_HOME;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-codex-account-"));
+  process.env.AI_GATEWAY_HOME = root; process.env.CODEX_HOME = path.join(root, "codex");
+  try {
+    await fs.mkdir(process.env.CODEX_HOME);
+    const token = `x.${Buffer.from(JSON.stringify({ email: "user@example.test" })).toString("base64url")}.x`;
+    await fs.writeFile(path.join(process.env.CODEX_HOME, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: token, access_token: "secret-access", refresh_token: "secret-refresh" } }));
+    const dashboard = await getWebDashboard();
+    assert.equal(dashboard.codex.accountEmail, "user@example.test");
+    assert.equal(dashboard.codex.authMode, "chatgpt");
+    assert.doesNotMatch(JSON.stringify(dashboard), /secret-access|secret-refresh|id_token/);
+  } finally {
+    if (oldRuntime === undefined) delete process.env.AI_GATEWAY_HOME; else process.env.AI_GATEWAY_HOME = oldRuntime;
+    if (oldCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodex;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Web usage separates Provider daily tokens and retains activity beyond 30 recorded days", async () => {
   const previousHome = process.env.AI_GATEWAY_HOME;
   const previousCodexHome = process.env.CODEX_HOME;

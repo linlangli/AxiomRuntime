@@ -12,13 +12,18 @@ function settingsPath() { return path.join(process.env.CLAUDE_CONFIG_DIR || path
 export async function getClaudeSettings() {
   const config = await readJsonFile<Record<string, unknown>>(settingsPath(), {});
   const env = config.env as Record<string, string> | undefined;
-  return { path: settingsPath(), baseUrl: env?.ANTHROPIC_BASE_URL ?? "", model: env?.ANTHROPIC_MODEL ?? "", credentialConfigured: !!(env?.ANTHROPIC_API_KEY || env?.ANTHROPIC_AUTH_TOKEN) };
+  return { path: settingsPath(), baseUrl: env?.ANTHROPIC_BASE_URL ?? "", model: env?.ANTHROPIC_MODEL ?? (typeof config.model === "string" ? config.model : ""), defaultHaikuModel: env?.ANTHROPIC_DEFAULT_HAIKU_MODEL ?? "", defaultSonnetModel: env?.ANTHROPIC_DEFAULT_SONNET_MODEL ?? "", defaultOpusModel: env?.ANTHROPIC_DEFAULT_OPUS_MODEL ?? "", permissionMode: (config.permissions && typeof config.permissions === "object" && "defaultMode" in config.permissions && typeof config.permissions.defaultMode === "string") ? config.permissions.defaultMode : "", credentialConfigured: !!(env?.ANTHROPIC_API_KEY || env?.ANTHROPIC_AUTH_TOKEN) };
 }
 
 export async function applyClaudeSettings(input: Record<string, unknown>) {
   if (input.action !== undefined && input.action !== "provider" && input.action !== "clear") throw new SettingsInputError("Claude 配置操作无效。");
   const provider = (await listProviders()).find(item => item.name === input.provider);
   if (input.action !== "clear" && !provider) throw new SettingsInputError("请选择 Provider。");
+  const modelKeys = { defaultHaikuModel: "ANTHROPIC_DEFAULT_HAIKU_MODEL", defaultSonnetModel: "ANTHROPIC_DEFAULT_SONNET_MODEL", defaultOpusModel: "ANTHROPIC_DEFAULT_OPUS_MODEL" } as const;
+  for (const key of Object.keys(modelKeys)) {
+    if (input[key] !== undefined && (typeof input[key] !== "string" || (input[key] as string).length > 200 || /[\r\n\0]/.test(input[key] as string))) throw new SettingsInputError("模型名称无效。");
+  }
+  if (input.permissionMode !== undefined && (typeof input.permissionMode !== "string" || !["", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"].includes(input.permissionMode))) throw new SettingsInputError("权限模式无效。");
   const file = settingsPath();
   const original = await fs.readFile(file, "utf8").catch(error => { if (error.code === "ENOENT") return null; throw error; });
   if (original !== null) await fs.writeFile(`${file}.axiom-backup-${Date.now()}`, original, { mode: 0o600 });
@@ -27,7 +32,20 @@ export async function applyClaudeSettings(input: Record<string, unknown>) {
     const env = { ...(current.env as Record<string, string> ?? {}) };
     for (const key of ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"]) delete env[key];
     if (input.action !== "clear" && provider) Object.assign(env, { ANTHROPIC_BASE_URL: getToolBaseUrl("claude", provider), ANTHROPIC_API_KEY: provider.apiKey, ANTHROPIC_MODEL: typeof input.model === "string" && input.model.trim() ? input.model.trim() : provider.model });
-    return { ...current, env };
+    for (const [key, envKey] of Object.entries(modelKeys)) {
+      if (input[key] !== undefined) {
+        const value = (input[key] as string).trim();
+        if (value) env[envKey] = value; else delete env[envKey];
+      }
+    }
+    const next: Record<string, unknown> = { ...current, env };
+    if (input.permissionMode !== undefined) {
+      if (current.permissions !== undefined && (!current.permissions || typeof current.permissions !== "object" || Array.isArray(current.permissions))) throw new SettingsInputError("Claude permissions 格式无效，请先修复原文件。");
+      const permissions = { ...(current.permissions as Record<string, unknown> ?? {}) };
+      if (input.permissionMode) permissions.defaultMode = input.permissionMode; else delete permissions.defaultMode;
+      next.permissions = permissions;
+    }
+    return next;
   });
   await fs.chmod(file, 0o600);
   await writeLog({ category: "provider", action: "claude_settings_updated", message: "Claude user settings updated; restart Claude to apply." });

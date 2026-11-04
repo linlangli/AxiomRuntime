@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { parse } from "smol-toml";
 import os from "node:os";
 import path from "node:path";
 import { readCache } from "../config/cache-store.js";
@@ -10,6 +11,7 @@ import { estimateTokenCostUsd, readModelPricing } from "../usage/pricing.js";
 import { getConfigRoot } from "../config/paths.js";
 import { getLocalSettings } from "./local-settings.js";
 import { projectHistoryLogs, summarizeCalls } from "./execution-history.js";
+import { providerIdForName } from "../integrations/codex-provider-config.js";
 import { syncCodexAppUsage } from "../usage/codex-app-usage.js";
 
 export async function getWebDashboard() {
@@ -102,7 +104,7 @@ export async function getWebDashboard() {
     logs: safeLogs.reverse(),
     sessions: sessions.map(({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom, actualProvider, actualModel, nativeSessionId, traceId, resumedFrom }) =>
       ({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom, actualProvider, actualModel, nativeSessionId, traceId, resumedFrom })),
-    codex, codexUsage, settings
+    codex: { ...codex, runtimeProviderName: providers.find(provider => providerIdForName(provider.name) === codex.providerId)?.name ?? null }, codexUsage, settings
   };
 }
 
@@ -110,15 +112,34 @@ async function readCodexConfigSummary() {
   const codexHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
   const configPath = path.join(codexHome, "config.toml");
   const authPath = path.join(codexHome, "auth.json");
-  const [config, authConfigured] = await Promise.all([
+  const [raw, authConfigured, rawAuth] = await Promise.all([
     fs.readFile(configPath, "utf8").catch(() => ""),
-    fs.stat(authPath).then((stat) => stat.isFile()).catch(() => false)
+    fs.stat(authPath).then((stat) => stat.isFile()).catch(() => false),
+    fs.readFile(authPath, "utf8").catch(() => "")
   ]);
-  const topLevel = config.split(/^\s*\[/m, 1)[0] ?? "";
-  const field = (name: string): string | null => {
-    const match = topLevel.match(new RegExp(`^\\s*${name}\\s*=\\s*["']([^"']*)["']`, "m"));
-    return match?.[1] ?? null;
-  };
-  const proxy = config.match(/^\s*(?:HTTP_PROXY|http_proxy)\s*=\s*["']([^"']*)["']/m)?.[1] ?? null;
-  return { providerId: field("model_provider") ?? "openai", model: field("model"), proxy, authConfigured, configPresent: Boolean(config), configPath, authPath };
+  let accountEmail: string | null = null;
+  let authMode: string | null = null;
+  try {
+    const auth = JSON.parse(rawAuth);
+    if (auth && typeof auth === "object" && typeof auth.auth_mode === "string") authMode = auth.auth_mode;
+    if (authMode === "chatgpt" && typeof auth.tokens?.id_token === "string") {
+      const claims = JSON.parse(Buffer.from(auth.tokens.id_token.split(".")[1] ?? "", "base64url").toString("utf8"));
+      if (typeof claims.email === "string" && claims.email.length <= 200 && !/[\r\n\0]/.test(claims.email)) accountEmail = claims.email;
+    }
+  } catch { /* Missing or unreadable local account details. */ }
+  let config: Record<string, unknown> = {};
+  let configError: string | null = null;
+  try { config = parse(raw); } catch { configError = "配置文件格式无效，无法读取。"; }
+  const field = (name: string) => typeof config[name] === "string" ? config[name] as string : null;
+  const providerId = field("model_provider") ?? "openai";
+  const tables = config.model_providers;
+  const provider = tables && typeof tables === "object" ? (tables as Record<string, unknown>)[providerId] : null;
+  const entry = provider && typeof provider === "object" ? provider as Record<string, unknown> : {};
+  const providerName = typeof entry.name === "string" ? entry.name : null;
+  let baseUrl: string | null = null;
+  try { if (typeof entry.base_url === "string") { const u = new URL(entry.base_url); if (!u.username && !u.password && !u.search && !u.hash && ["http:", "https:"].includes(u.protocol)) baseUrl = u.toString(); } } catch { /* invalid address */ }
+  const shell = config.shell_environment_policy;
+  const set = shell && typeof shell === "object" && "set" in shell ? shell.set : null;
+  const proxy = set && typeof set === "object" && "HTTP_PROXY" in set && typeof set.HTTP_PROXY === "string" ? set.HTTP_PROXY : null;
+  return { providerId, providerName, baseUrl, accountEmail, authMode, model: field("model"), reasoningEffort: field("model_reasoning_effort"), sandboxMode: field("sandbox_mode"), approvalPolicy: field("approval_policy"), proxy, configError, authConfigured, configPresent: Boolean(raw), configPath, authPath };
 }

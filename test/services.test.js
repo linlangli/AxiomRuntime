@@ -45,6 +45,7 @@ import {
   resolveCodexProviderModel,
   scheduleCodexAppRestart,
   setCodexProvider,
+  setCodexOptions,
   setCodexProxy
 } from "../dist/core/integrations/codex-provider-config.js";
 import { redactCodexProxyCommandArgs } from "../dist/cli/sanitize-args.js";
@@ -249,6 +250,27 @@ test("Codex ChatGPT config selects the built-in OpenAI provider without removing
   assert.match(updated, /^model_provider = "openai"/m);
   assert.match(updated, /^cli_auth_credentials_store = "file"/m);
   assert.match(updated, /\[features\]\nmulti_agent = true/);
+  assert.match(buildCodexChatGptConfig(updated, "gpt-6.1"), /^model = "gpt-6.1"/m);
+});
+
+test("Codex options update only requested fields and reject invalid or conflicting settings", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-options-"));
+  const file = path.join(home, "config.toml");
+  const options = { codexHome: home, scheduleRestart: async () => ({ scheduled: false }) };
+  try {
+    await fs.writeFile(file, 'model = "gpt-test"\nmodel_reasoning_effort = "low"\nsandbox_mode = "read-only"\n[features]\nmulti_agent = true\n');
+    await setCodexOptions({ model_reasoning_effort: "high", sandbox_mode: "", approval_policy: "on-request" }, options);
+    const config = await fs.readFile(file, "utf8");
+    assert.match(config, /model_reasoning_effort = "high"/); assert.match(config, /approval_policy = "on-request"/);
+    assert.doesNotMatch(config, /sandbox_mode/); assert.match(config, /\[features\]\nmulti_agent = true/);
+    await assert.rejects(setCodexOptions({ approval_policy: "bad" }, options), /无效/);
+    assert.equal(await fs.readFile(file, "utf8"), config);
+    await fs.writeFile(file, 'default_permissions = ":workspace"\n');
+    await assert.rejects(setCodexOptions({ sandbox_mode: "read-only" }, options), /不能同时设置/);
+    assert.equal(await fs.readFile(file, "utf8"), 'default_permissions = ":workspace"\n');
+    await fs.writeFile(file, '"approval_policy" = "never"\n');
+    await assert.rejects(setCodexOptions({ approval_policy: "on-request" }, options), /无法安全修改/);
+  } finally { await fs.rm(home, { recursive: true, force: true }); }
 });
 
 test("Codex proxy normalization accepts host-port and supports explicit clearing", () => {
@@ -369,6 +391,7 @@ test("setCodexProvider writes custom provider config and Codex-compatible auth a
     }
   }, {
     codexHome,
+    configOptions: { model_reasoning_effort: "high" },
     scheduleRestart: async () => ({ scheduled: false, reason: "test" })
   });
 
@@ -383,6 +406,7 @@ test("setCodexProvider writes custom provider config and Codex-compatible auth a
   assert.equal(authMode, 0o600);
   assert.equal(configMode, 0o644);
   assert.match(config, /model_provider = "51talk-ww-cq"/);
+  assert.match(config, /model_reasoning_effort = "high"/);
   assert.match(config, /^model = "gpt-5\.6-sol"/m);
   assert.match(config, /\[features\]\nmulti_agent = true/);
   assert.doesNotMatch(config, /provider-secret/);

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -85,6 +86,39 @@ test("Claude persistent settings preserve unrelated fields, back up secrets loca
   assert.equal((await getClaudeSettings()).credentialConfigured, false);
 }));
 
+test("Claude model defaults and permissions are validated and preserve unrelated settings", () => isolated(async root => {
+  await writeProviders([{ name: "test", baseUrl: "https://example.test/v1", apiKey: "key", model: "claude-base", mode: "ask", level: 1 }]);
+  const file = path.join(root, "claude/settings.json");
+  await writeJsonFile(file, { permissions: { deny: ["Bash"] }, env: { KEEP_ME: "yes", ANTHROPIC_DEFAULT_HAIKU_MODEL: "old" } });
+  await applyClaudeSettings({ provider: "test", defaultHaikuModel: "haiku-new", defaultOpusModel: "opus-new", permissionMode: "acceptEdits" });
+  const config = JSON.parse(await fs.readFile(file, "utf8"));
+  assert.deepEqual(config.permissions, { deny: ["Bash"], defaultMode: "acceptEdits" });
+  assert.equal(config.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, "haiku-new");
+  assert.equal(config.env.ANTHROPIC_DEFAULT_OPUS_MODEL, "opus-new");
+  await assert.rejects(applyClaudeSettings({ provider: "test", permissionMode: "invalid" }), /权限模式/);
+  await assert.rejects(applyClaudeSettings({ provider: "test", defaultSonnetModel: "bad\nvalue" }), /模型名称/);
+}));
+
+test("Web model discovery lists models without model invocations or credentials in response", () => isolated(async () => {
+  const requests = []; let unavailable = false;
+  const upstream = http.createServer((req, res) => { requests.push([req.method, req.url]); res.setHeader("Content-Type", "application/json"); if (unavailable) { res.statusCode = 404; res.end("{}"); } else res.end(JSON.stringify({ data: [{ id: "claude-test" }, { id: "gpt-test" }] })); });
+  await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address();
+  await writeProviders([{ name: "test", baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "secret-key", model: "gpt-test", mode: "ask", level: 1 }]);
+  const server = await startLocalWebServer(); const url = new URL(server.url); const token = url.hash.slice("#access=".length);
+  try {
+    const response = await fetch(url.origin + "/api/providers/models", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Origin: url.origin }, body: JSON.stringify({ name: "test" }) });
+    const body = await response.text(); assert.equal(response.status, 200); assert.doesNotMatch(body, /secret-key/);
+    assert.deepEqual(JSON.parse(body).models.sort(), ["claude-test", "gpt-test"]);
+    assert.ok(requests.length > 0); assert.ok(requests.every(([method, route]) => method === "GET" && route.endsWith("/models")));
+    unavailable = true;
+    const fallback = await fetch(url.origin + "/api/providers/models", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Origin: url.origin }, body: JSON.stringify({ name: "test" }) });
+    const cached = await fallback.json();
+    assert.deepEqual(cached.models.sort(), ["claude-test", "gpt-test"]); assert.ok(cached.lastError);
+    assert.ok(requests.every(([method]) => method === "GET"));
+  } finally { await server.close(); await new Promise(resolve => upstream.close(resolve)); }
+}));
+
 test("history pagination covers older rows, excludes secrets, and escapes spreadsheet formulas", () => isolated(async () => {
   for (let index = 0; index < 310; index++) await writeLog({ category: "provider", action: `event_${index}`, message: "secret prompt", metadata: { apiKey: "sensitive-key", provider: "test" } });
   const first = await queryWebHistory(new URLSearchParams({ limit: "200" }));
@@ -98,7 +132,7 @@ test("history pagination covers older rows, excludes secrets, and escapes spread
 test("new Web mutation routes require local auth and Origin and validate inputs", () => isolated(async () => {
   const server = await startLocalWebServer(); const url = new URL(server.url); const token = url.hash.slice("#access=".length);
   try {
-    for (const route of ["/api/claude", "/api/bots/control", "/api/exposure/ssh-setup", "/api/exposure/deployment", "/api/exposure/call", "/api/exposure/credentials/test/rotate"]) {
+    for (const route of ["/api/claude", "/api/providers/models", "/api/bots/control", "/api/exposure/ssh-setup", "/api/exposure/deployment", "/api/exposure/call", "/api/exposure/credentials/test/rotate"]) {
       assert.equal((await fetch(url.origin + route, { method: "POST" })).status, 401);
       const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Origin: "https://evil.test" };
       assert.equal((await fetch(url.origin + route, { method: "POST", headers, body: "{}" })).status, 403);

@@ -28,6 +28,8 @@ type Cursor = {
   startedAt?: string;
   providerId?: string;
   model?: string;
+  accountId?: string;
+  accountChecked?: boolean;
   totals?: TokenUsage;
   checkpoint?: string;
   unmappedProviderIds?: string[];
@@ -117,7 +119,12 @@ export async function syncCodexAppUsage(options: { force?: boolean } = {}): Prom
 }
 
 async function sync(): Promise<CodexAppUsageStatus> {
-  const config = await getCodexAppUsageConfig();
+  let config = await getCodexAppUsageConfig();
+  const exists = await fs.stat(configPath()).then(() => true).catch(error => { if (error.code === "ENOENT") return false; throw error; });
+  if (!exists) {
+    config = { ...config, enabled: true, enabledAt: new Date().toISOString() };
+    await writeJsonFile(configPath(), config);
+  }
   if (!config.enabled || !config.enabledAt) return { ...config, ...emptyStatus() };
   let state = emptyState(config);
   const events: UsageEvent[] = [];
@@ -130,6 +137,15 @@ async function sync(): Promise<CodexAppUsageStatus> {
       }
     } catch (error) { if (!(error instanceof SyntaxError)) throw error; }
     if (!(await fs.stat(config.codexHome)).isDirectory()) throw new Error("missing_home");
+    const auth = await readJsonFile<unknown>(path.join(config.codexHome, "auth.json"), null).catch(() => null);
+    const tokens = isRecord(auth) && auth.auth_mode === "chatgpt" && isRecord(auth.tokens) ? auth.tokens : null;
+    let accountName: string | undefined;
+    if (tokens && typeof tokens.id_token === "string") {
+      try {
+        const claims: unknown = JSON.parse(Buffer.from(tokens.id_token.split(".")[1] ?? "", "base64url").toString("utf8"));
+        if (isRecord(claims) && validName(claims.email)) accountName = claims.email;
+      } catch { /* No usable display name. */ }
+    }
     const providers = await readProviders();
     const names = new Map<string, Set<string>>();
     for (const provider of providers) {
@@ -142,7 +158,7 @@ async function sync(): Promise<CodexAppUsageStatus> {
     const resolveProvider = (identifier: string): string | undefined => {
       if (Object.hasOwn(config.providerMappings, identifier)) return providers.some(provider => provider.name === config.providerMappings[identifier]) ? config.providerMappings[identifier] : undefined;
       const candidates = names.get(identifier);
-      return candidates?.size === 1 ? [...candidates][0] : undefined;
+      return candidates?.size === 1 ? [...candidates][0] : identifier === "openai" ? "ChatGPT（账户未知）" : identifier;
     };
     const files = await sessionFiles(config.codexHome);
     const keys = new Set(files.map(file => crypto.createHash("sha256").update(file).digest("hex")));
@@ -156,6 +172,7 @@ async function sync(): Promise<CodexAppUsageStatus> {
       const identity = `${stat.dev}:${stat.ino}`;
       let cursor = state.files[key];
       if (!cursor || cursor.identity !== identity || cursor.offset > stat.size
+        || (cursor.desktop === true && !cursor.accountChecked)
         || cursor.unmappedProviderIds?.some(identifier => resolveProvider(identifier))
         || (cursor.offset > 0 && cursor.checkpoint !== await checkpoint(file, cursor.offset))) cursor = { identity, offset: 0 };
       state.files[key] = cursor;
@@ -171,6 +188,8 @@ async function sync(): Promise<CodexAppUsageStatus> {
             cursor.sessionId = validName(payload.id) ? payload.id : validName(payload.session_id) ? payload.session_id : undefined;
             cursor.desktop = payload.originator === "Codex Desktop" && validName(payload.model_provider) && payload.model_provider !== "ai_gateway_selected";
             cursor.providerId = validName(payload.model_provider) ? payload.model_provider : undefined;
+            cursor.accountId = validName(payload.creator_account_id) ? payload.creator_account_id : undefined;
+            cursor.accountChecked = true;
             cursor.startedAt = typeof payload.timestamp === "string" && Number.isFinite(Date.parse(payload.timestamp)) ? payload.timestamp : undefined;
             if (payload.originator === "Codex Desktop" && (!cursor.sessionId || !cursor.providerId || !cursor.startedAt)) {
               cursor.desktop = false;
@@ -192,7 +211,8 @@ async function sync(): Promise<CodexAppUsageStatus> {
             if (!delta || !delta.totalTokens || delta.inputTokens > totals.inputTokens || delta.outputTokens > totals.outputTokens
               || (delta.cacheReadInputTokens ?? 0) > (totals.cacheReadInputTokens ?? 0)) { state.invalidEvents += 1; return; }
             if (!cursor.providerId || cursor.providerId === "ai_gateway_selected" || !cursor.model) { state.invalidEvents += 1; return; }
-            const provider = resolveProvider(cursor.providerId);
+            const accountProvider = cursor.providerId === "openai" && cursor.accountId && tokens && cursor.accountId === tokens.account_id && accountName ? `ChatGPT（${accountName}）` : undefined;
+            const provider = accountProvider ?? resolveProvider(cursor.providerId);
             if (!provider) { cursor.unmappedProviderIds = [...new Set([...(cursor.unmappedProviderIds ?? []), cursor.providerId])]; return; }
             const id = crypto.createHash("sha256").update(JSON.stringify([config.codexHome, cursor.sessionId, event.timestamp, totals])).digest("hex");
             events.push({ id: `codex_app:${id}`, source: "codex_app", tool: "codex", provider, model: cursor.model, ...delta, createdAt: new Date(timestamp).toISOString() });

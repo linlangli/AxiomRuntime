@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import lockfile from "proper-lockfile";
+import { parse } from "smol-toml";
 import type { Provider } from "../types.js";
 import { resolveToolCommand } from "../runner/command-resolver.js";
 import { getRunnerEngine } from "../runner/engine-registry.js";
@@ -31,7 +32,7 @@ const CODEX_PROXY_ENV_KEYS = [
 ] as const;
 
 export type CodexProviderSelection =
-  | { type: "chatgpt" }
+  | { type: "chatgpt"; model?: string }
   | { type: "provider"; provider: Provider; model: string };
 
 export type CodexAppRestartResult = {
@@ -68,9 +69,11 @@ export type SetCodexProviderOptions = {
   codexHome?: string;
   runChatGptLogin?: ChatGptLoginRunner;
   scheduleRestart?: () => Promise<CodexAppRestartResult>;
+  configOptions?: Record<string, unknown>;
 };
 
 export type SetCodexProxyOptions = {
+  configOptions?: Record<string, unknown>;
   codexHome?: string;
   platform?: NodeJS.Platform;
   applyProxyEnvironment?: (proxyUrl: string | null) => Promise<CodexProxyEnvironmentResult>;
@@ -103,13 +106,13 @@ export async function setCodexProvider(
     if (selection.type === "chatgpt") {
       providerName = "ChatGPT";
       providerId = "openai";
-      model = null;
-      await configureChatGpt(configPath, authPath, codexHome, options.runChatGptLogin);
+      model = selection.model ? assertCodexGptModel(selection.model) : null;
+      await configureChatGpt(configPath, authPath, codexHome, options.runChatGptLogin, model, options.configOptions);
     } else {
       providerName = selection.provider.name;
       providerId = providerIdForName(selection.provider.name);
       model = assertCodexGptModel(selection.model);
-      await configureCustomProvider(configPath, authPath, selection.provider, providerId, model);
+      await configureCustomProvider(configPath, authPath, selection.provider, providerId, model, options.configOptions);
     }
   } finally {
     await release();
@@ -142,10 +145,10 @@ export async function setCodexProxy(
     const snapshot = await snapshotFile(configPath);
     const current = snapshot?.content.toString("utf8") ?? "";
     try {
-      if (snapshot || proxyUrl !== null) {
+      if (snapshot || proxyUrl !== null || Object.keys(options.configOptions ?? {}).length) {
         await atomicWriteFile(
           configPath,
-          buildCodexProxyConfig(current, proxyUrl),
+          applyCodexOptions(buildCodexProxyConfig(current, proxyUrl), options.configOptions ?? {}),
           snapshot?.mode ?? 0o600
         );
       }
@@ -161,6 +164,46 @@ export async function setCodexProxy(
 
   const restart = await (options.scheduleRestart ?? scheduleCodexAppRestart)();
   return { proxyUrl, configPath, environment, restart };
+}
+
+export async function setCodexOptions(input: Record<string, unknown>, options: SetCodexProviderOptions = {}): Promise<CodexAppRestartResult> {
+  const codexHome = resolveCodexHome(options.codexHome);
+  const file = path.join(codexHome, "config.toml");
+  await fs.mkdir(codexHome, { recursive: true, mode: 0o700 });
+  const release = await lockfile.lock(file, LOCK_OPTIONS);
+  try {
+    const snapshot = await snapshotFile(file);
+    let current = snapshot?.content.toString("utf8") ?? "";
+    current = applyCodexOptions(current, input);
+    await atomicWriteFile(file, ensureTrailingNewline(current), snapshot?.mode ?? 0o600);
+  } finally { await release(); }
+  return (options.scheduleRestart ?? scheduleCodexAppRestart)();
+}
+
+function applyCodexOptions(current: string, input: Record<string, unknown>): string {
+  const allowed: Record<string, readonly string[]> = {
+    model_reasoning_effort: ["", "minimal", "low", "medium", "high", "xhigh"],
+    sandbox_mode: ["", "read-only", "workspace-write", "danger-full-access"],
+    approval_policy: ["", "on-request", "on-failure", "never"]
+  };
+  const entries = Object.entries(input);
+  if (entries.some(([key, value]) => !allowed[key] || typeof value !== "string" || !allowed[key].includes(value))) throw new Error("Codex 配置项或值无效。");
+  let parsed: Record<string, unknown>;
+  try { parsed = parse(current); } catch { throw new Error("Codex 配置文件格式无效，未修改。"); }
+  if (input.sandbox_mode && Object.hasOwn(parsed, "default_permissions")) throw new Error("Codex default_permissions 与 sandbox_mode 不能同时设置。");
+  for (const [key, raw] of entries) {
+    const pattern = new RegExp(`^\\s*${key}\\s*=`, "m");
+    const top = current.split(/^\s*\[/m, 1)[0] ?? "";
+    if (Object.hasOwn(parsed, key) && (typeof parsed[key] !== "string" || !pattern.test(top))) throw new Error(`无法安全修改 Codex 配置项 ${key}。`);
+    if (raw) current = setTopLevelTomlString(current, key, raw as string);
+    else {
+    const eol = current.includes("\r\n") ? "\r\n" : "\n";
+    const lines = current.split(/\r?\n/); const end = lines.findIndex(line => /^\s*\[/.test(line));
+    current = [...lines.slice(0, end < 0 ? lines.length : end).filter(line => !pattern.test(line)), ...lines.slice(end < 0 ? lines.length : end)].join(eol);
+    }
+  }
+  parse(current);
+  return current;
 }
 
 export function providerIdForName(name: string): string {
@@ -237,10 +280,11 @@ export function buildCodexProviderConfig(
   return `${next.trimEnd()}${eol}${eol}${table}${eol}`;
 }
 
-export function buildCodexChatGptConfig(current: string): string {
+export function buildCodexChatGptConfig(current: string, model?: string | null): string {
   let next = removeStaleProviderAuthCommands(current);
   next = setTopLevelTomlString(next, "cli_auth_credentials_store", "file");
   next = setTopLevelTomlString(next, "model_provider", "openai");
+  if (model) next = setTopLevelTomlString(next, "model", assertCodexGptModel(model));
   return ensureTrailingNewline(next);
 }
 
@@ -379,7 +423,9 @@ async function configureChatGpt(
   configPath: string,
   authPath: string,
   codexHome: string,
-  runner: ChatGptLoginRunner | undefined
+  runner: ChatGptLoginRunner | undefined,
+  model: string | null,
+  configOptions?: Record<string, unknown>
 ): Promise<void> {
   const [configSnapshot, authSnapshot] = await Promise.all([
     snapshotFile(configPath),
@@ -393,7 +439,7 @@ async function configureChatGpt(
     await validateChatGptAuth(authPath);
     await fs.chmod(authPath, 0o600);
     const currentConfig = configSnapshot?.content.toString("utf8") ?? "";
-    await atomicWriteFile(configPath, buildCodexChatGptConfig(currentConfig), configSnapshot?.mode ?? 0o600);
+    await atomicWriteFile(configPath, applyCodexOptions(buildCodexChatGptConfig(currentConfig, model), configOptions ?? {}), configSnapshot?.mode ?? 0o600);
   } catch (error) {
     await Promise.allSettled([
       restoreFile(configPath, configSnapshot),
@@ -408,7 +454,8 @@ async function configureCustomProvider(
   authPath: string,
   provider: Provider,
   providerId: string,
-  model: string
+  model: string,
+  configOptions?: Record<string, unknown>
 ): Promise<void> {
   const [configSnapshot, authSnapshot] = await Promise.all([
     snapshotFile(configPath),
@@ -420,7 +467,7 @@ async function configureCustomProvider(
     await atomicWriteFile(authPath, auth, 0o600);
     await atomicWriteFile(
       configPath,
-      buildCodexProviderConfig(currentConfig, provider, providerId, model),
+      applyCodexOptions(buildCodexProviderConfig(currentConfig, provider, providerId, model), configOptions ?? {}),
       configSnapshot?.mode ?? 0o600
     );
   } catch (error) {

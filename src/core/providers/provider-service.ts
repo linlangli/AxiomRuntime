@@ -295,6 +295,7 @@ export async function deleteProvider(providerName: string): Promise<Provider> {
 type RefreshProviderOptions = {
   verifyCallableModels?: boolean;
   verifyRepresentativeModels?: boolean;
+  preserveCatalogOnFailure?: boolean;
 };
 
 export async function refreshProvider(provider: Provider, options: RefreshProviderOptions = {}): Promise<void> {
@@ -304,7 +305,7 @@ export async function refreshProvider(provider: Provider, options: RefreshProvid
   const canUseVerifiedCatalogFallback = Boolean(
     result.status !== "ok"
     && previous?.models.length
-    && provider.requestProfile?.verifiedProtocols.length
+    && (provider.requestProfile?.verifiedProtocols.length || options.preserveCatalogOnFailure)
   );
   const availableModels = result.status === "ok"
     ? result.models
@@ -339,7 +340,7 @@ export async function refreshProvider(provider: Provider, options: RefreshProvid
       : representativePassed && result.status !== "ok"
         ? `Model catalog unavailable (${result.error ?? "unknown error"}); live verification passed using cached models.`
         : result.status !== "ok" && canUseVerifiedCatalogFallback
-          ? previous?.lastError ?? null
+          ? options.verifyRepresentativeModels ? previous?.lastError ?? null : `Model catalog unavailable (${result.error ?? "unknown error"}); using cached models.`
           : status === "error" && options.verifyCallableModels && !models.length
             ? `No callable models found. ${result.error ?? ""}`.trim()
             : result.error;

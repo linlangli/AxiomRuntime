@@ -26,6 +26,17 @@ async function isolated(run) {
   }
 }
 
+test("reading settings does not create backups; a configuration change creates a prior snapshot", () => isolated(async () => {
+  assert.equal((await getLocalSettings()).backups.length, 0);
+  await getLocalSettings();
+  assert.equal((await getLocalSettings()).backups.length, 0);
+  await applyLocalSettings({ action: "failover", enabled: false });
+  const backups = (await getLocalSettings()).backups;
+  assert.equal(backups.length, 1);
+  await getLocalSettings();
+  assert.equal((await getLocalSettings()).backups.length, 1);
+}));
+
 test("Web settings persist shared Runtime values, reject invalid inputs, and restore a managed snapshot", () => isolated(async root => {
   await applyLocalSettings({ action: "failover", enabled: false });
   assert.equal((await loadRuntimeConfig()).failoverDisabled, true);

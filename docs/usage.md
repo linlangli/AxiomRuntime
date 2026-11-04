@@ -401,9 +401,9 @@ ai set codex usage map openai 我的站    # 将原生 Provider ID 显式归属�
 ai set codex usage off                # 停止采集，保留已有统计
 ```
 
-也可进入 `ai web` →「本地配置 → 工具配置 → Codex App 用量采集」，编辑开关、本机 Codex 目录和 Provider 对应关系。默认目录为 `CODEX_HOME`，未设置时为 `~/.codex`。同名 Provider 和 Runtime 生成的 Provider ID 自动匹配；自定义 ID 或 ChatGPT 登录的 `openai` 无法确定归属时，先选择已有服务商再保存，不会猜测记账。映射后的用量与 Runtime 原有用量合并，模型自动进入该 Provider 的价格设置列表。
+Web 不再提供采集设置区域；采集配置仍可通过上述 CLI 命令管理。未知 Provider ID 按原 ID 归属，无法确认账户的 `openai` 记录标为 `ChatGPT（账户未知）`；已有 CLI 映射仍优先生效。仅采集开启后的桌面会话，独立 CLI、SDK 和云端任务尚不覆盖。会话的 `creator_account_id` 与当前 ChatGPT 凭证账户一致时，新记录可按凭证中的账户名称归属；缺少或不匹配时标为账户未知，已入账记录不改写。
 
-默认关闭，从启用时开始统计真实 Token。刷新面板或执行 `ai status` / `ai set codex usage status` 时增量同步，打开面板后约每 15 秒刷新；不需要重启 Codex App。首次启用前与关闭期间的用量不补录，已有聊天的新用量仍可采集；未知 Provider 在完成映射后补计本次启用以来的相关记录。更换 Codex 目录会重新设置采集起点。关闭采集不会删除已入账数据。
+首次同步时默认开启，从该时刻开始统计真实 Token；已有关闭设置保持关闭。刷新面板或执行 `ai status` / `ai set codex usage status` 时增量同步，打开面板后约每 15 秒刷新；不需要重启 Codex App。首次启用前与关闭期间的用量不补录，已有聊天的新用量仍可采集；已有手动映射仍优先生效。更换 Codex 目录会重新设置采集起点。关闭采集不会删除已入账数据。
 
 采集只读本机 `sessions` 和 `archived_sessions` 的 Codex Desktop 会话记录，不保存提示词、回复、附件或密钥，不修改登录和网络配置。缓存输入属于输入 Token，reasoning 属于输出 Token，均不重复相加；重复事件、文件重读和进程重启不会重复记账。`ai use codex` / `ai proxy codex` 的代理会话及独立 CLI、SDK 会话排除。成本仍由「用量统计」中的 Provider/模型价格估算，ChatGPT 订阅用量的估算不代表额外账单。
 
@@ -651,7 +651,7 @@ ai web
 
 命令启动仅监听 `127.0.0.1` 的临时端口并打开浏览器；终端保持运行，按 `Ctrl+C` 关闭。打开链接含一次运行有效的访问 token；不要把链接发给别人。控制面板可查看 Provider 健康缓存、真实用量趋势、最近日志与会话，添加/编辑/删除或检查 Provider，也可执行与 `ai set codex` 等价的持久配置操作。添加或改动 Provider 地址、API Key 会先进行真实探测，可能产生少量 Token。
 
-Web 控制面的「本地配置」提供「服务配置、模型路由、工具配置、网络代理、消息接入、配置维护」六个二级分类。可以在浏览器编辑 Provider、自动切换、Codex 持久配置、Runtime/Provider 出站代理和具名 Telegram Bot；提交前会展示变更预览，受管配置写入前自动创建本机快照，失败由 core 保留旧配置。完整记忆模块尚未实现，暂不展示「记忆设置」入口；已有 embedding 前置配置仍可通过 `ai memory embedding` 管理，不影响 Telegram 已实现的显式记忆与关键词检索。Claude Code 用户连接可在「工具配置」持久保存，其他设置保留，原文件先在同目录备份；退出并重新启动 Claude Code 后生效。Telegram 配置支持启动、停止、重启、删除配置（保留会话和日志），Bot 独立于 Web 运行。Codex App/CLI 在同一 `CODEX_HOME` 下共享用户级配置；旧聊天不会迁移，请新建聊天。配置维护可恢复最近 20 个受限权限快照，但不包含用量账本、数据库、Codex 用户配置或 Codex App 采集设置与游标。
+Web 控制面的「本地配置」提供「服务配置、模型路由、工具配置、网络代理、消息接入、配置维护」六个二级分类。可以在浏览器编辑 Provider、自动切换、Codex 持久配置、Runtime/Provider 出站代理和具名 Telegram Bot；提交前会展示变更预览，受管配置写入前自动创建本机快照，失败由 core 保留旧配置。完整记忆模块尚未实现，暂不展示「记忆设置」入口；已有 embedding 前置配置仍可通过 `ai memory embedding` 管理，不影响 Telegram 已实现的显式记忆与关键词检索。Claude Code 用户连接可在「工具配置」持久保存，其他设置保留，原文件先在同目录备份；退出并重新启动 Claude Code 后生效。「工具配置」并排显示 Claude Code 与 Codex 配置；选择 Provider 时自动只读探测模型目录，不调用模型，失败时保留缓存。Claude Code 可编辑会话默认模型和权限模式（未设置时显示为 `default`）；Haiku/Sonnet/Opus 分别覆盖对应模型别名，不是额外的会话默认模型。Codex 可统一预览并修改 `model_reasoning_effort`、`sandbox_mode` 和 `approval_policy`，仅修改这些参数时不需要重新登录；ChatGPT 登录模式显示本机文件凭证可读取的邮箱，无法读取时显示未知，不显示 token。Codex 参数受项目配置、命令行参数及组织限制影响。Telegram 配置支持启动、停止、重启、删除配置（保留会话和日志），Bot 独立于 Web 运行。Codex App/CLI 在同一 `CODEX_HOME` 下共享用户级配置；旧聊天不会迁移，请新建聊天。配置维护不会定时备份；Web 受管配置保存前、恢复前或手动创建时生成快照（校验失败的保存尝试也可能留下快照）。配置维护可恢复最近 20 个受限权限快照，但不包含用量账本、数据库、Codex 用户配置或 Codex App 采集设置与游标。
 
 「对外服务」只有一组步骤导航：「开放能力 → 调用凭证 → 启动与连接 → 验证与调用」。侧栏显示各步的已保存状态与摘要，可随时返回修改；首次进入根据已保存能力、有效凭证和 API/隧道状态定位首个未完成步骤，状态刷新不会切走当前页面，切步保留表单草稿。主操作完成后继续下一步，技术参数和维护操作按需展开。页面按部署方式自动生成 API 上游，为每个调用方创建独立凭证并可撤销；凭证只在创建时显示一次，落盘只保留摘要。普通保存不启动服务、不连接 SSH、不修改服务器；本机管理页面始终不对外开放。
 
@@ -813,7 +813,7 @@ Node.js 版本低于 22.19.0。升级后重新安装，别忽略警告。
 按顺序查：`ai telegram status --bot <名字>` → `ai telegram logs --bot <名字>` → 确认 `allowedUserIds` 里有你的 ID → 确认能连上 `api.telegram.org`（可能需要 `proxyUrl`）。
 
 **`ai status` 里的 token 统计不全**
-Runtime 代理用量从安装了支持统一代理的版本之后的新请求开始生效；Codex App 用量从显式开启采集后开始生效。首次开启前和关闭期间的历史不会补录，避免把 Token 归错服务商或重复计数。
+Runtime 代理用量从安装了支持统一代理的版本之后的新请求开始生效；Codex App 用量从首次同步默认开启或显式开启采集后开始生效。首次开启前和关闭期间的历史不会补录，避免把 Token 归错服务商或重复计数。
 
 **用量按什么聚合**
 按服务商的精确名称。同一服务商下不同模型会合并展示，但每条事件仍保留实际模型。不同服务商名称不合并。

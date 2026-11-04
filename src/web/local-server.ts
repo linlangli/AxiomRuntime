@@ -219,14 +219,25 @@ async function handleApi(request: http.IncomingMessage, response: http.ServerRes
     const body = await readBody(request);
     if (!isRecord(body) || typeof body.mode !== "string") throw new WebInputError("Invalid Codex action.");
     let action: CodexWebAction;
+    if (body.configOptions !== undefined && !isRecord(body.configOptions)) throw new WebInputError("Invalid Codex options.");
+    const configOptions = isRecord(body.configOptions) ? body.configOptions : undefined;
     if (body.mode === "provider" && typeof body.providerName === "string") {
-      action = { mode: "provider", providerName: body.providerName, ...(typeof body.model === "string" ? { model: body.model } : {}) };
+      action = { mode: "provider", providerName: body.providerName, configOptions, ...(typeof body.model === "string" ? { model: body.model } : {}) };
     } else if (body.mode === "proxy" && typeof body.value === "string") {
-      action = { mode: "proxy", value: body.value };
+      action = { mode: "proxy", value: body.value, configOptions };
+    } else if (body.mode === "options" && isRecord(body.values)) {
+      action = { mode: "options", values: body.values };
     } else if (body.mode === "chatgpt") {
-      action = { mode: "chatgpt" };
+      action = { mode: "chatgpt", configOptions, ...(typeof body.model === "string" ? { model: body.model } : {}) };
     } else throw new WebInputError("Invalid Codex action.");
     sendJson(response, 200, await applyCodexWebAction(action));
+    return;
+  }
+  if (request.method === "POST" && pathname === "/api/providers/models") {
+    const body = await readBody(request);
+    if (!isRecord(body) || typeof body.name !== "string") throw new WebInputError("Provider name is required.");
+    const status = await getProviderStatus(body.name, { discover: true });
+    sendJson(response, 200, { name: status.name, models: status.models, health: status.health, lastError: status.lastError });
     return;
   }
   if (request.method === "POST" && pathname === "/api/providers/refresh") {

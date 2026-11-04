@@ -84,19 +84,41 @@ test("first observed totals use last usage, exclude inherited pre-session histor
   assert.equal(status.invalidEvents, 1);
 }));
 
-test("unmapped Provider IDs remain visible and replay once after explicit mapping", () => isolated(async ({ codexHome, time }) => {
+test("unknown Provider IDs are recorded without manual mapping", () => isolated(async ({ codexHome, time }) => {
   await session(codexHome, [metadata(time, "external-id"), context(), usage(time, 10, tokens(80, 20)),
     context("gpt-other", "first"), usage(time, 20, tokens(100, 30))]);
-  assert.deepEqual((await sync()).unmappedProviderIds, ["external-id"]);
-  assert.deepEqual((await sync()).unmappedProviderIds, ["external-id"]);
-  assert.equal((await readUsage()).events.length, 1);
-  await configureCodexAppUsage({ enabled: true, providerMappings: { "external-id": "Acme West" } });
   assert.deepEqual((await sync()).unmappedProviderIds, []);
-  assert.equal((await readUsage()).events.length, 2);
-  assert.equal((await readUsage()).events.find(event => event.provider === "Acme West").totalTokens, 100);
-  await assert.rejects(configureCodexAppUsage({ enabled: true, providerMappings: { external: "missing" } }), /已配置/);
-  await assert.rejects(configureCodexAppUsage({ enabled: true, providerMappings: { ai_gateway_selected: "first" } }), /Runtime/);
+  await sync();
+  assert.deepEqual((await readUsage()).events.map(event => [event.provider, event.totalTokens]), [["external-id", 100], ["first", 30]]);
 }));
+
+test("matches session account to current ChatGPT credential without guessing other accounts", () => isolated(async ({ codexHome, time }) => {
+  const token = `x.${Buffer.from(JSON.stringify({ email: "user@example.test" })).toString("base64url")}.x`;
+  await fs.writeFile(path.join(codexHome, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { account_id: "account-1", id_token: token } }));
+  await session(codexHome, [metadata(time, "openai", { id: "known", creator_account_id: "account-1" }), context(), usage(time, 10, tokens(10, 5))], "known.jsonl");
+  await session(codexHome, [metadata(time, "openai", { id: "unknown" }), context(), usage(time, 10, tokens(10, 5))], "unknown.jsonl");
+  await sync();
+  assert.deepEqual((await readUsage()).events.map(event => event.provider).sort(), ["ChatGPT（user@example.test）", "ChatGPT（账户未知）"].sort());
+}));
+
+test("first sync enables collection and persists its starting point", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-auto-usage-"));
+  const oldRuntime = process.env.AI_GATEWAY_HOME, oldCodex = process.env.CODEX_HOME;
+  process.env.AI_GATEWAY_HOME = root; process.env.CODEX_HOME = path.join(root, "codex");
+  try {
+    await fs.mkdir(process.env.CODEX_HOME);
+    const first = await sync();
+    assert.equal(first.enabled, true);
+    assert.ok(first.enabledAt);
+    assert.equal((await sync()).enabledAt, first.enabledAt);
+    await configureCodexAppUsage({ enabled: false });
+    assert.equal((await sync()).enabled, false);
+  } finally {
+    if (oldRuntime === undefined) delete process.env.AI_GATEWAY_HOME; else process.env.AI_GATEWAY_HOME = oldRuntime;
+    if (oldCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodex;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("Runtime proxy sessions, standalone CLI and SDK sessions are excluded", () => isolated(async ({ codexHome, time }) => {
   for (const [name, provider, extra] of [["proxy", "ai_gateway_selected", {}], ["cli", "first", { originator: "codex_cli_rs", source: "cli" }], ["sdk", "first", { originator: "codex_sdk_ts", source: "exec" }]]) {
