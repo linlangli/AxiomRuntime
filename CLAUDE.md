@@ -5,10 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Development Commands
 
 ```bash
-npm run build        # Clean + compile TypeScript + chmod executable
+npm run build        # Compile TypeScript, bundle Web console, set CLI permissions
 npm test             # Build then run tests (Node.js built-in test runner)
 npm run dev          # Run CLI with source maps
 npm link             # Install globally as `ai` command
+npm run link         # Build all assets, then link the source checkout
+npm run smoke:package # Isolated package install, authenticated API and Web asset smoke
 ```
 
 Single test file: `npm run build && node --test test/core.test.js`
@@ -31,6 +33,8 @@ src/
 ### Key Principle: Surfaces are Adapters
 
 CLI, Telegram, and future surfaces call stable core APIs. They must not implement provider routing, memory policy, or tool authorization directly.
+
+Provider credentials support explicit OS keyring migration through `SecretStorePort`; snapshots and shared writes must preserve an active keyring policy and fail closed on unavailable credentials. Only explicit rollback exports plaintext; memory and native CLI auth files are outside this migration. Usage/session history can explicitly migrate to one authoritative SQLite backend; never dual-write or silently fall back to stale JSON. Use SQLite backup/restore and stop writers during storage migrations. Request logs and usage share a request `traceId`, `sessionId`, and parent `executionId`; preserve unknown values and label legacy session attribution.
 
 ### Core Modules
 

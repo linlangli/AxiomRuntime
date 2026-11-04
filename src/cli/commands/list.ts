@@ -23,6 +23,7 @@ export async function runListCommand(): Promise<void> {
     console.log(`  API Key   ${maskSecret(provider.apiKey)}`);
     console.log(`  Mode      ${provider.mode}`);
     console.log(`  Model     ${provider.model || "(none)"}`);
+    console.log(`  Proxy     ${provider.proxyUrl ?? "(runtime default)"}`);
     console.log(`  Probe     ${describeProviderRequestProfile(provider)}`);
 
     if (index < providers.length - 1) {

@@ -38,6 +38,7 @@ export function printProviderStatuses(
     printToolStatus("Codex ", status.codex);
     console.log(`  Config   ${status.baseUrl}`);
     console.log(`  API Key  ${maskSecret(status.apiKey)}`);
+    console.log(`  Proxy    ${status.proxyUrl ?? "(runtime default)"}`);
     console.log(`  Models   ${status.models.length}`);
     console.log(`  Probe    ${describeProviderRequestProfile(status)}`);
     console.log(`  Usage    ${status.weeklyTokens} weekly token(s), ${status.usageShare}% share`);

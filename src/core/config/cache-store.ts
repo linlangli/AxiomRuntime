@@ -1,12 +1,13 @@
 import { getCachePath } from "./paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
+import { loadRuntimeConfig } from "./runtime-config.js";
 import type { CacheFile, CliToolType, HealthStatus, ProviderCache, ProviderToolCheck } from "../types.js";
 
 const EMPTY_CACHE: CacheFile = { providers: {} };
 const PROVIDER_CIRCUIT_FAILURE_THRESHOLD = 3;
 const PROVIDER_CIRCUIT_OPEN_MS = 10 * 60 * 1000;
 const DEFAULT_HEALTH_SCORE = 50;
-const HEALTH_SCORE_SUCCESS_STEP = 25;
+const MAX_HEALTH_SCORE = 100;
 const HEALTH_SCORE_FAILURE_STEP = 35;
 
 export async function readCache(): Promise<CacheFile> {
@@ -44,6 +45,7 @@ export async function recordProviderRuntimeSuccess(providerName: string): Promis
 }
 
 export async function recordProviderRuntimeFailure(providerName: string, error: unknown): Promise<ProviderCache> {
+  const { failoverDisabled } = await loadRuntimeConfig();
   const checkedAt = new Date().toISOString();
   const lastError = summarizeHealthError(error);
   let updated: ProviderCache | null = null;
@@ -51,7 +53,7 @@ export async function recordProviderRuntimeFailure(providerName: string, error: 
     const next = normalizeCache(cache);
     const previous = next.providers[providerName] ? normalizeProviderCache(next.providers[providerName]) : undefined;
     const consecutiveFailures = (previous?.consecutiveFailures ?? 0) + 1;
-    const circuitOpenUntil = consecutiveFailures >= PROVIDER_CIRCUIT_FAILURE_THRESHOLD
+    const circuitOpenUntil = !failoverDisabled && consecutiveFailures >= PROVIDER_CIRCUIT_FAILURE_THRESHOLD
       ? new Date(Date.now() + PROVIDER_CIRCUIT_OPEN_MS).toISOString()
       : null;
     updated = {
@@ -138,12 +140,14 @@ function applyProviderHealth(previous: ProviderCache | undefined, next: Provider
   const previousScore = normalizedPrevious?.healthScore ?? DEFAULT_HEALTH_SCORE;
 
   if (normalizedNext.status === "ok") {
+    // 一次真实成功比历史累计更有说服力：直接回满分，否则被误判扣出来的坑（失败 -35、成功 +25）
+    // 永远填不平，healthScore 会长期停在低位，作为诊断信号不可信。
     return {
       ...normalizedNext,
       consecutiveFailures: 0,
       lastFailureAt: null,
       circuitOpenUntil: null,
-      healthScore: clampHealthScore(previousScore + HEALTH_SCORE_SUCCESS_STEP)
+      healthScore: MAX_HEALTH_SCORE
     };
   }
 

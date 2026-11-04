@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { CliToolType, Provider } from "../../core/types.js";
+import { loadRuntimeConfig } from "../../core/config/runtime-config.js";
+import { applyProxyToEnv, resolveProviderProxy } from "../../core/network/proxy.js";
 import { resolveExactProviderForTool, resolveProviderForTool } from "../../core/runner/fallback.js";
 import { buildRunnerEnv, cleanupTemporaryFiles, getToolBaseUrl, writeTemporaryClaudeSettings } from "../../core/runner/tool-runner.js";
 import { resolveClaudePermissionMode, type ClaudePermissionResolution } from "../../core/runner/claude-permission-policy.js";
@@ -50,10 +52,15 @@ export async function prepareEngineRuntime(
 
   try {
     const routedProvider = { ...effectiveProvider, baseUrl: usageProxy.baseUrl };
-    const env = {
-      ...buildRunnerEnv(tool, routedProvider, model),
-      AI_GATEWAY_SOURCE: "telegram"
-    };
+    const runtimeConfig = await loadRuntimeConfig();
+    // Telegram 子进程此前从不继承代理 env；现在与 CLI 路径对齐（Provider 级优先、全局默认兜底）。
+    const env = applyProxyToEnv(
+      {
+        ...buildRunnerEnv(tool, routedProvider, model),
+        AI_GATEWAY_SOURCE: "telegram"
+      },
+      resolveProviderProxy(effectiveProvider, runtimeConfig.proxyUrl)
+    );
     const claudeSettingsPath = tool === "claude"
       ? writeTemporaryClaudeSettings(routedProvider, {
           permissionMode: permissionMode === "readOnly"

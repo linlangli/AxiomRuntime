@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 
+export function readGitHubRepository(remoteUrl) {
+  return /^(?:git@github\.com:|https:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(remoteUrl)?.[1] ?? null;
+}
+
 export function nextVersion(version, bump) {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
   if (!match) throw new Error(`不支持的版本号：${version}`);

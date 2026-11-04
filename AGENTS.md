@@ -77,4 +77,20 @@ Use `rg` and direct file reads for literal text, documentation, configuration va
 
 ## Delivery Standard
 
+### Local Web Control Plane
+
+- Provider storage supports legacy plaintext arrays and version 1 keyring documents. Hydrate credentials only through shared Provider APIs. Once keyring storage is active, writes and snapshot restores must not downgrade it; locked or missing credentials fail closed. Immutable key versions remain available for snapshot recovery; only an explicit rollback may export plaintext. Memory and native CLI authentication files are outside this migration.
+- Usage/session storage may explicitly migrate to `history.sqlite`. Only the selected backend is authoritative; never dual-write JSON or silently read stale JSON when an active database is missing or corrupt. Use the mature SQLite backup API, preserve current state before restore, and require stopped writers for migration, restore, or rollback. Do not reset service admission counters or touch memory databases.
+- Model requests inherit `sessionId` and parent `executionId` but own a fresh `traceId`. Record terminal outcomes and observed usage on that request context. Never infer an actual Provider or token count from an initial selection or a missing event. New reports use exact session attribution; legacy estimates must be labeled.
+
+- Web execution must call the existing Runtime API and never introduce a second model proxy or usage ledger. Playground credentials, SSH passwords, prompts, and image bodies must not enter configuration snapshots or operational logs.
+- Credential Provider/model scopes apply before dispatch and to model catalogs. Request admission counters are durable authorization state, not usage metrics; rotation and configuration restore must not reset them. Token or monetary budgets are not implied by request quotas.
+- Remote deployments require a concrete preview and explicit execution, strict host verification, fixed loopback upstreams, configuration ownership checks, a remote lock, and Nginx validation with configuration rollback. Do not claim package or certificate rollback.
+- SSH host-key scans are untrusted candidates until the human verifies them independently. Never silently replace conflicting known_hosts entries. Private keys stay local; password-based public-key bootstrap uses a mature SSH client with pinned host verification.
+- Windows task scheduling requires a logged-in interactive user. Mock command tests do not replace platform acceptance; maintain the explicit Windows validation gate until a real-machine smoke test passes.
+
+- Local Web settings must call shared core configuration APIs and retain loopback Host, Origin, and token checks. Never expose the management adapter through generated reverse-proxy configuration.
+- Service exposure is configured in `service-exposure.json`; server authentication must enforce the intersection of global enabled capabilities and a caller credential's capabilities before dispatch. Credential values are shown only at creation and persisted as SHA-256 digests.
+- Managed configuration snapshots contain secrets and must use restricted file permissions. Restore operations must preserve the current service credential set so revoked credentials are never reactivated by restoring an older snapshot. Codex user configuration, usage ledgers, and databases are outside snapshot scope.
+
 A capability is not complete until its stable interface, policy boundary, failure behavior, observability, tests, migration path, English normative documentation, and Chinese user documentation are defined. Feature flags may defer activation; they may not disguise an incomplete implementation as complete.

@@ -1,23 +1,25 @@
 {
   "name": "@offerpilot/axiomruntime",
-  "version": "0.0.6",
-  "description": "CLI-first local AI Runtime for isolated multi-provider Claude Code and Codex execution with Telegram remote control.",
-  "homepage": "https://gitlab.com/linlangli/agent-router",
+  "version": "0.0.7",
+  "description": "CLI-first foundation for an enterprise AI Runtime with provider routing and governed execution.",
+  "homepage": "https://github.com/linlangli/AxiomRuntime",
   "repository": {
     "type": "git",
-    "url": "git+https://gitlab.com/linlangli/agent-router.git"
+    "url": "git+https://github.com/linlangli/AxiomRuntime.git"
   },
   "bugs": {
-    "url": "https://gitlab.com/linlangli/agent-router/-/issues"
+    "url": "https://github.com/linlangli/AxiomRuntime/issues"
   },
   "type": "module",
   "bin": {
     "ai": "./dist/cli/index.js"
   },
   "scripts": {
-    "clean": "rm -rf dist",
-    "build": "npm run clean && tsc && chmod +x dist/cli/index.js",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "tsc && npm run build:web:console && node -e \"require('node:fs').chmodSync('dist/cli/index.js', 0o755)\"",
     "link": "npm run build && npm link",
+    "build:web:console": "npm --prefix web run build:console",
+    "build:web:portal": "npm --prefix web run build:portal",
     "dev": "node --enable-source-maps dist/cli/index.js",
     "server": "node --enable-source-maps dist/server/index.js",
     "telegram:service": "node --enable-source-maps dist/telegram/supervisor.js",
@@ -25,6 +27,7 @@
     "release": "node scripts/release.js",
     "release:current": "node scripts/release.js --npm",
     "release:check": "npm test && npm pack --dry-run",
+    "smoke:package": "npm run build && node scripts/smoke-package.js",
     "homebrew:update": "node scripts/update-homebrew-formula.js --write",
     "homebrew:check": "node scripts/update-homebrew-formula.js",
     "homebrew:publish": "node scripts/release.js --homebrew",
@@ -46,14 +49,18 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.0",
     "@types/proper-lockfile": "^4.1.4",
+    "@types/ssh2": "^1.15.6",
     "typescript": "^5.8.0"
   },
   "dependencies": {
+    "@napi-rs/keyring": "2.1.2",
     "better-sqlite3": "^13.0.2",
     "gpt-tokenizer": "^3.4.0",
     "grammy": "^1.44.0",
     "https-proxy-agent": "^9.1.0",
+    "image-size": "2.0.4",
     "proper-lockfile": "^4.1.2",
-    "undici": "^8.10.0"
+    "ssh2": "^1.17.0",
+    "undici": "8.12.3"
   }
 }

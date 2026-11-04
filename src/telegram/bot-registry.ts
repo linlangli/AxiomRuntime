@@ -104,7 +104,7 @@ function getLegacyMigrationMarkerPath(): string {
   return path.join(getConfigRoot(), LEGACY_MIGRATION_MARKER);
 }
 
-async function markLegacyMigrationComplete(): Promise<void> {
+export async function markLegacyMigrationComplete(): Promise<void> {
   await fsPromises.mkdir(getConfigRoot(), { recursive: true });
   await fsPromises.writeFile(getLegacyMigrationMarkerPath(), "completed\n", { mode: 0o600 });
 }

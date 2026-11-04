@@ -38,7 +38,7 @@ async function main(): Promise<void> {
     if (restart) {
       const entry = process.argv[1];
       if (!entry) throw new Error("Cannot restart Telegram bot: entry path is unavailable.");
-      const replacement = fork(entry, [], {
+      const replacement = fork(entry, process.argv.slice(2), {
         detached: true,
         stdio: "ignore",
         env: { ...process.env, AI_GATEWAY_SOURCE: "telegram-restart" }

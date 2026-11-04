@@ -1,7 +1,9 @@
 import { readUsage } from "../config/usage-store.js";
 import type { UsageEvent } from "../types.js";
+import { syncCodexAppUsage } from "./codex-app-usage.js";
 
 export async function getWeeklyTokenMap(): Promise<Map<string, number>> {
+  await syncCodexAppUsage();
   const usage = await readUsage();
   const start = getWeekStart(new Date());
   const map = new Map<string, number>();

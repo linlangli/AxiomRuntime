@@ -3,6 +3,7 @@ import { runAddCommand } from "./commands/add.js";
 import { runCheckCommand } from "./commands/check.js";
 import { runContextCommand } from "./commands/context.js";
 import { runDoctorCommand } from "./commands/doctor.js";
+import { runFailoverCommand } from "./commands/failover.js";
 import { runProviderDeleteCommand, runProviderEditCommand } from "./commands/edit.js";
 import { runHelpCommand } from "./commands/help.js";
 import { runImageCommand } from "./commands/image.js";
@@ -19,6 +20,10 @@ import { runSetupCommand } from "./commands/setup.js";
 import { runStatusCommand } from "./commands/status.js";
 import { runTelegramCommand } from "./commands/telegram.js";
 import { runVersionCommand } from "./commands/version.js";
+import { runWebCommand } from "./commands/web.js";
+import { runServerCommand } from "./commands/server.js";
+import { runSecretsCommand } from "./commands/secrets.js";
+import { runHistoryCommand } from "./commands/history.js";
 import { writeLog } from "../core/logs/log-service.js";
 import { promptSelect } from "./prompts/prompt.js";
 import { getCliCommand, registerCliCommand } from "./registry.js";
@@ -86,8 +91,8 @@ export function sanitizeArgs(command: string | undefined, args: string[]): strin
   if (command === "telegram") {
     return maskTelegramConfigSecretArgs(args);
   }
-  if (command === "image" && args.length > 1) {
-    return [args[0]!, `[prompt ${args.slice(1).join(" ").length} chars]`];
+  if (command === "image" && args.length) {
+    return ["[image arguments redacted]"];
   }
   return args.map((arg, index) => {
     const previous = args[index - 1]?.toLowerCase();
@@ -142,12 +147,11 @@ function maskMemoryEmbeddingSetArgs(args: string[]): string[] {
 }
 
 function maskSecretArg(value: string): string {
-  if (value.length <= 8) return "****";
-  return `${value.slice(0, 4)}****${value.slice(-4)}`;
+  return value ? "[redacted]" : "";
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["setup", "use", "image", "set", "proxy", "add", "memory", "telegram", "models", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["setup", "use", "image", "set", "proxy", "failover", "add", "memory", "telegram", "models", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -190,6 +194,9 @@ async function runProviderCommand(args: string[]): Promise<void> {
 }
 
 function registerBuiltInCommands(): void {
+  registerCliCommand({ name: "secrets", description: "Manage Provider OS credentials", interactive: false, run: runSecretsCommand });
+  registerCliCommand({ name: "history", description: "Manage usage/session history storage", interactive: false, run: runHistoryCommand });
+  registerCliCommand({ name: "server", description: "Manage background Runtime API", interactive: false, run: runServerCommand });
   registerCliCommand({
     name: "version",
     aliases: ["--version", "-v", "-V"],
@@ -290,17 +297,20 @@ function registerBuiltInCommands(): void {
     run: (args) => runProxyCommand(args)
   });
   registerCliCommand({
+    name: "failover",
+    description: "toggle provider auto-failover",
+    run: (args) => runFailoverCommand(args)
+  });
+  registerCliCommand({
     name: "last",
     description: "last",
     run: () => runLastCommand()
   });
   registerCliCommand({
     name: "web",
-    description: "web",
+    description: "Open the local Web control panel",
     interactive: false,
-    run: async () => {
-      console.log("`ai web` is planned but not implemented in this foundation build.");
-    }
+    run: runWebCommand
   });
 }
 

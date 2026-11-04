@@ -11,6 +11,8 @@ import { readCache } from "../config/cache-store.js";
 import { writeJsonFile } from "../config/json-store.js";
 import { appendUsageEvent } from "../config/usage-store.js";
 import { readProviders } from "../config/providers-store.js";
+import { parseProviderDocument } from "../config/provider-secrets.js";
+import { readHistoryDatabase } from "../config/history-database.js";
 import { checkProvider, runDeepCheck } from "../models/model-discovery.js";
 import { writeLog } from "../logs/log-service.js";
 import { getKnownCandidates, resolveToolCommand } from "../runner/command-resolver.js";
@@ -162,12 +164,23 @@ async function checkConfigRoot(items: DoctorItem[], fix: boolean): Promise<void>
 }
 
 async function checkRuntimeFiles(items: DoctorItem[], fix: boolean): Promise<void> {
+  let sqlite = false;
+  try {
+    const integrity = await readHistoryDatabase(database => database ? database.pragma("quick_check", { simple: true }) : null);
+    if (integrity !== null) {
+      sqlite = true;
+      items.push({ group: "History", status: integrity === "ok" ? "ok" : "error", message: `history.sqlite integrity: ${String(integrity)}.`, ...(integrity === "ok" ? {} : { suggestion: "Stop Runtime writers and restore a verified history backup; automatic reset is disabled." }) });
+    }
+  } catch {
+    sqlite = true;
+    items.push({ group: "History", status: "error", message: "history.sqlite could not be validated; JSON fallback and automatic reset are disabled.", suggestion: "Stop Runtime writers and restore a verified history backup." });
+  }
   const specs: JsonFileSpec[] = [
     {
       group: "Providers",
       filePath: getProvidersPath(),
       defaultValue: [],
-      validate: Array.isArray,
+      validate: value => { try { parseProviderDocument(value); return true; } catch { return false; } },
       repairInvalid: false
     },
     {
@@ -194,6 +207,7 @@ async function checkRuntimeFiles(items: DoctorItem[], fix: boolean): Promise<voi
   ];
 
   for (const spec of specs) {
+    if (sqlite && (spec.group === "Usage" || spec.group === "Sessions")) continue;
     await checkJsonFile(spec, items, fix);
   }
 }

@@ -21,12 +21,13 @@ export async function runAddCommand(args: string[], prompts: AddCommandPrompts =
   const existingProviders = interactive ? await listProviders() : [];
   const level = interactive
     ? await askSelect(
-        "Select priority (0 excludes automatic fallback)",
+        "Select priority level (0 excludes automatic fallback)",
         getProviderPriorityOptions(existingProviders).map(({ level: value, occupiedBy }) => ({
           label: value === 0
-            ? "0 - excluded from automatic fallback"
-            : occupiedBy ? `${value} - replace ${occupiedBy}` : `${value} - lowest automatic priority`,
-          value
+            ? "excluded from automatic fallback"
+            : occupiedBy ? `replace ${occupiedBy}` : "lowest automatic priority",
+          value,
+          key: String(value)
         }))
       )
     : undefined;

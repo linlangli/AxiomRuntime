@@ -31,8 +31,8 @@ export async function generateSessionReport(sessionId: string): Promise<ReportRe
     readCache(),
     readUsage()
   ]);
-  const provider = providers.find((item) => item.name === session.provider) ?? null;
-  const providerCache = cache.providers[session.provider] ?? null;
+  const provider = providers.find((item) => item.name === (session.actualProvider ?? session.provider)) ?? null;
+  const providerCache = cache.providers[session.actualProvider ?? session.provider] ?? null;
   const tokenSummary = summarizeSessionUsage(session, usage.events);
   const projectContext = await buildProjectContext(session);
   const content = renderReport({
@@ -62,6 +62,7 @@ function summarizeSessionUsage(session: SessionRecord, events: UsageEvent[]): To
   const startedAt = new Date(session.startedAt).getTime();
   const endedAt = session.endedAt ? new Date(session.endedAt).getTime() : Date.now();
   const matched = events.filter((event) => {
+    if (session.traceId || event.sessionId) return event.sessionId === session.id;
     const createdAt = new Date(event.createdAt).getTime();
     return event.provider === session.provider
       && event.tool === session.tool
@@ -121,6 +122,9 @@ function renderReport(input: {
     `- Tool: ${input.session.tool}`,
     `- Provider: ${input.session.provider}`,
     `- Model: ${input.session.model}`,
+    `- Last successful Provider: ${input.session.actualProvider ?? "(not recorded)"}`,
+    `- Last successful model: ${input.session.actualModel ?? "(not recorded)"}`,
+    `- Native conversation ID: ${input.session.nativeSessionId ?? "(not recorded; settings-only restart)"}`,
     `- Provider priority level: ${providerLevel}`,
     `- Provider default model: ${defaultModel}`,
     `- Permission mode: ${input.session.mode}`,
@@ -135,6 +139,7 @@ function renderReport(input: {
     "## Token Usage",
     "",
     `- Usage events matched to this session: ${input.tokenSummary.eventCount}`,
+    `- Attribution: ${input.session.traceId ? "exact sessionId" : "legacy Provider/model/time-window approximation; concurrent sessions may overlap"}`,
     `- Input tokens: ${input.tokenSummary.inputTokens}`,
     `- Output tokens: ${input.tokenSummary.outputTokens}`,
     `- Total tokens: ${input.tokenSummary.totalTokens}`,

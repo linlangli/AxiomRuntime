@@ -8,6 +8,9 @@ export type StartSessionInput = {
   model: string;
   projectPath: string;
   fallbackFrom?: string | null;
+  traceId?: string;
+  nativeSessionId?: string;
+  resumedFrom?: string;
 };
 
 export async function startSession(input: StartSessionInput): Promise<SessionRecord> {
@@ -23,10 +26,17 @@ export async function startSession(input: StartSessionInput): Promise<SessionRec
     endedAt: null,
     status: "running",
     exitCode: null,
-    fallbackFrom: input.fallbackFrom ?? null
+    fallbackFrom: input.fallbackFrom ?? null,
+    ...(input.traceId ? { traceId: input.traceId } : {}),
+    ...(input.nativeSessionId ? { nativeSessionId: input.nativeSessionId } : {}),
+    ...(input.resumedFrom ? { resumedFrom: input.resumedFrom } : {})
   };
   await addSession(session);
   return session;
+}
+
+export async function recordSessionProvider(sessionId: string, request: { traceId: string; provider: string; model: string }): Promise<void> {
+  await updateSession(sessionId, { actualProvider: request.provider, actualModel: request.model, lastRequestId: request.traceId });
 }
 
 export async function finishSession(sessionId: string, exitCode: number): Promise<void> {

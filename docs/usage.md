@@ -5,9 +5,11 @@
 - 想了解内部设计 → [技术架构](architecture.md)
 - 想了解产品规划 → [产品需求文档](prd.md)
 
-本文只写**当前版本真正可用**的功能。规划中的能力集中放在最后一节「还没有的功能」，不会混在正文里。
+本文只写**当前源码真正可用**的功能。规划中的能力集中放在最后一节「还没有的功能」，不会混在正文里。`develop` 文档可能包含尚未发布的增量；npm 安装请按对应 release tag 核对，不能仅凭相同的 `package.json` 版本号判断功能一致。
 
 ---
+
+> `0.0.7` 包含本机 Web 控制台、图片参考图与多图生成等能力；系统凭据库和 Windows 服务仍需目标环境验收。自动记忆与企业治理尚未实现。
 
 ## 1. 这是什么
 
@@ -64,12 +66,16 @@ ai --version
 ### Homebrew 安装
 
 ```bash
-brew tap linlangli/axiom https://gitlab.com/linlangli/axiom.git
+brew tap linlangli/axiom https://github.com/linlangli/AxiomRuntime.git
 brew install linlangli/axiom/axiomruntime
 ai --version
 ```
 
-Homebrew 用的是同版本的 npm tarball，校验 SHA256 后装到隔离目录，并固定使用 Homebrew 的 `node@22`。Tap 不在 GitHub，所以第一次 `brew tap` 必须带上后面那个 Git URL。
+Homebrew 用的是同版本的 npm tarball，校验 SHA256 后装到隔离目录，并固定使用 Homebrew 的 `node@22`。Tap 名仍为 `linlangli/axiom`，第一次 `brew tap` 必须带上实际的 GitHub 仓库 URL。已经添加旧 GitLab Tap 的用户，执行 `git -C "$(brew --repo linlangli/axiom)" remote set-url origin https://github.com/linlangli/AxiomRuntime.git` 后再运行 `brew update`。
+
+### 源码安装与打包验证
+
+在仓库根目录依次执行 `npm ci`、`npm ci --prefix web`、`npm run link`。`link` 先完整构建 CLI 与控制面，再全局链接 `ai`。`npm run smoke:package` 在临时目录安装真实打包产物，验证 CLI、Web 静态资源、鉴权 API 与历史迁移/备份/回滚，不修改全局链接或真实用户配置；CI 在 Linux/macOS/Windows 运行该检查，正式 npm 发布也要求通过。
 
 ### 关于 root
 
@@ -135,6 +141,10 @@ ai provider add 我的站 https://example.com sk-xxx gpt-5.5  # 显式模型回�
 
 添加时自动完成：选择 `0..N` 优先级 → 探测 Base URL 与认证方式 → 获取模型列表 → 用每种实际存在的文本协议各一个代表模型做最多 1 token 的可用性验证 → 设 `mode: auto` → 写入配置和模型缓存 → 选择默认模型。已有 5 个自动 Provider 时会提供 `0, 1, 2, 3, 4, 5, 6`；选择已占用等级时，新 Provider 占据该等级，原 Provider 移到队尾。`level: 0` 表示只允许显式选择，不参与自动切换。全部候选均失败时不会写入 Provider。
 
+选择优先级时，列表行首的数字**就是 level 本身**，直接输入它即可，不存在另一套行号。
+
+纯图片 Provider（模型目录里只有 `gpt-image-*`、`dall-e-*` 这类图片模型）会被**强制存为 `level: 0`**，忽略你在列表里选的等级。原因是它没有任何可用于对话的模型：留在自动降级链上，Claude Code 或 Codex 轮转到它时只会拿到 `403 无权访问 image 分组` 或 `404`，白白浪费一跳。`ai image` 显式指定它照常可用。
+
 Runtime 会先尝试你输入的 Base URL，再按需增加或移除末尾 `/v1`；认证只在 `Bearer`、`x-api-key`、`api-key` 等可由当前 API Key 安全派生的已知方式中选择，不会暴力猜测任意私有 header。探测成功后终端会列出最终 URL、认证方式和模型。只有超时、`429`、`5xx` 会短暂重试，确定性的认证或路径错误不会重复请求。
 
 部分 Provider 不开放 `GET /models`，会返回 `404`、`451` 等状态。交互式添加会在自动发现失败后要求输入官网明确提供的模型名，并优先通过 Responses API（Claude 模型则通过 Messages API）做一次最小真实验证；脚本可把模型作为第四个参数传入。验证成功后只缓存该手工模型，失败则不保存配置。Runtime 不会自动猜测模型名。
@@ -150,13 +160,15 @@ ai check 我的站       # 只检查指定 Provider
 ai status             # 联网刷新健康度 + 看用量
 ```
 
-`ai provider list` 以卡片形式展示，`level: 1` 会标注为默认服务商。API Key 显示为掩码（`sk-d****0000`）。
+`ai provider list` 以卡片形式展示，`level: 1` 会标注为默认服务商。API Key 只显示 `(configured)` / `(missing)`，不显示首末字符；编辑 Key 不预填旧值，空输入保留当前 Key，交互输入不回显。
 
 `ai models [provider]` 只调用选中 Provider 的 `GET /models`，更新该 Provider 的完整模型缓存并逐行列出模型名，不会调用任何模型做推理，因此不产生推理 Token。省略名称时进入交互选择；提供名称时精确匹配。模型发现失败时保留原缓存和真实健康状态。
 
 如果 Provider 本身不开放模型目录，`ai models [provider]` 会如实报告 `404`、`451` 等目录错误；这不代表已缓存模型不可用。请用 `ai check [provider]` 对缓存模型做最小真实验证。
 
 `ai check [provider]` 复用与 `ai status` 相同的真实验证规则，但只刷新并检查一个 Provider。省略名称时进入交互选择；提供名称时精确匹配，名称不存在会直接报错，不会退回检查其他 Provider。适合在 Provider 较多时降低等待时间和验证 Token 消耗。
+
+验证通过的 Provider 会把健康分**直接恢复到满分**，而不是每次成功只加一点。历史上被误判扣掉的分数不会拖着不放：只要它现在真的能用，`ai status` 跑完就是干净的。
 
 `ai status` 会先刷新模型列表，再为每个 Provider 分别选择最多一个 Claude 代表模型和一个 Codex 代表模型做真实调用验证。Codex 优先验证 Responses API，只有明确不支持时才回退 Chat Completions。对于已通过手工模型验证、但不开放 `GET /models` 的 Provider，会使用已验证缓存模型继续检查，不会因为目录返回 `451` 而误判不可用。不存在对应模型族时不会发起该协议请求；每次验证使用最短输入、把输出限制为 1 token，并且不自动重试产生 Token 的请求。代表模型验证最多等待 30 秒：明确成功显示 `ready`，明确失败显示 `provider-error`；如果本地等待超时，上游仍可能已经处理成功，因此显示 `unknown` 并保留该 Provider 的运行候选资格。
 
@@ -169,6 +181,8 @@ ai provider delete 我的站
 
 可编辑字段：`name`、`baseUrl`、`apiKey`、`mode`、`level`、`model`。
 
+编辑 `model` 从目标 Provider 的模型缓存选择；若提示没有缓存，先运行 `ai models <provider>`，再重新编辑。该命令只刷新模型目录，不调用推理端点；无需刷新全部 Provider 的 `ai status`。
+
 规则：
 
 - `mode` 只能选 `ask` 或 `auto`
@@ -177,7 +191,21 @@ ai provider delete 我的站
 - 改 `level` 时，当前项会显示为 `current: Provider名称`；如果目标等级被占用，两个 Provider 会**交换**等级；改为 `0` 后退出自动候选链
 - 删除会同时清理配置和模型缓存
 
-> **安全提示：`apiKey` 目前以明文保存在 `providers.json`。** 请确认该文件权限受限，且绝不提交到仓库。加密存储是规划中的能力，见第 11 节。
+### Provider 凭据保护
+
+```bash
+ai secrets status             # 查看后端、引用及明文数量，不输出 Key
+ai secrets migrate            # 显式迁移 Provider Key 和现有 Web 快照
+ai secrets rollback --yes     # 显式恢复为明文，便于迁移机器或退回旧版本
+```
+
+省略子命令的 `ai secrets` 等同 `ai secrets status`。Web 的「帮助中心 → 命令手册 → 凭据与历史」提供相同规则，命令索引中这组命令的「详细用法」直接进入该分类。
+
+旧配置兼容明文数组；迁移后 `providers.json` 使用 `{ version: 1, secretBackend: "keyring", providers: [...] }`，每项只存 `apiKeyRef`。实际 Key 使用当前用户的系统凭据库：macOS Keychain、Windows Credential Manager，或已解锁的 Linux Secret Service。无凭据服务的服务器可继续使用受限权限的旧配置。迁移先写入并读回验证，再原子替换配置；锁定或缺失时失败，不自动回退明文。新增、编辑、轮换及旧快照恢复遵守已启用的保护方式，删除全部 Provider 后仍保留该方式。
+
+迁移前停止配置写入进程。快照逐份迁移，途中失败可能已保护当前配置而仍有旧明文快照；用 `ai secrets status` 检查并重试，不承诺跨文件事务。旧凭据版本保留以支持快照恢复，不自动删除钥匙串条目。引用按 `AI_GATEWAY_HOME` 路径隔离；移动目录、迁移机器或降级旧版本前，先显式回滚并安全转移凭据。外部备份及文件系统历史不会被安全擦除。
+
+本命令仅处理 Provider；`memory.json`、Telegram Token、原生 CLI `auth.json`、Claude settings 和临时认证文件沿用现有行为，需继续限制权限。测试不会自动迁移你的真实 Key。
 
 ---
 
@@ -199,6 +227,7 @@ ai last                                # 沿用上次的工具、服务商和模
 - 不指定模型 → 用该服务商的默认 `model`
 - 显式指定服务商 → 不先刷新全部 Provider，直接使用该 Provider 的已缓存模型并实际尝试；即使健康缓存暂时为 `error`，也不会在请求前静默跳过
 - 当前服务商不可用 → 按 `level` 顺序自动降级
+- 全局一键关闭自动降级用 `ai failover off`；关闭后只尝试选定（或默认 `level: 1`）的 Provider，失败即报错不切换。`ai failover on` 恢复；无参数 `ai failover` 查看当前状态。关闭自动降级时同时停用连续响应头超时熔断，不因已有熔断或健康错误缓存跳过所选 Provider；每次 CLI 重试均实际访问上游，单次请求超时仍为 45 秒。开关在新启动的 execution 中生效，已有会话需退出后重启
 - `level: 0` → 不参与自动降级；显式指定该 Provider 时只使用它
 - Claude Code 只会选择提供 Claude 模型的 Provider；Codex 只会选择提供 Codex/OpenAI 兼容模型的 Provider，不会跨模型族切换
 - Codex 认 `gpt`、`codex`、`grok`、`o` 系列和 `openai` 开头的模型名
@@ -207,16 +236,34 @@ ai last                                # 沿用上次的工具、服务商和模
 
 `ai use` 只启动一个 Claude Code 或 Codex 进程，候选 Provider 由同一个 execution-scoped Transport Proxy 管理。真正带请求体的模型 `POST` 遇到连接失败、认证失败、`404`、`408`、`409`、`425`、`429`、`5xx`，或流式响应在有效内容出现前中断时，Runtime 会丢弃失败尝试，按 `level` 切到下一个 Provider，并将请求中的 `model` 改为该 Provider 的候选模型。原生 CLI 进程没有重启，因此它发送的完整会话上下文仍在同一请求中。
 
-一旦已经向 Claude Code/Codex 返回文字、推理增量或工具参数，Runtime 不会自动重放，避免重复输出或重复工具调用。此时 Runtime 只记下候选 Provider，**下一个**经过代理的请求才真正切过去。`400`、`413`、`422` 等通常由请求本身导致的错误不会跨 Provider 重试。确认动作依赖你在当前 CLI 里重新提交或重试，不会抢占原生 TUI 弹出额外的 `y/n` 输入框。
+**一次失败不会立刻换 Provider。** Runtime 先在当前 Provider 上原地重试，只有重试额度用尽才轮转：
 
-**两处与上述描述不符的实际行为**（已核实，修复前请按实际行为理解）：
-
-| 场景 | 实际行为 |
+| 失败 | 是否原地重试 |
 |---|---|
-| 无请求体 `GET` 探测（如 `/v1/models`）**在连接层失败**——连不上、socket 断开、响应头超时 | **会**触发 Provider 轮转，并且**永久改变**后续请求的落点。只有基于 HTTP 错误状态码（`404`/`429`/`5xx` 等）的切换判定才受「必须是带请求体的 `POST`」约束 |
-| 处于「等待确认切换」状态时，CLI 自发的**无关请求**（包括无请求体 `GET`）先到达 | 该请求会**替你消耗掉**待确认状态并记为已确认切换，不需要你真的重新提交 |
+| `429` 限流、`5xx`、`408`/`409`/`425` | 重试 |
+| 连接被重置 / 拒绝 / socket 挂断 | 重试 |
+| 流式响应在有效内容出现前中断 | 重试 |
+| `401` / `403` / `404` | 不重试，直接换下一个 Provider |
+| 响应头超时 | 不重试（已经等满了一个超时窗口，重试等于再等一遍） |
+| 已经输出过内容后中断 | 不重试（见下一段） |
 
-两者都不会造成重复输出或重复计费——切换本身仍然只对失败的尝试生效。影响是**落点可能比你预期的更早发生变化**：想确认这次请求最终由谁承接，用 `ai log --print --trace <traceId>` 看终止跳，而不是假设它还在启动时选定的 Provider 上。
+默认每个 Provider 最多尝试 2 次（首次 + 1 次重试），两次之间退避 300ms，之后按次数翻倍。重试成功的请求**不计入**该 Provider 的失败次数、不扣健康分；重试全部失败时整段只记一次失败，不会因为重试而加速熔断。所以偶发的 429 或上游抖动现在大多在原地就消化掉了，你在 `ai log` 里会看到 `provider_retry` 而不是一串切换。
+
+一旦已经向 Claude Code/Codex 返回文字、推理增量或工具参数，Runtime 不会自动重放，避免重复输出或重复工具调用。此时 Runtime 只记下候选 Provider，**下一个带请求体的模型 POST（不含 multipart）**才真正切过去。`400`、`413`、`422` 等通常由请求本身导致的错误不会跨 Provider 重试。确认动作依赖你在当前 CLI 里重新提交或重试，不会抢占原生 TUI 弹出额外的 `y/n` 输入框。
+
+### 哪些请求不会触发切换
+
+只有**会真正产生补全的模型端点**参与降级：`/v1/messages`、`/v1/chat/completions`、`/v1/completions`、`/v1/responses`、`/v1/embeddings`、`/v1/images/generations`、`/v1/images/edits`，其中 multipart 参考图上传不自动重试或轮转。其余辅助请求收到的 HTTP 错误原样返回给 CLI；连接失败或响应头超时则返回本地代理错误。它们都不重试、不轮转，也不计入 Provider 健康分。
+
+最常见的一类是 Anthropic 的 `/v1/messages/count_tokens`。Claude Code 会主动调用它来估算上下文长度，而多数第三方中转站没有实现这个端点，会返回：
+
+```json
+{"error":{"message":"Invalid URL (POST /v1/messages/count_tokens)","type":"invalid_request_error"}}
+```
+
+这是**端点缺失**，不是 Provider 坏了。如果把它当成模型调用失败，一次 `count_tokens` 就会连续轮转并烧穿整条候选链，同时给每个被轮到的 Provider 记一次失败、扣一次健康分——本来完全可用的 Provider 会被误标成 `error`。现在这类请求被排除在降级之外。
+
+等待确认期间，`GET` 探测、空请求体、`count_tokens` 和 multipart 上传均不消费待切换状态；只有后续带请求体的模型 POST 才确认。
 
 **提示显示在哪里**：原生 CLI 的 TUI 独占终端并整屏重绘，因此 Runtime **不会**在会话期间往终端插入提示行——那会打乱 TUI 的排版。切换提示按通道分两处呈现：
 
@@ -225,7 +272,7 @@ ai last                                # 沿用上次的工具、服务商和模
 
 ### 怎么知道当前在用哪个 Provider
 
-因为上面那条限制，`ai use` **运行期间**终端里看不到当前落在哪个 Provider —— 原生 TUI 的画面归它自己，Runtime 不往里插字节。目前可用的查看方式都是**事后**的：
+原生 TUI 的实时画面由 CLI 自己管理。可在另一终端用 `ai session list`、`ai log` 或 Web 查看已持久化的成功请求落点；退出后查看切换汇总：
 
 ```bash
 # 退出 ai use 后，终端会打印本次执行的切换汇总（发生过切换才打印）
@@ -234,9 +281,9 @@ ai session list                    # 会话记录里的服务商和模型
 ai last                            # 上次选择的工具 / 服务商 / 模型
 ```
 
-> 已知限制：`ai session list` 和 `ai last` 记的是**启动时选定**的 Provider。如果执行期间发生过请求级自动切换，实际承接请求的 Provider 要用 `ai log --trace` 确认。
->
-> 实时查看是 Web 面板的职责，设计稿 `docs/AxiomRuntime.pen` 已确立两处落点：侧栏「当前 provider」卡（五屏共享，显示 provider / level / model / 切换来源 / traceId）和「使用与日志」页首项的「进行中」链路卡（逐跳展示已试过的 Provider，以及是否在等待你重新提交以确认切换）。**Web 面板本身仍是 🔴 未实现**，见第 13 节。
+`ai session list` 区分启动配置和最近成功请求的 `actualProvider` / `actualModel`；没有成功请求时显示未记录。`ai last` 在成功请求后更新落点，无请求成功时保留启动选择。Web 每 2 秒刷新已持久化的请求终止事件；侧栏仍代表默认 Provider。
+
+`ai web` 的侧栏显示当前**默认** Provider，「运行记录 → 调用记录」按 `traceId` 分组显示近期执行事件，结果 Provider 仅取自明确的终止事件；缺少终止事件时显示「结果未知」。工具执行可能包含多次请求，不能据此推断每次请求的实际承接者。它仍不改变原生 CLI TUI 的实时显示限制；可用 `ai log --print --trace <traceId>` 查看已记录的调用过程。
 
 ### 它对你的环境做了什么
 
@@ -250,43 +297,63 @@ ai last                            # 上次选择的工具 / 服务商 / 模型
 
 **权限模式**：`mode: auto` 时非 root 启动 Claude 会追加 `--dangerously-skip-permissions`；`ask` 模式不加，并在启动前确认。
 
-**用量记录**：两个引擎的模型请求都经过一个本次执行专属的本地代理转发，服务商返回的真实用量按服务商/模型写入 `usage.json`。终端交互方式完全不变。
+**用量记录**：两个引擎的模型请求都经过一个本次执行专属的本地代理转发，服务商返回的用量按实际服务商/模型写入唯一账本，默认 `usage.json`，显式迁移后为 `history.sqlite`。新请求附带 `traceId` / `sessionId`，并保留 Provider 返回的成本及来源；无成本时才按价格表估算。写入失败记录 `usage_persistence_failed`，不重放已完成的模型请求。
 
 **日志**：记录服务商、Base URL、模型、启动参数和 API Key 指纹，**不记完整 Key**。
 
-### 为 Runtime 和 AI CLI 设置代理
+### 为 Runtime 和 Provider 设置代理
 
 ```bash
-ai proxy                              # 交互输入代理主机/IP与端口
-ai proxy 127.0.0.1 8081               # 自动补全为 http://127.0.0.1:8081
-ai proxy 127.0.0.1:8081               # 兼容 host:port
-ai proxy http://127.0.0.1:8081        # 兼容完整 URL
-ai proxy --disable                    # 非交互清除
+ai proxy                              # 交互选择 Provider 或 Runtime 默认值
+ai proxy 我的站 127.0.0.1 8081        # 只为“我的站”设置代理
+ai proxy 我的站 --disable             # 清除该 Provider 的覆盖，回退 Runtime 默认值
+ai proxy 127.0.0.1 8081               # 设置 Runtime 默认代理
+ai proxy http://127.0.0.1:8081        # 完整 URL 仍可用
+ai proxy --disable                    # 清除 Runtime 默认代理
 ```
 
-已有代理时，交互命令会先显示当前地址，再提供 `Edit proxy`、`Disable proxy`、`Cancel` 三个选项，不再通过输入 `off` 关闭。新增或编辑会先做一次零 Token 的代理 host/port TCP 连通检查；失败时显示原因并保留原配置。配置成功后写入 `~/.ai-gateway/runtime.json`。之后 AxiomRuntime 的 Provider 探测、状态检查等网络请求，以及通过 `ai use` 启动的 Claude Code / Codex 都使用该代理。子 CLI 仍先连接本次执行的本地 Transport Proxy，Runtime 会自动把 `127.0.0.1`、`localhost` 和 `::1` 加入 `NO_PROXY`，避免代理回环。
+首个参数与已有 Provider 名精确匹配时，设置该 Provider 的 `proxyUrl`，保存在 `~/.ai-gateway/providers.json`；否则沿用 `host [port]` 形式设置 `~/.ai-gateway/runtime.json` 中的默认代理。无参数时先选目标，再显示当前地址及 `Edit proxy`、`Disable proxy`、`Cancel` 操作。`ai provider edit` 的 `proxyUrl` 字段也可编辑。新增或编辑都会先做零 Token 的代理端点 TCP 连通检查；失败时保留原配置。清除 Provider 代理只删除它的覆盖值；若 Runtime 默认代理仍存在，请求会回退到该默认值。
+
+Provider 代理优先作用于该 Provider 的模型发现、健康探测和模型请求，包括同一会话内降级轮转到该 Provider 的请求。未配置 Provider 代理时使用 Runtime 默认代理。通过 `ai use` 启动的 Claude Code / Codex 子进程采用启动时所选 Provider 的代理环境；模型流量仍先进入本次执行的 Transport Proxy，再按实际承接请求的 Provider 选择上游代理。Runtime 自动把 `127.0.0.1`、`localhost` 和 `::1` 加入 `NO_PROXY`，避免本地代理回环。
 
 `ai proxy` 不修改 `~/.claude`、`~/.codex` 或原生命令的永久配置；直接运行 `claude` / `codex` 不受影响。需要持久修改 Codex App 时，继续使用后文的 `ai set codex proxy`。
 
 ## 6. 生成图片
 
-使用已配置并探测到的图片模型生成一张图片：
+使用已配置并探测到的图片模型生成一张或多张图片：
 
 ```bash
 ai image                                                   # 交互选择 Provider、模型并输入提示词
+ai image 51talk-image "生成3张咖啡店宣传图：一张1024x1024方图、一张1536x1024横图、一张1024x1536竖图，保持统一风格"
+ai image 51talk-image "咖啡店宣传海报" --count 3 --size 1024x1024
 ai image 51talk-image "一只戴墨镜的猫，数字插画"          # 使用 Provider 默认模型
 ai image 51talk-image gpt-image-2 "一只戴墨镜的猫，数字插画"  # 指定具体模型
+ai image 51talk-image "保持人物一致，改成水彩风格" --image "./参考图.png"
+ai image 51talk-image "将图1人物融入图2场景" --image "./人物.png" --image "./场景.jpg"
+ai image 51talk-image gpt-image-2 "替换背景为海边" --image "C:\My Pictures\人物.jpg"
+ai image recover "./.ai-image-recovery/响应记录.json"       # 本地恢复，不重新生成或计费
 ```
 
 规则：
 
-- 直接运行 `ai image` 时，会依次选择 Provider、具体模型并输入提示词。
+- 直接运行 `ai image` 时，会依次选择 Provider、具体模型、生成方式（文生图 / 参考本地图片），参考图模式逐张输入本地文件路径，留空结束（达到 8 张自动结束），最后输入提示词。只有 Provider/模型、没有提示词时也会询问生成方式；已有提示词的旧用法不增加交互。交互路径可带成对引号。
+- 交互式只需在 `Image prompt` 中描述明确数量与像素尺寸，与命令行提示词使用同一个规划器。例如“生成3张……一张1024x1024、一张1536x1024、一张1024x1536”。支持中文数字及 `Generate three images` 等明确英文数量，`x` / `×` / `*` 尺寸分隔符；同尺寸可写“生成3张1024x1024图片”。逐图要求建议用逗号、顿号或分号分隔，共同风格保留给每张图。此功能按明确句式解析，不调用额外模型，不保证理解任意自由表达。
+- 可用 `--count 1..8` / `--count=3` 和 `--size WIDTHxHEIGHT` / `--size=auto`。未说明数量默认 1 张，未说明尺寸使用 Provider 默认。参数指定对应字段；与提示词明确数量或尺寸冲突时先报错，不静默覆盖。最多规划 8 张；像素宽高本地限制 64–8192、总像素 ≤16,777,216，实际 Provider 限制可能更低。
+- “多张”“一套”但未说明数量，或多张“不同尺寸”但未给出像素尺寸，会在交互式按缺失字段追问数量或尺寸，原始提示词和参考图保持不变；带提示词的命令行用法直接报错，需修改提示词或补参数。场景内物体数量和引号内文字不作为输出数量；不从横竖版、比例或用途猜测像素尺寸。也能识别句子中间独立分句的“2张图片”；“参考这几张图片”不会被当作输出数量。数量追问可直接回答 `2`，只补充数量；尺寸追问按输出顺序输入 `2160x3840,3840x2160`，仅补充尺寸，不要只填张数。`4K`、手机屏幕或 PC 屏幕未给像素尺寸时会追问，提示上述 4K 手机/PC 尺寸作为示例，由用户明确输入后使用，实际支持以 Provider 为准。纯数字不作为图片描述。
+- 每个任务独立请求 `n: 1` 并传入自己的 `size`，依次执行，保持共同风格但不保证跨图人物/版式完全一致；整批复用一个 Transport Proxy。文生图与参考图均只向一个选定 Provider 尝试一次，不自动重试或跨站，`ai failover on/off` 不改变此规则，避免超时后重复计费。
+- 已知 `dall-e-2` / `dall-e-3` 的尺寸限制在上传前检查；其他模型目录不提供可靠尺寸能力，以 Provider 实际响应为准，不静默替换尺寸。base64 图片通过 `image-size` 读取真实尺寸；不符时仍保存文件、报告尺寸差异并将任务标记失败。URL 输出只报告链接与尺寸未验证，不自动下载。
+- 保存响应中的全部图片，整批最多接收 8 张；文件名包含任务序号和请求尺寸。逐任务汇报结果，单张失败继续后续任务，已成功文件保留；任一任务失败时命令退出码为 1，不自动重跑整批。上游额外返回图片计入 8 张上限，达到上限后剩余任务不再发请求。
+- 重复 `--image <path>` 或 `--image=<path>` 指定多张本地参考图，可放在位置参数前后，按输入顺序上传；路径有空格时加引号。最多 8 张，单张最大 20 MiB，合计最大 40 MiB。支持按文件内容识别的 PNG、JPEG、WebP；不支持 GIF、目录、远程 URL 或 mask。所有文件在任何图片上传前完成校验，不修改原图；输出仍为新文件。
+- 参考图模式调用 multipart `/v1/images/edits`，不是将路径拼进提示词。Provider 和模型必须支持该接口及所选的单图或多图编辑能力；模型列表中存在不代表支持图片编辑，服务端仍可能返回格式、尺寸或能力错误。当前不实现 Responses 图片工具等非兼容接口。
+- 参考图会上传给所选 Provider；**不会自动重试或向其他 Provider fallback**，所选 Provider 不健康时也不会偷偷换站。仅指定模型而未指定 Provider 时，按原有健康/顺序规则选择一个可用 Provider。请只选择可信服务商，失败后明确选择其他服务商重新运行。
 - 第一个参数是 Provider 名（例如 `51talk-image`）。第二个参数如果匹配该 Provider 的模型缓存，就作为具体模型；否则从第二个参数开始全部拼成提示词，并使用 Provider 默认模型。
 - Provider 和模型必须出现在模型缓存中。命令执行前会自动刷新；也可以先运行 `ai status` 检查模型列表。如果没有 Provider，先运行 `ai add`。
 - 为避免模型名与提示词歧义，指定具体模型时建议给提示词加引号，例如 `ai image 51talk-image gpt-image-2 "提示词"`。
-- Runtime 按 Provider 健康状态和 `level` 顺序尝试，失败会自动切换下一个同样提供该模型的 Provider。
-- `b64_json` 响应会以 `0600` 权限保存到当前目录，输出绝对路径；远程 `https` 图片响应会输出 URL，不会自动下载不受信任的地址。
-- 图片生成请求最长等待 120 秒；生成服务通常比文本请求耗时更长，超过此时间会自动失败并尝试下一个 Provider。
+- 按 Provider 健康状态与候选顺序选择一个 Provider；请求发出后不因超时、断网、HTTP 错误或本地保存失败自动换站或重发。
+- `b64_json` 响应默认以 `0600` 权限保存到当前工作目录，输出绝对路径；core 调用显式指定 `outputDir` 时保存到指定目录。远程 `https` 图片响应会输出 URL，不会自动下载不受信任的地址。
+- 每张图片等待完整上游响应的默认期限为 10 分钟（`600000` 毫秒），覆盖响应头与响应体；可在运行命令前设置环境变量 `AI_GATEWAY_IMAGE_TIMEOUT_MS` 为正整数毫秒值。无效值在发送图片请求前报错。
+- 每次请求前先在输出目录的 `.ai-image-recovery/<uuid>.json` 建立待完成记录；收到完整响应后，在用量处理和图片提取前保存原始响应。恢复目录权限为 `0700`，记录为 `0600`；记录可能含图片内容，按私密文件保管，不进入运行日志或配置快照。
+- 失败会报告恢复记录路径。先运行 `ai image recover "<response-file>"` 从已保存响应重新提取图片到当前工作目录；core 调用显式指定 `outputDir` 时保存到指定目录。该命令不刷新 Provider 模型、不调用 API、不重新记账或产生生图费用。待完成记录不表示图片已经生成；没有完整响应时不能恢复，超时或断网也不证明上游未计费，须先核实上游状态再决定是否重新生成。此机制不能恢复尚未收到的响应，也不保证进程退出后的上游结果可取回。
 - 图片请求复用 execution-scoped Transport Proxy；Provider 返回的真实 usage 会写入同一份 `usage.json`，不会估算图片 token。
 
 ---
@@ -320,6 +387,7 @@ ai set codex                              # 全交互，先选做什么
 - `config.toml` 只写服务商信息和选中的模型，**不写 API Key**；写入 `base_url` 前会检查末尾是否已有 `/v1`，没有则自动补上，已有则不会重复；你原有的 project、MCP、plugin 设置都保留
 - API Key 写入 `auth.json`，权限强制 `0600`
 - 两个文件都用临时文件原子替换。任何一步失败（登录取消、认证无效、写入失败）都会**回滚到原状**
+- 如果旧版本在 Provider 表中留下指向 `dist/cli/codex-auth.js` 的 auth command，重新执行 `ai set codex provider ...` 会在写入新配置时清理该过期引用；单纯构建项目不会修改你的 Codex 配置
 - macOS 上配置一致后会自动重启 `Codex.app` 或 `ChatGPT.app`，并清理重启进程继承的 `OPENAI_API_KEY`，确保客户端读取刚写入的 `auth.json`；找不到应用或在其他平台，配置照样生效，但需要手动重启
 
 > 切到自定义服务商会**替换掉当前的 ChatGPT token**。以后想切回去需要重新走一次浏览器登录。
@@ -337,6 +405,23 @@ ai set codex proxy off              # 清除
 只改 `config.toml` 里 `[shell_environment_policy.set]` 的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`（大小写都管），该段里的其他变量和其余 Codex 设置都保留，**不动 `auth.json`**。
 
 macOS 会同步当前登录会话的 launchd 环境，让重启后的 Codex App 也能继承代理。同步失败会回滚配置且不重启。注销或重启 macOS 后需要重新执行本命令。
+
+### 统计 Codex App 的 Token
+
+```bash
+ai set codex usage on                 # 开启本机 App 用量采集
+ai set codex usage status             # 同步并查看状态和未匹配的 Provider ID
+ai set codex usage map openai 我的站    # 将原生 Provider ID 显式归属到已配置的服务商
+ai set codex usage off                # 停止采集，保留已有统计
+```
+
+也可进入 `ai web` →「本地配置 → 工具配置 → Codex App 用量采集」，编辑开关、本机 Codex 目录和 Provider 对应关系。默认目录为 `CODEX_HOME`，未设置时为 `~/.codex`。同名 Provider 和 Runtime 生成的 Provider ID 自动匹配；自定义 ID 或 ChatGPT 登录的 `openai` 无法确定归属时，先选择已有服务商再保存，不会猜测记账。映射后的用量与 Runtime 原有用量合并，模型自动进入该 Provider 的价格设置列表。
+
+默认关闭，从启用时开始统计真实 Token。刷新面板或执行 `ai status` / `ai set codex usage status` 时增量同步，打开面板后约每 15 秒刷新；不需要重启 Codex App。首次启用前与关闭期间的用量不补录，已有聊天的新用量仍可采集；未知 Provider 在完成映射后补计本次启用以来的相关记录。更换 Codex 目录会重新设置采集起点。关闭采集不会删除已入账数据。
+
+采集只读本机 `sessions` 和 `archived_sessions` 的 Codex Desktop 会话记录，不保存提示词、回复、附件或密钥，不修改登录和网络配置。缓存输入属于输入 Token，reasoning 属于输出 Token，均不重复相加；重复事件、文件重读和进程重启不会重复记账。`ai use codex` / `ai proxy codex` 的代理会话及独立 CLI、SDK 会话排除。成本仍由「用量统计」中的 Provider/模型价格估算，ChatGPT 订阅用量的估算不代表额外账单。
+
+此功能适配 Codex 本地内部 JSONL 格式，并非稳定的公开 API；云端任务与未标记桌面身份的记录不在范围内。格式变化、非法或回退的计数会跳过并在工具配置页提示；目录不可读时保留账本并提示检查设置。采集配置和游标不属于 Web 配置快照，恢复快照不会回退采集起点或自动开启采集。
 
 ---
 
@@ -433,7 +518,7 @@ ai session clear                   # 清空记录
 
 每次 `ai use` 都会记一条会话，包含工具、服务商、模型、项目路径、起止时间和退出状态。
 
-> 当前是**复用启动参数**继续，不承诺恢复 Claude/Codex 的原生聊天上下文。`ai session clear` 只清 AxiomRuntime 的记录，不删 Claude Code / Codex 自己的历史。
+续用在原项目目录启动，优先使用最近成功的 Provider / 模型。新 Claude 会话通过 `--session-id` 保存原生 ID；Codex 仅在项目、时间和 `source: "cli"` 匹配且候选唯一时关联原生 ID。记录有 `nativeSessionId` 时传递原生 `--resume` / `resume`；旧记录、无记录或歧义场景明确提示只复用启动配置。原生历史被删除或上游 CLI 不兼容时由原生工具报错。`ai session clear` 只清 Runtime 记录，不删原生历史。
 
 ### 报告
 
@@ -444,6 +529,24 @@ ai report --print <session-id>   # 直接打印到终端
 ```
 
 写入 `~/.ai-gateway/reports/<session-id>.md`，包含会话上下文、真实 token 汇总、工具和模型、服务商快照。**不写 API Key，不估算 token。**
+
+新会话报告严格按 `sessionId` 归属用量，避免并发混算；旧记录明确标注 Provider/model/时间窗口近似归属。
+
+### 历史容量与恢复
+
+```bash
+ai history status
+ai history migrate                         # 导入 JSON 用量及会话，启用 SQLite
+ai history backup                          # 返回受限权限的备份文件
+ai history restore <backup.sqlite> --yes    # 使用返回路径的文件名恢复
+ai history rollback --yes                   # 导出最新数据，恢复 JSON 后端
+```
+
+省略子命令的 `ai history` 等同 `ai history status`。`backup` 需要先启用 SQLite，返回备份文件的完整路径；`restore` 参数仅填写该路径的文件名，例如 `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.sqlite`，不要传完整路径。
+
+迁移、恢复和回滚前停止所有 Runtime CLI、API、Web 和 Bot 写入进程，且不要混用不识别 SQLite 的旧版本。迁移成功后唯一权威为 `history.sqlite`，原 JSON 保留为迁移前副本，不再双写。按现有事件 `id` 幂等导入；恢复前保留当前数据库副本，回滚先完整导出再停用数据库。数据库缺失或损坏需停止服务检查，损坏不会自动降级读旧 JSON；`ai doctor --fix` 不重置数据库。恢复只接受 `history-backups/` 内返回的文件名，覆盖备份后的历史，不恢复配置、授权计数、Telegram 或记忆数据库。
+
+SQLite 用量/会话分页按索引查询；日志分页仍扫描文件但只保留当前页，最近日志从文件尾分块读取，忽略无效行及超过 4 MiB 的单条记录。`ai log --print --trace <id>` 同时匹配请求 `traceId` 和父执行 `executionId`，不再只搜索最近 500 行。完整调用聚合、总览汇总仍读取相应历史，日志轮转和长时间容量/SLO 验收仍由部署者负责。
 
 ### 诊断
 
@@ -475,7 +578,7 @@ ai context --print
 
 日志包含使用痕迹、报错、健康检查、降级策略执行和诊断记录，文件在 `~/.ai-gateway/.ai-gateway.log`。
 
-**按调用链路查看**：一次请求、一条 Telegram 消息、一次 `ai use` 会在入口生成一个 `traceId`，该次执行涉及的所有日志都带上它——包括熔断跳过、每次 provider 自动切换，以及标明最终由谁承接的终止跳。`--print` 输出里每条日志会打印 `trace:` 行，拿这个值配合 `--trace` 就能把一次请求试过的服务商按顺序完整看一遍：
+**按调用链路查看**：HTTP 请求、Telegram Provider 尝试与 `ai use` 的启动过程各自记录入口 `traceId`。工具代理中的每个新请求另外分配独立 `traceId`，通过 `executionId` 关联父执行，通过 `sessionId` 关联会话；`openai_usage_proxy_request_settled` 记录请求终止结果、耗时和落点。`--trace <id>` 同时匹配请求与父执行 ID，按时间打印完整日志文件中的匹配事件。历史日志及部分生命周期事件缺少关联时保留未知；缺少终止事件时，最终结果和 Provider 可能无法确认：
 
 ```
 1. [WARN ] strategy / fallback_skip_provider          legacy-gw 熔断中跳过
@@ -494,10 +597,19 @@ ai context --print
 ### 内网 API 服务
 
 ```bash
-npm run server
+ai server start     # 后台启动，不依赖 ai web 或终端保持运行
+ai server status    # 查询系统服务状态与日志位置
+ai server restart   # 重启并刷新升级后的可执行文件路径
+ai server enable    # 开启自启并启动
+ai server disable   # 关闭自启，保持当前服务运行
+ai server stop      # 停止并关闭自启
 ```
 
-启动常驻 HTTP 服务。**必须**设置 `AI_GATEWAY_SERVER_TOKEN` 或 `AI_GATEWAY_SERVER_TOKEN_FILE`（生产环境建议用后者）。
+先在 `ai web → 对外服务` 完成「开放能力」「调用凭证」，再在「启动与连接」启动 API，或执行 `ai server start`。页面支持刷新状态、重启、停止和自启；保存开放配置本身不启动服务。服务由 macOS launchd 或 Linux `systemd --user` 托管，退出管理页面和终端后继续运行，异常退出由系统管理器重启。macOS 自启发生在用户登录后；Linux 无登录持续运行或开机启动需管理员为该用户启用 linger（`loginctl enable-linger USER`）。Windows 使用当前用户 Interactive Task Scheduler 登录任务，需安装 OpenSSH；Windows 适配尚待实机验收。没有用户服务管理器的 Linux 和容器不支持此托管方式，会显示限制或操作失败。
+
+托管服务按 `AI_GATEWAY_HOME` 隔离服务标识，使用当前 Node 与安装包的绝对路径，无需源码目录或 npm；固定监听 `127.0.0.1:8080`，仅使用开放能力凭证，不继承旧环境变量服务 Token。启动前至少需要一个与开放能力有交集的有效凭证。多份配置若同时运行需避免端口冲突；状态显示的是系统服务进程状态，启动失败请刷新并检查日志，健康与真实模型调用仍需另外验证。macOS 标准输出在配置目录 `api-service.log`，Linux 用返回的 `journalctl --user -u ...` 查询；生命周期操作记录在 Runtime 日志。升级或移动安装目录后执行 `ai server restart` 重建服务定义。停止会关闭自启，防止下次登录意外重新开放；关闭自启按钮则不停止当前服务。
+
+开发调试仍可在源码目录前台执行 `npm run server`，使用 `AI_GATEWAY_SERVER_TOKEN` / `AI_GATEWAY_SERVER_TOKEN_FILE` 或已配置的能力凭证；`AI_GATEWAY_SERVER_HOST` / `AI_GATEWAY_SERVER_PORT` 仅用于前台启动。先停止旧前台服务再启动托管服务，避免端口占用。
 
 可用路由：
 
@@ -506,6 +618,8 @@ npm run server
 | `POST /v1/chat/completions` | OpenAI 兼容对话 |
 | `POST /v1/responses` | OpenAI Responses 协议 |
 | `POST /v1/embeddings` | 向量化 |
+| `POST /v1/images/generations` | 图片生成，独立 `images` 权限 |
+| `POST /v1/images/edits` | 参考图编辑，独立 `image_edits` 权限 |
 | `GET /v1/models` | 模型列表 |
 | `POST /v1/agent/runs` | 需要 Claude/Codex 工具能力时用 |
 
@@ -528,7 +642,7 @@ ai memory embedding clear
 
 > 这组配置**只为记忆检索准备**，不参与 Claude/Codex 的聊天服务商选择。配置保存在 `~/.ai-gateway/memory.json`，同样以明文存 `apiKey`，请限制文件权限。
 >
-> 注意：**向量检索本身尚未实现**，当前记忆匹配用的是关键词打分。这条命令是为后续能力做的前置准备。
+> 注意：**向量检索本身尚未实现**，当前 Telegram 记忆匹配用的是关键词打分。这条命令是为后续能力做的前置准备；Web「本地配置」暂不显示记忆设置入口，请通过 CLI 管理 embedding 连接。
 
 ### 帮助
 
@@ -537,7 +651,95 @@ ai help          # 打开 HTML 命令手册
 ai --version
 ```
 
-> `ai help` 当前用系统默认程序打开独立的 `USAGE.html`。设计稿 `docs/AxiomRuntime.pen` 已补充「帮助中心」屏（`Screen Help`），把这份手册并入 Web 管理页的侧边栏导航；Web 面板本身仍是 🔴 未实现。
+`ai help` 用系统默认程序打开独立的 `USAGE.html`。`ai web` 的「帮助中心 → 命令手册」复用同一份手册内容，完整提供命令索引、安装配置、模型使用、服务管理、记忆配置、消息接入、状态诊断、会话报告、凭据与历史和配置文件。「凭据与历史」集中说明 `ai secrets`、`ai history` 的参数、迁移前提、备份与回滚限制；`ai session resume` 和 `ai log --print --trace` 的行为分别在会话报告和状态诊断中说明。命令索引可按分组筛选，顶部搜索覆盖所有命令、参数与详细规则；点击搜索结果可阅读完整说明。命令和整段示例均可一键复制，详细规则可展开或收起；界面沿用本地面板的纸张卡片、柔和配色与响应式目录。复制命令不会执行命令或修改配置。源码更新手册后须运行 `npm run build` 并重启 `ai web`，使控制面加载重新打包的内容。
+
+### 本地 Web 控制面板
+
+控制面需要 `dist/web/control/console.html` 及其静态资源；只运行 `tsc` 不会生成这些文件。入口缺失或无法读取时，`ai web` 会在启动前报错并提示修复步骤。本地源码或 `npm link` 安装请在项目根目录执行 `npm ci --prefix web` 和 `npm run build`，然后重新运行 `ai web`；切换分支后也应重新构建。若旧进程已经打开并显示 `{"error":"Not found."}`，请先在原终端按 `Ctrl+C` 停止，再执行上述步骤。npm 全局安装请重新安装 `@offerpilot/axiomruntime`。
+
+公网门户 [axiom.offerpilot.life](https://axiom.offerpilot.life/) 提供安装步骤、命令参考与当前能力边界，可复制安装命令。页面中的终端用量和 Telegram 对话均为示例；查看本机真实用量、日志或配置请使用下方 `ai web`。
+
+```bash
+ai web
+```
+
+命令启动仅监听 `127.0.0.1` 的临时端口并打开浏览器；终端保持运行，按 `Ctrl+C` 关闭。打开链接含一次运行有效的访问 token；不要把链接发给别人。控制面板可查看 Provider 健康缓存、真实用量趋势、最近日志与会话，添加/编辑/删除或检查 Provider，也可执行与 `ai set codex` 等价的持久配置操作。添加或改动 Provider 地址、API Key 会先进行真实探测，可能产生少量 Token。
+
+Web 控制面的「本地配置」提供「服务配置、模型路由、工具配置、网络代理、消息接入、配置维护」六个二级分类。可以在浏览器编辑 Provider、自动切换、Codex 持久配置、Runtime/Provider 出站代理和具名 Telegram Bot；提交前会展示变更预览，受管配置写入前自动创建本机快照，失败由 core 保留旧配置。完整记忆模块尚未实现，暂不展示「记忆设置」入口；已有 embedding 前置配置仍可通过 `ai memory embedding` 管理，不影响 Telegram 已实现的显式记忆与关键词检索。Claude Code 用户连接可在「工具配置」持久保存，其他设置保留，原文件先在同目录备份；退出并重新启动 Claude Code 后生效。Telegram 配置支持启动、停止、重启、删除配置（保留会话和日志），Bot 独立于 Web 运行。Codex App/CLI 在同一 `CODEX_HOME` 下共享用户级配置；旧聊天不会迁移，请新建聊天。配置维护可恢复最近 20 个受限权限快照，但不包含用量账本、数据库、Codex 用户配置或 Codex App 采集设置与游标。
+
+「对外服务」只有一组步骤导航：「开放能力 → 调用凭证 → 启动与连接 → 验证与调用」。侧栏显示各步的已保存状态与摘要，可随时返回修改；首次进入根据已保存能力、有效凭证和 API/隧道状态定位首个未完成步骤，状态刷新不会切走当前页面，切步保留表单草稿。主操作完成后继续下一步，技术参数和维护操作按需展开。页面按部署方式自动生成 API 上游，为每个调用方创建独立凭证并可撤销；凭证只在创建时显示一次，落盘只保留摘要。普通保存不启动服务、不连接 SSH、不修改服务器；本机管理页面始终不对外开放。
+
+旧版启动的 Bot 若缺少进程归属标识，Web 与新版具名 CLI 会拒绝向该 PID 发送停止信号。先在系统进程列表核实 Bot 的入口与 PID，再手动停止该旧进程，之后从新版启动即可使用生命周期管理；不要直接依据过期 PID 文件结束进程。
+
+#### 向服务器开放生图服务
+
+「验证与调用 → 实际调用工作台」支持对话、Responses、向量、图片生成/参考图编辑、隔离工作区 Agent 和注册工具调用。先开放对应能力并创建凭证，输入凭证后选择本机 API 或已保存的公网入口；工作台始终保留，凭证与输入只用于本次请求，不持久化。图片 Base64 可预览下载，Provider URL 提供安全链接。真实模型/Agent 请求产生费用；响应限 40 MiB，超时后先检查记录再重试。公网授权调用返回符合协议的成功响应才标记部署验证通过，修改能力、凭证、入口或 SSH 配置后需重新验证。
+
+`tools` 能力对应 `POST /v1/tools/execute`，当前只注册 `runtime.status` 与 `providers.list` 两个只读工具，例如请求体 `{"name":"runtime.status"}`。不接收任意 Shell 命令，不涉及记忆检索。
+
+「运行记录 → 完整历史与导出」可分页查询所有本机记录并下载 CSV/JSON；实时追踪每 2 秒刷新最新页，翻阅旧页时关闭实时追踪。用量统计页也提供完整用量导出。数据仍来自现有账本和日志，不导出 API Key、Token、提示词或对话正文；SQLite 用量/会话支持索引分页，日志页扫描文件但只保留当前页；完整调用聚合仍需扫描，超大历史尚需容量验收。
+
+先配置支持目标图片模型的 Provider，并用 `ai status` 刷新模型目录。按页面的四步完成接入：
+
+1. **开放能力**：启用「图片生成」（`images`），需要参考图编辑时另外启用「图片编辑」（`image_edits`）；预览变更并确认保存后进入下一步。
+2. **调用凭证**：为调用服务器创建仅包含所需能力的凭证，复制一次性显示的 Token，确认已经保存后继续；已有有效凭证也可直接继续。有效凭证须未过期且至少有一项权限与已保存的开放能力相交，旧凭证不会自动获得新增能力。
+3. **启动与连接**：选择 Runtime 与反代同机，或 Runtime 在本机、通过 SSH 连接服务器。SSH 模式填写服务器与密钥信息后，点击「启动 API 并连接服务器」，页面按顺序保存接入配置与 SSH 配置、启动 API、连接隧道，已完成的操作会跳过；接入配置变更需先预览确认。某一步失败即停止后续操作，已成功的保存或启动仍保留。同机模式跳过 SSH，只启动 API。此操作不会开启自启或部署远端 Nginx。也可「仅保存 SSH 配置」，无需先运行 API，也不会连接。
+4. **验证与调用**：选择服务器内部调用或公网 HTTPS。内部调用无需域名，直接使用自动生成的上游；公网模式保存 HTTPS 入口后，可按需预览远端部署或使用 Nginx 片段，最后完成真实授权调用。健康检查、curl 示例与配置片段按需展开。
+
+上游无需手填：同机反代为 `http://127.0.0.1:8080`；SSH 模式为服务器的 `http://127.0.0.1:18080`。这里的 18080 属于服务器的 loopback，不是本机端口。端口固定，冲突需先处理占用；旧自定义上游保存新部署方式前保留，并提示替换。不要把 `ai web` 管理端口用于反代。日志、重启、停止、自启和连接检查收在「运行管理与连接详情」；技术参数与首次指纹/密钥准备按需展开。SSH 连接参数进入受限配置备份，专用私钥、主机信任、凭证请求计数和部署验证证据不进入快照；恢复 SSH 配置前需断开隧道并关闭自启。窄屏使用横向紧凑四步导航，表单纵向排列。
+
+SSH 模式需要服务器 IPv4/域名、用户名、SSH 端口（默认 22）和本机私钥绝对路径，不需要手动保持 `ssh -R` 终端。密钥公钥需已授权到服务器的 `authorized_keys`，可展开首次连接准备扫描主机指纹，独立核对后显式信任；已有冲突密钥拒绝覆盖。支持在本机生成或复用专用 ed25519 密钥，无需先填写服务器信息，仅回传公钥和路径且不覆盖已有私钥。扫描指纹需要服务器地址、SSH 用户和有效端口；诊断还需本机私钥路径。按钮下方直接显示缺少的信息或禁用原因。隧道运行或开启自启时仍可扫描、诊断，生成密钥、保存信任与公钥授权需先断开并关闭自启。允许密码登录的服务器可使用一次性账户密码授权专用公钥，密码仅在本次 SSH2 认证中使用，不持久化；也可手动授权公钥或使用已授权的密钥。后台使用系统 OpenSSH，忽略个人 SSH 配置，强制非交互公钥认证、严格主机校验、不转发 agent。密钥有口令时须事先解锁且让用户服务能访问密钥代理；无法认证时查看隧道日志，不会弹出网页登录框。服务器需允许远程 TCP 转发；推荐专用 SSH 账户与仅监听 loopback 的转发权限，不需要开启 `GatewayPorts` 公网监听。
+
+隧道通过现有 launchd/systemd 用户服务独立托管，异常断线由系统重启；30 秒心跳、连续 3 次无响应后退出并重连。API 和隧道分别启停与自启，退出 `ai web` 不会关闭它们；需要登录后自动恢复时分别开启自启。电脑休眠、断网、SSH 主机变化和密钥代理不可用仍影响连接。修改服务器或切换同机模式前先「断开隧道并关闭自启」。默认不自启；Windows 使用当前用户交互登录的 Task Scheduler，需安装 OpenSSH。Windows 适配通过命令编排测试，尚待 Windows 实机验收；无用户服务管理器的 Linux/容器仍不支持托管。
+
+「刷新服务与连接状态」和「刷新运行状态」区分系统进程运行与 SSH 控制连接可用，不将进程运行视为隧道就绪。「验证服务器端口」通过 SSH 在服务器执行固定的 `curl --fail --silent --show-error --max-time 5 http://127.0.0.1:18080/health/live`，因此服务器需安装 curl；它不调用模型，也不传输调用凭证。「验证与调用」中的本机 API 检查只访问本机 8080，公网检查访问保存的 HTTPS 入口。仅服务器内部调用无需公网 Nginx，但仍需调用凭证。公网模式下，SSH 部署可预览 Nginx 与 HTTPS 计划，再确认执行；需要 root SSH、systemd、有效域名指向服务器及可访问的 80/443，支持 apt/dnf 安装可选依赖。拒绝覆盖其他 Runtime 或管理员的同名配置；nginx -t 或证书申请失败会恢复原站点配置，已装软件包/证书/ACME 账户不自动删除。复杂网关、非标准端口和同机部署仍由管理员处理。进程运行、隧道连通和健康检查都不能代替真实授权调用验收。
+
+```bash
+# 后台启动，也可使用 Web 的「启动与连接」
+ai server start
+
+# 调用服务器：将凭证放入本机环境变量 AXIOM_SERVICE_TOKEN
+curl https://ai.example.com/v1/images/generations \
+  -H "Authorization: Bearer $AXIOM_SERVICE_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"YOUR_IMAGE_MODEL","prompt":"画一只猫","n":1,"size":"1024x1024","response_format":"b64_json"}'
+
+curl https://ai.example.com/v1/images/edits \
+  -H "Authorization: Bearer $AXIOM_SERVICE_TOKEN" \
+  -F 'model=YOUR_IMAGE_MODEL' -F 'prompt=将背景改为蓝色' \
+  -F 'image=@reference.png'
+```
+
+生成接口接收 JSON，编辑接口接收 `multipart/form-data`，必须包含 `model`、`prompt`。`n` 为 1–8 的整数；`size` 为像素尺寸（如 `1024x1024`）或 `auto`，实际支持取决于模型。可选 `response_format` 为 `url` 或 `b64_json`，支持情况由 Provider 决定。其余模型参数原样传递，不解析提示词来重写张数或尺寸。编辑接收 `image` 或重复的 `image[]` 上传字段，共 1–8 张 PNG/JPEG/WebP，每张不超过 20 MiB，含可选 `mask` 的总上传文件不超过 40 MiB；不读取 Runtime 的本地文件路径，也不下载请求中的远程图片地址。默认整个请求体上限为 42 MiB（含 multipart 开销），可通过 `AI_GATEWAY_MAX_REQUEST_BYTES` 调整，同时修改生成的 Nginx `client_max_body_size`。
+
+响应原样保留上游 `data[].url` 或 `data[].b64_json` 和用量字段，不返回本机文件路径，也不托管结果图片；调用方自行下载 URL 或解码 Base64，URL 有效期由 Provider 决定。图片请求仅向首个健康且提供该模型的候选发送一次，不重试或跨 Provider 切换；超时、断网或 5xx 后需先确认上游任务状态，再决定是否重发，避免重复计费。Runtime server 的图片响应头等待由 `AI_GATEWAY_UPSTREAM_HEADERS_TIMEOUT_MS` 控制；`AI_GATEWAY_IMAGE_TIMEOUT_MS` 仅用于 CLI 生图。无凭证返回 401，无相应能力返回 403，参数无效返回 400，超出请求体限制返回 413，无可用模型返回 503，传输失败返回 502；已开始发送的响应若中断则关闭连接。健康检查不证明生图成功，需要一次真实授权调用验收。
+
+保存开放配置并创建凭证后，在「启动与连接」启动 API 或执行 `ai server start`。托管 API 固定监听 `127.0.0.1:8080`；首次启用开放配置需重启旧前台 API，之后能力关闭与凭证撤销逐请求生效。前台调试模式的旧服务 Token 同样受全局能力范围限制。反代上游由同机/SSH 模式自动生成，不改变本机 API 监听地址。调用凭证支持 Provider／模型白名单、到期时间、每分钟请求数及总请求额度；401 表示无效/过期凭证，403 表示能力或模型范围不符，429 表示限流/额度耗尽。限流为 UTC 分钟窗口，请求通过能力鉴权后即占用次数，后续参数/上游失败也计数；不是 Token 或金额预算。总请求数独立持久化，重启、轮换和配置恢复不重置；Token 轮换立即使旧值失效，新值只显示一次。组织权限仍属规划。
+
+「用量统计」支持最近 7/30/70 个 UTC 自然日和 Provider 筛选。趋势图可切换总量/输入/输出；调用活动采用 GitHub 式按周排列的 7 天小方格，短区间保留浅色日历上下文，不拉伸方格或改变排列语义，统计数字只来自当前筛选区间；Provider 占比使用圆角、无间隔分段、轻量涂鸦纹理和可切换图例的环形图。成本卡片右上角的设置按钮可以按 Provider/模型编辑输入、输出和可选 Cache Read 价格（美元/百万 token）。Provider 下拉完整列出当前所有配置、历史 usage 和已有价格键，直接选择即可切换；模型下拉列出对应 Provider 缓存目录、默认模型、历史 usage 模型和已有价格键，也可选择「手动输入模型…」填写模型 ID。切换 Provider 会更新模型和价格，保存后当前区间立即重算；未配置价格的事件会单独提示且不计入成本。点击趋势或活动日期进入「运行记录 → 调用记录」，保留 UTC 日期筛选。图表包括 Runtime 代理用量及显式启用采集后的 Codex App 本机用量，均按实际 Provider/模型汇总，不推测其他未采集的直接调用。App 用量不会创建 Runtime 调用链路或工具会话记录。
+
+升级后若仍有旧版 `ai web` 进程运行，请在原终端按 `Ctrl+C`，重新运行 `ai web` 打开新版页面；旧数据无需迁移。新版界面遇到旧服务响应时会提示重启，避免使用缺失字段。
+
+「运行记录」分为三个页面：
+
+- **调用记录**：基于最近 300 条日志，按 `traceId` 归组，优先显示结果、模型、Provider 和时间；支持结果、切换、重试、Provider 和搜索筛选。点击打开侧边详情，查看结果摘要、Provider 过程、中文事件时间线和可展开的原始字段。重试与跨 Provider 切换分别计数，配对的切换计划和应用事件只计一次。新模型请求显示已观测 Token、成本及来源、终止耗时与父 `executionId`；辅助请求不进入模型调用汇总。一次工具执行可能包含多个独立请求。旧记录无用量关联时显示未知，不按时间推算。缺少终止事件显示「结果未知」，不推断正在运行；结果 Provider 仅取终止事件，耗时未记录时明确显示事件跨度。
+- **工具会话**：最近 30 次工具启动与退出，区分启动配置与最近成功请求的实际模型/Provider，展示时间、时长、退出结果与退出码。未记录结束时间显示「尚无退出记录」，不能视为进程存活。仅当日志明确记录与本地会话相同的 `sessionId` 时提供关联调用入口；不按时间或 Provider 猜测关联，也不展示聊天内容。
+- **系统日志**：按「模型请求 / 服务检查 / 配置变更 / 系统运行」分类，支持级别、Provider、分类、日期和搜索筛选。事件先显示中文说明，展开查看脱敏后的 `action`、`level`、`traceId` 等原始字段；存在明确调用关联时可直接打开调用详情。没有 `traceId` 的事件仅保留在日志中，不生成调用记录。
+
+公网门户 `https://axiom.offerpilot.life/` 是独立部署的静态介绍页，不连接本机配置、不提供远程控制，也不包含在 npm 包内。默认分支的 GitHub Actions 会先测试并构建 `web/dist/portal/`，再用受限的 `axiom-portal-deploy` SSH 账号上传不可变 release、原子切换 `current` symlink，并用线上首页内容做健康检查；失败会自动恢复上一 release。SSH 主机公钥和私钥通过 `portal-production` Environment Secrets 注入，私钥不进仓库。服务器证书和 Nginx SNI 分流属于一次性运维配置。门户发布需要先把改动合并到默认分支；原 GitLab CI 文件保留。
+
+### 维护者发布与 CI 配置
+
+源码仓库为 `https://github.com/linlangli/AxiomRuntime`。GitHub 托管 runner 执行测试、门户构建与 SSH 部署，无需在服务器安装 Actions runner。branch push 和 PR 执行 `npm test` 与 `npm --prefix web run typecheck`；默认分支 push 在测试成功后发布门户，`v*` tag push 单独触发 npm 发布。
+
+在仓库 Settings → Environments 创建并配置：
+
+- `portal-production`：只允许 `main` branch。Variables 添加 `PORTAL_SSH_HOST`；`PORTAL_SSH_USER`、`PORTAL_DEPLOY_ROOT`、`PORTAL_HEALTH_URL` 可选，默认依次为 `axiom-portal-deploy`、`/srv/axiomruntime-portal`、`https://axiom.offerpilot.life/`。Secrets 添加 `PORTAL_SSH_PRIVATE_KEY_B64` 和 `PORTAL_SSH_KNOWN_HOSTS`。使用专用部署账号和已核对的主机公钥。
+- `npm-production`：只允许 `v*` tag，无需添加 npm Secret。在 npm 包 `@offerpilot/axiomruntime` 的 Settings → Trusted Publisher 创建 GitHub Actions connection，填写 owner `linlangli`、repository `AxiomRuntime`、workflow filename `publish.yml`、environment `npm-production`，只启用 `Allow npm publish`。如果显示 `Pending validation`，须在页面给定截止时间前完成一次获准的新版本发布；仅保存连接不代表发布认证已经验证。
+
+GitLab 中的变量不会自动复制；账号无法访问时，部署 SSH key 可重新生成。GitHub npm 发版通过 OIDC 获取短期凭证并生成 provenance，无需迁移或保存 `NPM_TOKEN`。workflow 使用支持 OIDC 的 `npm@11.11.0`，仅 npm job 有 `id-token: write` 权限。保留的 GitLab CI 仍使用原有 `NPM_TOKEN`。
+
+macOS 双击 `发布.command`，或运行 `npm run release` 打开发布助手。助手使用 GitHub CLI `gh` 检查登录和发布 workflow，在临时目录合并远端 `main`、安装根目录与 `web` 依赖、验证版本并运行完整测试，经确认后推送 release commit 与 tag，等待 `Publish npm` Actions 结果。npm Trusted Publisher 必须提前配置；助手不能通过 GitHub API 读取 npm 端信任状态。tag 提交必须包含在默认分支中，tag 版本必须等于 `package.json.version`。Homebrew 发布仍单独从 npm `latest` tarball 计算 SHA256，不重复发布 npm。迁移已有 Git 历史时先备份本机 refs；未提交修改和 GitLab Issues、CI variables、artifacts 不属于 Git push 的内容。
 
 ---
 
@@ -568,7 +770,16 @@ AI_GATEWAY_HOME=/path/to/config ai provider list
 
 新增或轮换凭证请用 `ai provider add/edit`，不要手改 `apiKey`。
 
-**`model-pricing.json`** —— 给只返回 token 不返回费用的模型估算成本。单位是**美元/百万 token**，可按模型名或 `服务商/模型` 配置：
+**`runtime.json`** —— 运行时全局默认值。`proxyUrl` 是未在 Provider 上单独配置时的默认代理；`failoverDisabled: true` 会关闭 Provider 自动降级切换（失败只报错不换路）。这两个字段建议用 `ai proxy` / `ai failover` 命令改，不要手写：
+
+```json
+{
+  "proxyUrl": "http://127.0.0.1:8081",
+  "failoverDisabled": true
+}
+```
+
+**`model-pricing.json`** —— 给只返回 token 不返回费用的模型估算成本。单位是**美元/百万 token**，可按模型名或 `服务商/模型` 配置。也可以在 `ai web` →「用量统计」→ 成本卡片右上角设置按钮中编辑；Web 通过 core pricing API 校验并原子写入，不会回显任何 Provider 密钥：
 
 ```json
 {
@@ -584,6 +795,8 @@ AI_GATEWAY_HOME=/path/to/config ai provider list
 ```text
 ~/.ai-gateway/.ai-cache.json        模型缓存和健康状态
 ~/.ai-gateway/usage.json            用量账本
+~/.ai-gateway/codex-usage.json      Codex App 采集设置
+~/.ai-gateway/codex-usage-state.json Codex App 增量采集游标（无对话正文）
 ~/.ai-gateway/sessions.json         会话记录
 ~/.ai-gateway/memory.json           记忆检索的 embedding 配置
 ~/.ai-gateway/memory.sqlite         Telegram 记忆库
@@ -614,7 +827,7 @@ Node.js 版本低于 22.19.0。升级后重新安装，别忽略警告。
 按顺序查：`ai telegram status --bot <名字>` → `ai telegram logs --bot <名字>` → 确认 `allowedUserIds` 里有你的 ID → 确认能连上 `api.telegram.org`（可能需要 `proxyUrl`）。
 
 **`ai status` 里的 token 统计不全**
-统计从「安装了支持统一代理的版本之后」产生的新请求开始生效。旧版本里没走代理的历史**不会**被扫描补录 —— 这是刻意的，避免把 token 归错服务商或重复计数。
+Runtime 代理用量从安装了支持统一代理的版本之后的新请求开始生效；Codex App 用量从显式开启采集后开始生效。首次开启前和关闭期间的历史不会补录，避免把 Token 归错服务商或重复计数。
 
 **用量按什么聚合**
 按服务商的精确名称。同一服务商下不同模型会合并展示，但每条事件仍保留实际模型。不同服务商名称不合并。
@@ -627,11 +840,10 @@ Node.js 版本低于 22.19.0。升级后重新安装，别忽略警告。
 
 | 功能 | 当前状态 |
 |---|---|
-| `ai web` 控制面板 | 命令存在但会提示暂未实现 |
 | 自动记忆 | 普通聊天**不会**自动记录。目前只有 Telegram 的显式 `/remember` |
 | 记忆的向量检索 | 只有 embedding 配置命令；实际检索用关键词打分 |
 | 终端 `ai use` 接入记忆 | 记忆目前只在 Telegram 生效 |
-| API Key 加密存储 | 明文保存在 `providers.json` / `memory.json` |
+| 全部凭据统一托管 | Provider 可用 `ai secrets migrate`；记忆及原生 CLI 凭据尚未纳入 |
 | Skill 自动沉淀 | 未实现 |
 | 多租户 / 组织隔离 | 未实现，当前是单机单用户 |
 | 企业身份对接（OIDC/SAML/SCIM） | 未实现 |
@@ -640,7 +852,5 @@ Node.js 版本低于 22.19.0。升级后重新安装，别忽略警告。
 
 已知的实现差异（会逐步收敛）：
 
-- `ai provider list` 和 `ai status` 显示掩码 API Key（保留首末 4 位）。目标是只显示「已配置 / 缺失」状态，录屏分享前请注意
-- 编辑 `apiKey` 时当前值会作为输入默认值显示
-- `ai use` 运行期间无法实时查看当前 Provider（原生 TUI 独占终端），只能退出后看切换汇总或 `ai log --trace`；实时视图依赖未实现的 Web 面板
-- `ai session list` / `ai last` 记的是**启动时**选定的 Provider，执行期间发生的请求级自动切换不回写，实际承接者用 `ai log --trace` 确认
+- `ai web` 的侧栏显示默认 Provider，不是请求级实时承接者；`ai use` 运行期间的准确切换结果仍需用 `ai log --trace` 核实
+- 新请求的 Web 详情展示已观测 Token、成本、耗时和落点；旧日志缺少关联时保持未知，不推算完整实时 trace

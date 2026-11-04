@@ -1,18 +1,22 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { addProvider, deleteProvider, getProviderPriorityOptions, refreshAllProviders, updateProvider } from "../dist/core/providers/provider-service.js";
-import { readCache, recordProviderRuntimeFailure, upsertProviderCache } from "../dist/core/config/cache-store.js";
-import { readProviders, writeProviders } from "../dist/core/config/providers-store.js";
+import { readCache, recordProviderRuntimeFailure, recordProviderRuntimeSuccess, upsertProviderCache } from "../dist/core/config/cache-store.js";
+import { readProviders, writeProviders, normalizeProviders } from "../dist/core/config/providers-store.js";
+import { resolveProviderProxy } from "../dist/core/network/proxy.js";
+import { checkProvider } from "../dist/core/models/model-discovery.js";
 import { getProviderStatus, getProviderStatuses } from "../dist/core/status/status-service.js";
 import { runCheckCommand } from "../dist/cli/commands/check.js";
 import { runModelsCommand } from "../dist/cli/commands/models.js";
 import { runAddCommand } from "../dist/cli/commands/add.js";
 import { buildProviderLevelChoices } from "../dist/cli/commands/edit.js";
 import { runProxyCommand } from "../dist/cli/commands/proxy.js";
-import { loadRuntimeConfig } from "../dist/core/config/runtime-config.js";
+import { runFailoverCommand } from "../dist/cli/commands/failover.js";
+import { loadRuntimeConfig, setRuntimeFailover } from "../dist/core/config/runtime-config.js";
 import { configureGlobalProxy } from "../dist/core/network/proxy.js";
 import { getExecutionUserDoctorItem, runDeepDoctor, runDoctor } from "../dist/core/status/doctor-service.js";
 import { resolveExactProviderForTool, resolveProviderForTool, resolveProviderCandidatesForTool } from "../dist/core/runner/fallback.js";
@@ -384,6 +388,34 @@ test("setCodexProvider writes custom provider config and Codex-compatible auth a
   assert.doesNotMatch(config, /provider-secret/);
 });
 
+test("setCodexProvider removes stale provider auth command hooks", async () => {
+  const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-codex-stale-auth-command-"));
+  await fs.writeFile(path.join(codexHome, "config.toml"), [
+    'model_provider = "old"',
+    "[model_providers.old]",
+    'name = "Old provider"',
+    'experimental_bearer_token_command = ["node", "C:/workspace/dist/cli/codex-auth.js"]',
+    "[features]",
+    "multi_agent = true",
+    ""
+  ].join("\n"));
+  await setCodexProvider({
+    type: "provider",
+    model: "gpt-5.6-sol",
+    provider: {
+      name: "new-provider",
+      baseUrl: "https://example.test/v1",
+      apiKey: "provider-secret",
+      mode: "auto",
+      level: 1,
+      model: "gpt-5.6-sol"
+    }
+  }, { codexHome, scheduleRestart: async () => ({ scheduled: false, reason: "test" }) });
+  const config = await fs.readFile(path.join(codexHome, "config.toml"), "utf8");
+  assert.doesNotMatch(config, /codex-auth\.js|token_command|auth_command/);
+  assert.match(config, /\[features\]\nmulti_agent = true/);
+});
+
 test("setCodexProvider accepts Codex-written ChatGPT auth and switches to openai", async () => {
   const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-codex-chatgpt-"));
   await fs.writeFile(path.join(codexHome, "config.toml"), "model_provider = \"custom\"\n", "utf8");
@@ -565,9 +597,9 @@ test("provider edit priority choices identify the current provider by name", () 
   ];
 
   assert.deepEqual(buildProviderLevelChoices(providers, "86-codex"), [
-    { label: "0 - excluded from automatic fallback", value: 0 },
-    { label: "1 - swap with first", value: 1 },
-    { label: "2 - current: 86-codex", value: 2 }
+    { label: "excluded from automatic fallback", value: 0, key: "0" },
+    { label: "swap with first", value: 1, key: "1" },
+    { label: "current: 86-codex", value: 2, key: "2" }
   ]);
 });
 
@@ -593,7 +625,7 @@ test("ai proxy persists a normalized Runtime proxy and supports clearing", async
         check: async () => ({ ok: true, durationMs: 1, error: null })
       });
       assert.equal((await loadRuntimeConfig()).proxyUrl, "http://127.0.0.1:8081");
-      assert.equal(output.some((line) => line.includes("AI Runtime proxy set")), true);
+      assert.equal(output.some((line) => line.includes("AI Runtime default proxy set")), true);
 
       await assert.rejects(
         runProxyCommand(["127.0.0.1", "9090"], {
@@ -605,11 +637,134 @@ test("ai proxy persists a normalized Runtime proxy and supports clearing", async
 
       await runProxyCommand(["--disable"]);
       assert.equal((await loadRuntimeConfig()).proxyUrl, undefined);
-      assert.equal(output.some((line) => line.includes("AI Runtime proxy cleared")), true);
+      assert.equal(output.some((line) => line.includes("AI Runtime default proxy cleared")), true);
     } finally {
       configureGlobalProxy(null);
       console.log = originalLog;
     }
+  });
+});
+
+test("ai proxy scopes a proxy to a single provider", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "alpha", baseUrl: "https://alpha.test/v1", apiKey: "k1", mode: "auto", level: 1, model: "" },
+      { name: "beta", baseUrl: "https://beta.test/v1", apiKey: "k2", mode: "auto", level: 2, model: "" }
+    ]);
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    const ok = async () => ({ ok: true, durationMs: 1, error: null });
+    try {
+      await runProxyCommand(["alpha", "127.0.0.1", "8082"], { check: ok });
+      let providers = await readProviders();
+      assert.equal(providers.find((p) => p.name === "alpha").proxyUrl, "http://127.0.0.1:8082");
+      assert.equal("proxyUrl" in providers.find((p) => p.name === "beta"), false);
+      assert.equal((await loadRuntimeConfig()).proxyUrl, undefined);
+      assert.equal(output.some((line) => line.includes("Provider proxy set to: http://127.0.0.1:8082")), true);
+
+      await assert.rejects(
+        runProxyCommand(["alpha", "127.0.0.1", "9999"], {
+          check: async () => ({ ok: false, durationMs: 1, error: "connection refused" })
+        }),
+        /Previous proxy kept/
+      );
+      providers = await readProviders();
+      assert.equal(providers.find((p) => p.name === "alpha").proxyUrl, "http://127.0.0.1:8082");
+
+      await runProxyCommand(["alpha", "--disable"]);
+      providers = await readProviders();
+      assert.equal("proxyUrl" in providers.find((p) => p.name === "alpha"), false);
+      assert.equal(output.some((line) => line.includes("Provider proxy cleared for alpha.")), true);
+
+      await assert.rejects(runProxyCommand(["nosuch", "notaport"], {}), /Provider not found: nosuch/);
+    } finally {
+      configureGlobalProxy(null);
+      console.log = originalLog;
+    }
+  });
+});
+
+test("provider edit rejects an unreachable proxy without changing its configuration", async () => {
+  await withTempHome(async () => {
+    const unavailable = net.createServer();
+    await new Promise((resolve) => unavailable.listen(0, "127.0.0.1", resolve));
+    const port = unavailable.address().port;
+    await new Promise((resolve) => unavailable.close(resolve));
+    const provider = { name: "alpha", baseUrl: "https://alpha.test/v1", apiKey: "k", mode: "auto", level: 1, model: "gpt-5" };
+    await writeProviders([provider]);
+
+    await assert.rejects(updateProvider("alpha", { proxyUrl: `http://127.0.0.1:${port}` }), /Proxy check failed:.*Previous proxy kept/);
+    assert.deepEqual(await readProviders(), [provider]);
+  });
+});
+
+test("provider normalization keeps valid proxyUrl and silently drops invalid values", () => {
+  const normalized = normalizeProviders([
+    { name: "good", baseUrl: "https://good.test/v1", apiKey: "k", mode: "auto", level: 1, model: "", proxyUrl: "http://proxy.test:8080" },
+    { name: "blank", baseUrl: "https://blank.test/v1", apiKey: "k", mode: "auto", level: 2, model: "", proxyUrl: "" },
+    { name: "garbage", baseUrl: "https://garbage.test/v1", apiKey: "k", mode: "auto", level: 3, model: "", proxyUrl: "not a proxy" }
+  ]);
+  assert.equal(normalized.find((p) => p.name === "good").proxyUrl, "http://proxy.test:8080");
+  assert.equal("proxyUrl" in normalized.find((p) => p.name === "blank"), false);
+  // 垃圾串在手编 providers.json 读取时静默丢弃（normalizeProviderShape），normalizeProviders 只剥空串——
+  // 这里验证空串哨兵；无效值路径经 readProviders 覆盖。
+  assert.equal(normalized.find((p) => p.name === "garbage").proxyUrl, "not a proxy");
+});
+
+test("readProviders drops an invalid hand-edited proxyUrl without failing", async () => {
+  await withTempHome(async () => {
+    const { getProvidersPath } = await import("../dist/core/config/paths.js");
+    await fs.writeFile(
+      getProvidersPath(),
+      JSON.stringify([
+        { name: "hand", baseUrl: "https://hand.test/v1", apiKey: "k", mode: "auto", level: 1, model: "", proxyUrl: "not a proxy" }
+      ]),
+      "utf8"
+    );
+    const providers = await readProviders();
+    assert.equal(providers.length, 1);
+    assert.equal("proxyUrl" in providers[0], false);
+  });
+});
+
+test("resolveProviderProxy prefers the provider proxy over the runtime default", () => {
+  assert.equal(resolveProviderProxy({ proxyUrl: "http://p.test:1" }, "http://g.test:2"), "http://p.test:1");
+  assert.equal(resolveProviderProxy({ proxyUrl: "   " }, "http://g.test:2"), "http://g.test:2");
+  assert.equal(resolveProviderProxy(undefined, "http://g.test:2"), "http://g.test:2");
+  assert.equal(resolveProviderProxy({ proxyUrl: "http://p.test:1" }, null), "http://p.test:1");
+  assert.equal(resolveProviderProxy({}, undefined), null);
+  assert.equal(resolveProviderProxy(undefined, null), null);
+});
+
+test("model discovery uses a compatible fetch for the provider proxy dispatcher", async () => {
+  await withTempHome(async () => {
+    const { MockAgent } = await import("undici");
+    const { getProxyDispatcher, closeProxyDispatchers } = await import("../dist/core/network/proxy.js");
+    const agent = new MockAgent();
+    agent.disableNetConnect();
+    agent.get("https://proxied.test").intercept({ path: "/v1/models", method: "GET" })
+      .reply(200, { data: [{ id: "gpt-5.5" }] }, { headers: { "content-type": "application/json" } });
+    const dispatcher = getProxyDispatcher("http://127.0.0.1:9999");
+    const originalDispatch = dispatcher.dispatch;
+    dispatcher.dispatch = agent.dispatch.bind(agent);
+    try {
+      const result = await checkProvider({ name: "proxied", baseUrl: "https://proxied.test/v1", apiKey: "k", mode: "auto", level: 1, model: "", proxyUrl: "http://127.0.0.1:9999" });
+      assert.equal(result.status, "ok");
+      assert.deepEqual(result.models, ["gpt-5.5"]);
+      agent.assertNoPendingInterceptors();
+    } finally {
+      dispatcher.dispatch = originalDispatch;
+      await agent.close();
+      await closeProxyDispatchers();
+    }
+    let capturedInit;
+    mockFetch((url, init) => {
+      capturedInit = init;
+      return jsonResponse({ data: [{ id: "gpt-5.5" }] });
+    });
+    await checkProvider({ name: "direct", baseUrl: "https://direct.test/v1", apiKey: "k", mode: "auto", level: 2, model: "" });
+    assert.equal(capturedInit?.dispatcher, undefined);
   });
 });
 
@@ -636,7 +791,7 @@ test("interactive add accepts a manually verified model when GET models is unava
       await runAddCommand([], {
         text: async (message) => answers.get(message) ?? "",
         select: async (message) => {
-          if (message === "Select priority (0 excludes automatic fallback)") return 1;
+          if (message === "Select priority level (0 excludes automatic fallback)") return 1;
           throw new Error("model selector should not run after manual verification");
         }
       });
@@ -1317,6 +1472,72 @@ test("explicit model requests drop providers whose catalog lacks that model", as
   });
 });
 
+test("setRuntimeFailover persists the flag and clears it on re-enable", async () => {
+  await withTempHome(async () => {
+    assert.equal((await loadRuntimeConfig()).failoverDisabled, undefined);
+
+    const disabled = await setRuntimeFailover(true);
+    assert.equal(disabled.failoverDisabled, true);
+    assert.equal((await loadRuntimeConfig()).failoverDisabled, true);
+
+    const enabled = await setRuntimeFailover(false);
+    assert.equal(enabled.failoverDisabled, undefined);
+    assert.equal((await loadRuntimeConfig()).failoverDisabled, undefined);
+  });
+});
+
+test("disabling auto-failover collapses candidate resolution to a single provider", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "primary", baseUrl: "https://primary.test/v1", apiKey: "p", mode: "auto", level: 1, model: "gpt-5.5" },
+      { name: "backup", baseUrl: "https://backup.test/v1", apiKey: "b", mode: "auto", level: 2, model: "gpt-5.4" },
+      { name: "explicit-zero", baseUrl: "https://zero.test/v1", apiKey: "z", mode: "auto", level: 0, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("primary", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("backup", { status: "ok", models: ["gpt-5.4"], lastCheckedAt: "now", lastError: null });
+    await upsertProviderCache("explicit-zero", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+
+    // 默认开启：自动链保留全部 level > 0 候选。
+    const automaticOn = await resolveProviderCandidatesForTool("codex");
+    assert.deepEqual(automaticOn.map((candidate) => candidate.provider.name), ["primary", "backup"]);
+
+    await setRuntimeFailover(true);
+
+    const automaticOff = await resolveProviderCandidatesForTool("codex");
+    assert.deepEqual(automaticOff.map((candidate) => candidate.provider.name), ["primary"]);
+
+    const explicitOff = await resolveProviderCandidatesForTool("codex", "backup");
+    assert.deepEqual(explicitOff.map((candidate) => candidate.provider.name), ["backup"]);
+  });
+});
+
+test("ai failover toggles the global switch and reports state", async () => {
+  await withTempHome(async () => {
+    const output = [];
+    const originalLog = console.log;
+    console.log = (...values) => output.push(values.join(" "));
+    try {
+      await runFailoverCommand([]);
+      assert.equal(output.some((line) => line.includes("auto-failover is ON")), true);
+
+      await runFailoverCommand(["off"]);
+      assert.equal((await loadRuntimeConfig()).failoverDisabled, true);
+      assert.equal(output.some((line) => line.includes("disabled")), true);
+
+      await runFailoverCommand([]);
+      assert.equal(output.some((line) => line.includes("auto-failover is OFF")), true);
+
+      await runFailoverCommand(["on"]);
+      assert.equal((await loadRuntimeConfig()).failoverDisabled, undefined);
+      assert.equal(output.some((line) => line.includes("enabled")), true);
+
+      await assert.rejects(runFailoverCommand(["bogus"]), /Usage: ai failover/);
+    } finally {
+      console.log = originalLog;
+    }
+  });
+});
+
 test("automatic fallback keeps Claude and Codex providers in their compatible model families", async () => {
   await withTempHome(async () => {
     await writeProviders([
@@ -1423,6 +1644,49 @@ test("runtime provider failures open a circuit breaker after repeated errors", a
     assert.equal(typeof cache.providers.flaky.circuitOpenUntil, "string");
     assert.equal(cache.providers.flaky.healthScore < 100, true);
     assert.equal(resolved.provider.name, "good");
+  });
+});
+
+test("failover off bypasses existing circuits and does not open new runtime circuits", async () => {
+  await withTempHome(async () => {
+    await writeProviders([
+      { name: "primary", baseUrl: "https://primary.test/v1", apiKey: "p", mode: "auto", level: 1, model: "gpt-5.5" }
+    ]);
+    await upsertProviderCache("primary", {
+      status: "error", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: "timeout",
+      consecutiveFailures: 3, circuitOpenUntil: new Date(Date.now() + 600_000).toISOString()
+    });
+    await setRuntimeFailover(true);
+    assert.equal((await resolveProviderForTool("codex")).provider.name, "primary");
+    for (let i = 0; i < 3; i += 1) await recordProviderRuntimeFailure("primary", "timeout");
+    const cache = await readCache();
+    assert.equal(cache.providers.primary.consecutiveFailures, 6);
+    assert.equal(cache.providers.primary.circuitOpenUntil, null);
+    assert.equal((await resolveProviderForTool("codex")).provider.name, "primary");
+    await setRuntimeFailover(false);
+    await recordProviderRuntimeFailure("primary", "timeout");
+    assert.equal(typeof (await readCache()).providers.primary.circuitOpenUntil, "string");
+    assert.deepEqual(await resolveProviderCandidatesForTool("codex"), []);
+  });
+});
+
+test("a successful probe restores the health score to full", async () => {
+  await withTempHome(async () => {
+    await upsertProviderCache("recovered", { status: "ok", models: ["gpt-5.5"], lastCheckedAt: "now", lastError: null });
+
+    // 两次失败把分数打到 30（100 - 35 - 35），单纯 +25 的恢复步长永远填不平这个坑。
+    await recordProviderRuntimeFailure("recovered", "http_404");
+    await recordProviderRuntimeFailure("recovered", "http_404");
+    const damaged = await readCache();
+    assert.equal(damaged.providers.recovered.healthScore, 30);
+
+    await recordProviderRuntimeSuccess("recovered");
+    const healed = await readCache();
+
+    assert.equal(healed.providers.recovered.healthScore, 100);
+    assert.equal(healed.providers.recovered.consecutiveFailures, 0);
+    assert.equal(healed.providers.recovered.circuitOpenUntil, null);
+    assert.equal(healed.providers.recovered.lastError, null);
   });
 });
 

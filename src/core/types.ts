@@ -22,6 +22,8 @@ export type Provider = {
   mode: ProviderMode;
   level: number;
   model: string;
+  /** 出站代理 origin；未设置时回退 runtime.json 的全局默认。 */
+  proxyUrl?: string;
   requestProfile?: ProviderRequestProfile;
 };
 
@@ -60,7 +62,12 @@ export type UsageEvent = {
   provider: string;
   tool: RunToolType;
   model: string;
-  source: "doctor_deep" | "model_probe" | "proxy" | "cli";
+  source: "doctor_deep" | "model_probe" | "proxy" | "cli" | "codex_app";
+  id?: string;
+  traceId?: string;
+  sessionId?: string;
+  costUsd?: number;
+  costSource?: "provider" | "pricing" | "unknown";
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
@@ -107,6 +114,12 @@ export type SessionRecord = {
   status: SessionStatus;
   exitCode: number | null;
   fallbackFrom: string | null;
+  traceId?: string;
+  actualProvider?: string;
+  actualModel?: string;
+  lastRequestId?: string;
+  nativeSessionId?: string;
+  resumedFrom?: string;
 };
 
 export type SessionsFile = {

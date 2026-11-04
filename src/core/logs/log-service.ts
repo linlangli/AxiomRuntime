@@ -1,8 +1,20 @@
 import crypto from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getLogPath } from "../config/paths.js";
 import type { LogCategory, LogEvent, LogLevel } from "../types.js";
+
+export type LogContext = { traceId?: string; sessionId?: string; executionId?: string };
+const contexts = new AsyncLocalStorage<LogContext>();
+
+export function withLogContext<T>(context: LogContext, operation: () => T): T {
+  return contexts.run({ ...contexts.getStore(), ...context }, operation);
+}
+
+export function getLogContext(): LogContext {
+  return contexts.getStore() ?? {};
+}
 
 /**
  * 生成一条调用链路的关联 id。一次请求/任务只调用一次，之后的每一跳复用同一个值，
@@ -22,14 +34,20 @@ export type WriteLogInput = {
 };
 
 export async function writeLog(input: WriteLogInput): Promise<void> {
+  const context = getLogContext();
+  const traceId = input.traceId ?? context.traceId;
   const event: LogEvent = {
     timestamp: new Date().toISOString(),
     level: input.level ?? "info",
     category: input.category,
     action: input.action,
     message: input.message,
-    ...(input.traceId ? { traceId: input.traceId } : {}),
-    metadata: input.metadata
+    ...(traceId ? { traceId } : {}),
+    metadata: {
+      ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+      ...(context.executionId ? { executionId: context.executionId } : {}),
+      ...input.metadata
+    }
   };
 
   try {
@@ -42,20 +60,51 @@ export async function writeLog(input: WriteLogInput): Promise<void> {
 }
 
 export async function readRecentLogs(limit = 50): Promise<LogEvent[]> {
+  const events: LogEvent[] = [];
+  if (limit <= 0) return events;
+  for await (const event of iterateLogsNewestFirst()) {
+    events.push(event);
+    if (events.length >= limit) break;
+  }
+  return events.reverse();
+}
+
+export async function* iterateLogsNewestFirst(): AsyncGenerator<LogEvent> {
+  let file;
   try {
-    const raw = await fs.readFile(getLogPath(), "utf8");
-    const events = raw
-      .split("\n")
-      .filter(Boolean)
-      .map(parseLogLine)
-      .filter((event): event is LogEvent => Boolean(event));
-    return events.slice(-limit);
+    file = await fs.open(getLogPath(), "r");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
+  try {
+    let position = (await file.stat()).size;
+    let carry = Buffer.alloc(0);
+    let skippingOversized = false;
+    while (position > 0) {
+      const length = Math.min(position, 65_536);
+      position -= length;
+      const chunk = Buffer.alloc(length);
+      const { bytesRead } = await file.read(chunk, 0, length, position);
+      const buffer = Buffer.concat([chunk.subarray(0, bytesRead), carry]);
+      let end = buffer.length;
+      for (let index = buffer.length - 1; index >= 0; index -= 1) {
+        if (buffer[index] !== 10) continue;
+        if (!skippingOversized) {
+          const event = parseLogLine(buffer.subarray(index + 1, end).toString("utf8"));
+          if (event) yield event;
+        }
+        skippingOversized = false;
+        end = index;
+      }
+      carry = buffer.subarray(0, end);
+      if (carry.length > 4 * 1024 * 1024) { carry = Buffer.alloc(0); skippingOversized = true; }
+    }
+    if (!skippingOversized) {
+      const event = parseLogLine(carry.toString("utf8"));
+      if (event) yield event;
+    }
+  } finally { await file.close(); }
 }
 
 export async function ensureLogFile(): Promise<string> {

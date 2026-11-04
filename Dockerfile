@@ -5,8 +5,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
+COPY web/package.json web/package-lock.json ./web/
+RUN npm --prefix web ci
 COPY tsconfig.json ./
 COPY src ./src
+COPY web ./web
 RUN npm run build \
     && npm prune --omit=dev \
     && node --input-type=module --eval \

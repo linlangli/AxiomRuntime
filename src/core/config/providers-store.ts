@@ -1,29 +1,42 @@
 import { getProvidersPath } from "./paths.js";
-import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
-import { readNumber, readOptionalRecord, readRecord, readString } from "./schema.js";
+import { readJsonFile, updateJsonFile } from "./json-store.js";
+import { readNumber, readOptionalRecord, readOptionalString, readRecord, readString } from "./schema.js";
+import { normalizeProxyUrl } from "../network/proxy.js";
 import type { Provider, ProviderAuthScheme, ProviderMode, ProviderRequestProfile } from "../types.js";
+import { hydrateProviderSecrets, parseProviderDocument, protectProviderSecrets } from "./provider-secrets.js";
 
 const VALID_MODES = new Set<ProviderMode>(["ask", "auto"]);
 const VALID_AUTH_SCHEMES = new Set<ProviderAuthScheme>(["bearer", "x-api-key", "api-key"]);
 
 export async function readProviders(): Promise<Provider[]> {
   const raw = await readJsonFile<unknown>(getProvidersPath(), []);
-  if (!Array.isArray(raw)) {
-    throw new Error("providers.json must contain a JSON array.");
-  }
-  return normalizeProviders(raw.map(normalizeProviderShape));
+  return decodeProviders(raw);
 }
 
 export async function writeProviders(providers: Provider[]): Promise<void> {
-  await writeJsonFile(getProvidersPath(), normalizeProviders(providers));
+  await updateProviders(() => providers);
 }
 
 export async function updateProviders(updater: (providers: Provider[]) => Provider[] | Promise<Provider[]>): Promise<Provider[]> {
-  return updateJsonFile<Provider[]>(getProvidersPath(), [], async (raw) => {
-    if (!Array.isArray(raw)) {
-      throw new Error("providers.json must contain a JSON array.");
-    }
-    return normalizeProviders(await updater(normalizeProviders(raw.map(normalizeProviderShape))));
+  let result: Provider[] = [];
+  await updateJsonFile<unknown>(getProvidersPath(), [], async raw => {
+    const document = parseProviderDocument(raw);
+    result = normalizeProviders(await updater(await decodeProviders(raw)));
+    return document.backend === "keyring" ? protectProviderSecrets(result, document.rows) : result;
+  });
+  return result;
+}
+
+export async function decodeProviders(raw: unknown): Promise<Provider[]> {
+  return normalizeProviders((await hydrateProviderSecrets(parseProviderDocument(raw).rows)).map(normalizeProviderShape));
+}
+
+export async function restoreProviders(raw: unknown): Promise<void> {
+  const incoming = await decodeProviders(raw);
+  const backend = parseProviderDocument(raw).backend;
+  await updateJsonFile<unknown>(getProvidersPath(), [], async current => {
+    const document = parseProviderDocument(current);
+    return backend === "keyring" || document.backend === "keyring" ? protectProviderSecrets(incoming, document.rows) : incoming;
   });
 }
 
@@ -55,6 +68,7 @@ export function normalizeProviders(providers: Provider[]): Provider[] {
       mode: VALID_MODES.has(provider.mode) ? provider.mode : "auto",
       level: Number.isInteger(provider.level) && provider.level > 0 ? provider.level : 0,
       model: provider.model.trim(),
+      ...(provider.proxyUrl?.trim() ? { proxyUrl: provider.proxyUrl.trim() } : {}),
       ...(provider.requestProfile ? { requestProfile: normalizeRequestProfile(provider.requestProfile) } : {})
     };
   });
@@ -115,6 +129,8 @@ function normalizeProviderShape(value: unknown): Provider {
   const provider = readRecord(value, "provider");
   const mode = readString(provider, "mode");
   const requestProfile = readOptionalRecord(provider.requestProfile, "provider.requestProfile");
+  const proxyUrl = readOptionalString(provider, "proxyUrl");
+  const normalizedProxyUrl = proxyUrl ? normalizeProviderProxyShape(proxyUrl) : undefined;
   return {
     name: readString(provider, "name"),
     baseUrl: readString(provider, "baseUrl"),
@@ -122,8 +138,19 @@ function normalizeProviderShape(value: unknown): Provider {
     mode: mode === "ask" ? "ask" : "auto",
     level: readNumber(provider, "level", Number.MAX_SAFE_INTEGER),
     model: readString(provider, "model"),
+    ...(normalizedProxyUrl ? { proxyUrl: normalizedProxyUrl } : {}),
     ...(requestProfile ? { requestProfile: normalizeRequestProfileShape(requestProfile) } : {})
   };
+}
+
+// providers.json 是人类可编辑文件：无效 proxyUrl 静默丢弃而不是让 readProviders() 整体失败，
+// 与 mode/level 的宽松归一化先例一致。
+function normalizeProviderProxyShape(value: string): string | undefined {
+  try {
+    return normalizeProxyUrl(value) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeRequestProfileShape(value: Record<string, unknown>): ProviderRequestProfile {

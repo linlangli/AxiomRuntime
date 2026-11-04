@@ -1,5 +1,6 @@
-import { Agent, ProxyAgent, setGlobalDispatcher } from "undici";
+import { Agent, ProxyAgent, setGlobalDispatcher, type Dispatcher } from "undici";
 import net from "node:net";
+import type { Provider } from "../types.js";
 
 const PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -77,6 +78,53 @@ export function applyProxyToEnv(env: NodeJS.ProcessEnv, proxyUrl: string | null)
 
 export function configureGlobalProxy(proxyUrl: string | null): void {
   setGlobalDispatcher(proxyUrl ? new ProxyAgent(proxyUrl) : new Agent());
+}
+
+/** 两级解析：provider.proxyUrl 优先，runtime.json 全局默认兜底。 */
+export function resolveProviderProxy(
+  provider: Pick<Provider, "proxyUrl"> | undefined,
+  globalProxyUrl: string | null | undefined
+): string | null {
+  const own = provider?.proxyUrl?.trim();
+  return own ? own : globalProxyUrl ?? null;
+}
+
+export type UpstreamDispatcherOptions = {
+  connections?: number;
+  headersTimeout?: number;
+  bodyTimeout?: number;
+};
+
+/** 每次调用新建、由调用方负责 close()（usage proxy / runtime server 的按路由实例用）。 */
+export function createUpstreamDispatcher(
+  proxyUrl: string | null,
+  options: UpstreamDispatcherOptions = {}
+): Dispatcher {
+  const shared = {
+    connections: options.connections ?? 4,
+    pipelining: 0,
+    headersTimeout: options.headersTimeout,
+    bodyTimeout: options.bodyTimeout ?? 0
+  };
+  return proxyUrl ? new ProxyAgent({ uri: proxyUrl, ...shared }) : new Agent(shared);
+}
+
+const proxyDispatcherCache = new Map<string, Dispatcher>();
+
+/** 进程内按 URL 复用的轻量 dispatcher（控制面探测用）；超时由调用方 AbortController 控制。 */
+export function getProxyDispatcher(proxyUrl: string): Dispatcher {
+  const cached = proxyDispatcherCache.get(proxyUrl);
+  if (cached) return cached;
+  const dispatcher = new ProxyAgent(proxyUrl);
+  proxyDispatcherCache.set(proxyUrl, dispatcher);
+  return dispatcher;
+}
+
+/** 仅供测试清理缓存连接池。 */
+export async function closeProxyDispatchers(): Promise<void> {
+  const dispatchers = [...proxyDispatcherCache.values()];
+  proxyDispatcherCache.clear();
+  await Promise.all(dispatchers.map((dispatcher) => dispatcher.close()));
 }
 
 export async function checkProxyEndpoint(
