@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { getConfigRoot, getTelegramBotDir } from "../config/paths.js";
+import { expandHomePath, getConfigRoot, getTelegramBotDir } from "../config/paths.js";
 import { readJsonFile, writeJsonFile } from "../config/json-store.js";
 import { loadRuntimeConfig, setRuntimeFailover, setRuntimeProxy } from "../config/runtime-config.js";
 import { loadBotConfig, updateBotConfig } from "../config/telegram-config.js";
@@ -41,7 +42,7 @@ export async function applyLocalSettings(input: Record<string, unknown>) {
   if (action === "codex-usage") {
     await configureCodexAppUsage(input);
     const status = await syncCodexAppUsage({ force: true });
-    return { effect: status.lastError ?? (status.enabled ? "Codex App 用量采集已开启，按 Provider 统计启用后的用量，无需重启 App。" : "Codex App 用量采集已关闭，已有统计保留。") };
+    return { effect: status.lastError ?? (status.enabled ? "Codex 本机用量采集已开启，按 Provider 统计启用后的用量。" : "Codex 本机用量采集已关闭，已有统计保留。") };
   }
   if (action === "backup") return createSettingsBackup();
   if (action === "restore") {
@@ -69,16 +70,25 @@ export async function applyLocalSettings(input: Record<string, unknown>) {
     const name = stringValue(input.name);
     if (!BOT_NAME.test(name)) throw new SettingsInputError("Bot 名称只支持 1–32 位小写字母、数字、短横线和下划线。");
     if (input.defaultEngine !== "claude" && input.defaultEngine !== "codex") throw new SettingsInputError("请选择有效的执行引擎。");
+    if (input.codexAuth !== undefined && input.codexAuth !== "provider" && input.codexAuth !== "chatgpt") throw new SettingsInputError("请选择有效的 Codex 登录方式。");
     if (!Array.isArray(input.allowedUserIds) || input.allowedUserIds.some(id => !Number.isSafeInteger(id) || Number(id) <= 0)) throw new SettingsInputError("用户白名单必须是正整数 ID。");
-    const providerName = stringValue(input.provider);
+    const editRuntimeProvider = input.codexAuth !== "chatgpt";
+    const providerName = editRuntimeProvider ? stringValue(input.provider) : "";
     if (providerName && !(await listProviders()).some(provider => provider.name === providerName)) throw new SettingsInputError("所选 Provider 不存在。");
-    const cwd = stringValue(input.defaultCwd);
-    if (!path.isAbsolute(cwd) || !(await fs.stat(cwd).catch(() => null))?.isDirectory()) throw new SettingsInputError("工作目录必须是本机已存在的绝对路径。");
+    if (input.defaultCwd !== undefined && typeof input.defaultCwd !== "string") throw new SettingsInputError("请输入有效的工作目录路径。");
+    const requestedCwd = expandHomePath(stringValue(input.defaultCwd));
+    const cwd = path.isAbsolute(requestedCwd) ? requestedCwd : path.join(os.homedir(), requestedCwd);
+    const directory = await fs.stat(cwd).catch(() => null);
+    if (!directory) throw new SettingsInputError("工作目录不存在或无法访问。");
+    if (!directory.isDirectory()) throw new SettingsInputError("工作目录指向文件，请填写目录路径。");
     const proxy = normalizeSettingsProxy(input.proxyUrl);
     if (proxy && !(await checkProxyEndpoint(proxy)).ok) throw new SettingsInputError("Bot 代理端点无法连接。");
     await updateBotConfig(name, {
       defaultEngine: input.defaultEngine, defaultCwd: cwd, allowedUserIds: input.allowedUserIds as number[], allowAllUsers: false,
-      provider: providerName || undefined, model: stringValue(input.model) || undefined, proxyUrl: proxy ?? undefined,
+      ...(editRuntimeProvider ? { provider: providerName || undefined, model: stringValue(input.model) || undefined } : {}),
+      proxyUrl: proxy ?? undefined,
+      ...(input.codexAuth === undefined ? {} : { codexAuth: input.codexAuth }),
+      ...(input.codexModel === undefined ? {} : { codexModel: stringValue(input.codexModel) || undefined }),
       ...(!(await listConfiguredBots()).includes(name) ? { defaultPermissionMode: "default" as const } : {}),
       ...(typeof input.token === "string" && input.token.trim() ? { token: input.token.trim() } : {})
     });

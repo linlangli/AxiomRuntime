@@ -497,7 +497,7 @@ brew update</pre>
           <div class="chips" aria-label="常用筛选提示">
             <span class="chip">需要 Node.js <code>22.19.0+</code></span>
             <span class="chip">Provider 统一在 <code>ai provider</code></span>
-            <span class="chip">Telegram /model 只显示 AI Gateway 管理的 provider</span>
+            <span class="chip">Telegram /model 支持 Runtime Provider 和 Codex ChatGPT 模型</span>
           </div>
 
           <table class="command-table" id="commandTable">
@@ -540,6 +540,12 @@ brew update</pre>
                 <td>用默认 provider 和默认模型启动 Claude Code 或 Codex。</td>
                 <td>不指定时使用 <code>level: 1</code>。</td>
               </tr>
+              <tr data-search="use codex chatgpt login oauth">
+                <td><span class="group-label">使用</span></td>
+                <td><code class="cmd">ai use codex chatgpt [model]</code></td>
+                <td>复用已有 ChatGPT 文件凭证，需要时先打开浏览器登录，然后启动 Codex CLI。</td>
+                <td>新登录保存到 Codex <code>auth.json</code>；Provider 仅对本次启动生效。名为 <code>chatgpt</code> 的 Runtime Provider 用 <code>ai use codex --provider chatgpt [model]</code> 选择。</td>
+              </tr>
               <tr data-search="image generate image prompt model b64 url">
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai image 51talk-image "一只戴墨镜的猫"</code></td>
@@ -573,7 +579,7 @@ brew update</pre>
               <tr data-search="set codex usage token provider map app 采集 统计 对应关系">
                 <td><span class="group-label">使用</span></td>
                 <td><code class="cmd">ai set codex usage on</code><br /><code class="cmd">ai set codex usage off</code><br /><code class="cmd">ai set codex usage status</code><br /><code class="cmd">ai set codex usage map openai 我的站</code></td>
-                <td>只读采集本机 Codex App 的真实 Token，按 Provider 和模型汇入现有用量统计。</td>
+                <td>只读采集本机 Codex App 与 <code>ai use codex chatgpt</code> 的真实 Token，按 Provider 和模型汇入现有用量统计。</td>
                 <td>首次同步时默认开启；已有关闭设置保持关闭。未知 Provider 按 ID 归属，不补录采集起点之前或关闭期间的历史。</td>
               </tr>
               <tr data-search="last resume previous selection">
@@ -669,7 +675,7 @@ brew update</pre>
               <tr data-search="web dashboard panel local">
                 <td><span class="group-label">其它</span></td>
                 <td><code class="cmd">ai web</code></td>
-                <td>启动本机控制面板并打开浏览器；页面分为运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心。图表支持 7/30/70 天筛选、Provider 趋势、带圆角轻量涂鸦纹理且无分段间隔的占比图和 GitHub 式按周排列的小方格调用活动；短区间保留浅色日历上下文，统计数字只来自当前筛选区间。成本卡片右上角可编辑每个 Provider/模型的美元/百万 token 输入、输出和 Cache Read 价格，Provider 完整下拉列表合并当前配置、历史 usage 与已有价格键，直接选择即可切换；模型下拉合并缓存目录、默认模型、历史 usage 与已有价格键，并支持手动输入模型 ID。运行记录分为调用记录、工具会话、系统日志：调用详情以侧边抽屉展示结果与中文时间线，分别统计重试和切换；缺少终止事件显示结果未知。工具会话展示启动配置、时长和退出结果，仅按明确 sessionId 关联调用；系统日志支持分类、级别、Provider 筛选和原始字段展开。图表日期入口默认进入调用记录并保留日期。本地配置分为服务配置、模型路由、工具配置、网络代理、消息接入、配置维护六个分类，可编辑 Provider/Codex/代理/Telegram；完整记忆模块尚未实现，暂不显示记忆设置入口，embedding 前置配置请使用 <code>ai memory embedding</code>。对外服务可选择能力并生成反代示例。帮助中心的命令手册与本手册同源，完整覆盖全部分类、参数说明、运行规则和示例，支持跨分类搜索、命令分组筛选、内容展开与一键复制。</td>
+                <td>启动本机控制面板并打开浏览器；页面分为运行总览、用量统计、本地配置、调用追踪、对外服务、帮助中心。图表支持 今天/7/30 天筛选、Provider 趋势、带圆角轻量涂鸦纹理且无分段间隔的占比图和 GitHub 式按周排列的小方格调用活动；短区间保留浅色日历上下文，统计数字只来自当前筛选区间。成本卡片右上角可编辑每个 Provider/模型的美元/百万 token 输入、输出和 Cache Read 价格，Provider 完整下拉列表合并当前配置、历史 usage 与已有价格键，直接选择即可切换；模型下拉合并缓存目录、默认模型、历史 usage 与已有价格键，并支持手动输入模型 ID。运行记录分为调用记录、工具会话、系统日志：调用详情以侧边抽屉展示结果与中文时间线，分别统计重试和切换；缺少终止事件显示结果未知。工具会话展示启动配置、时长和退出结果，仅按明确 sessionId 关联调用；系统日志支持分类、级别、Provider 筛选和原始字段展开。图表日期入口默认进入调用记录并保留日期。本地配置分为服务配置、模型路由、工具配置、网络代理、消息接入、配置维护六个分类，可编辑 Provider/Codex/代理/Telegram；完整记忆模块尚未实现，暂不显示记忆设置入口，embedding 前置配置请使用 <code>ai memory embedding</code>。对外服务可选择能力并生成反代示例。帮助中心的命令手册与本手册同源，完整覆盖全部分类、参数说明、运行规则和示例，支持跨分类搜索、命令分组筛选、内容展开与一键复制。</td>
                 <td>仅监听 127.0.0.1；访问链接含临时 token。配置写入前生成快照，凭证只在创建时显示一次。反代与 TLS 需要在自己的服务器部署，旧 Codex App 聊天不会随配置切换而迁移。编辑 Provider 的 model 若提示没有缓存，先执行 <code>ai models &lt;provider&gt;</code> 再编辑。控制面入口缺失或无法读取时会在启动前报错。本地源码或 npm link 安装请在项目根目录执行 <code>npm ci --prefix web</code> 和 <code>npm run build</code>，再运行 <code>ai web</code>；切换分支后也需重新构建。旧进程若显示 Not found，请先按 Ctrl+C 停止后再修复重启。仅运行 tsc 不生成控制面页面；npm 全局安装请重新安装 <code>@offerpilot/axiomruntime</code>。</td>
               </tr>
             </tbody>
@@ -683,7 +689,7 @@ brew update</pre>
             <p>新模型请求在「运行记录 → 调用记录」显示独立 traceId、父 executionId、已观测 Token、成本及来源和终止耗时；旧记录缺少关联时显示未知，辅助请求不进入模型调用汇总。工具会话区分启动配置与最近成功的实际 Provider/模型，信号退出按失败记录。历史存储、备份与回滚的完整命令见「凭据与历史」分类。</p>
             <h3>按引导连接服务器</h3>
             <p>「验证与调用 → 实际调用工作台」支持对话、Responses、向量、图片生成/参考图上传编辑、隔离工作区 Agent，以及 <code>tools</code> 注册工具执行。工作台始终保留，凭证仅用于本次本机或公网请求，不保存；真实调用会产生费用，响应限 40 MiB。公网授权调用成功且响应符合协议才标记部署验证通过；配置变化后验证失效。当前工具只提供 <code>runtime.status</code> 与 <code>providers.list</code>，请求 <code>POST /v1/tools/execute</code>，请求体为 <code>{"name":"runtime.status"}</code>，不执行任意 Shell 命令。</p>
-            <p>「本地配置 → 工具配置」可备份并持久保存 Claude 用户连接，保留其他字段；「消息接入」支持 Bot 启动、停止、重启、删除配置（保留数据库与日志）。「运行记录」与「用量统计」提供完整历史分页、CSV/JSON 下载及每 2 秒实时刷新，内容为安全字段投影；SQLite 用量/会话可索引分页，日志页仅保留当前页；完整调用聚合仍需扫描，长期容量尚待验收。SSH 连接参数进入快照，但专用私钥、主机信任、请求计数、部署验证证据不进入快照；恢复 SSH 配置前需断开隧道并关闭自启。</p>
+            <p>「本地配置 → 工具配置」可备份并持久保存 Claude 用户连接，保留其他字段；「消息接入」支持 Bot 启动、停止、重启、删除配置（保留数据库与日志）。「用量统计」提供用量分页查询、CSV/JSON 下载与手动刷新，内容为安全字段投影；SQLite 用量/会话可索引分页，日志页仅保留当前页；完整调用聚合仍需扫描，长期容量尚待验收。SSH 连接参数进入快照，但专用私钥、主机信任、请求计数、部署验证证据不进入快照；恢复 SSH 配置前需断开隧道并关闭自启。</p>
             <p>「对外服务」使用唯一四步导航：「开放能力 → 调用凭证 → 启动与连接 → 验证与调用」。侧栏显示各步已保存状态与摘要，可自由返回；首次进入根据保存的能力、有效凭证和 API/隧道状态定位首个未完成步骤，状态刷新不会切走当前步骤，切步保留草稿。技术参数、指纹与密钥准备及「运行管理与连接详情」按需展开；窄屏使用横向紧凑四步导航，表单纵向排列。</p>
             <p>旧版启动的 Bot 若缺少进程归属标识，Web 与新版具名 CLI 会拒绝向该 PID 发送停止信号。先在系统进程列表核实 Bot 的入口与 PID，再手动停止旧进程，之后从新版启动；不要直接依据过期 PID 文件结束进程。</p>
             <ol>
@@ -726,7 +732,8 @@ curl https://ai.example.com/v1/images/edits \
                 <pre>ai use claude
 ai use codex
 ai use claude 51talk
-ai use codex 51talk gpt-5.5</pre>
+ai use codex 51talk gpt-5.5
+ai use codex chatgpt</pre>
                 <p>不指定 provider 时使用 <code>level: 1</code>；不指定模型时使用 provider 默认 <code>model</code>。</p>
               </div>
               <div class="note">
@@ -790,7 +797,7 @@ ai image recover "./.ai-image-recovery/响应记录.json"</pre>
                   <li>已经产生文字、推理或工具参数后不会静默重放；只有后续带请求体的模型 POST（不含 multipart）确认切换；GET、空请求及 count_tokens 不消耗待确认状态。</li>
                   <li>真实成功的健康检查把该 Provider 的健康分直接恢复到满分，历史误判扣分不会长期滞留。</li>
                   <li>Claude Code 使用临时 <code>--settings</code> 注入环境变量，不修改用户 settings；本次子进程会移除继承的 <code>ANTHROPIC_AUTH_TOKEN</code>，临时 settings 还会用空值遮蔽用户 settings 里的同名变量，避免与所选 Provider 的 <code>ANTHROPIC_API_KEY</code> 形成双认证。</li>
-                  <li><code>ai use codex</code> 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
+                  <li>使用 Runtime Provider 时，<code>ai use codex</code> 使用本次子进程的 <code>-c model_provider=...</code> 固定所选 provider，并通过 <code>env_key = "OPENAI_API_KEY"</code> 使用 AI Gateway 注入的 Key；不会修改 Codex 全局认证或配置。</li>
                   <li>provider 的 <code>mode</code> 为 <code>auto</code> 时，非 root 执行 Claude Code 会追加 <code>--dangerously-skip-permissions</code>；<code>ask</code> 模式不会追加，并会在启动前确认。root 下请求 <code>auto</code> 会被安全约束为默认权限，临时 settings 中继承的 bypass 配置也会被清除。</li>
                   <li>OpenAI 兼容地址用于 Codex 时会使用 <code>/v1</code>，用于 Claude 时会去掉 <code>/v1</code>。</li>
                   <li>Claude 与 Codex 通过唯一 execution-scoped 代理记录实际 provider/model、请求 traceId、sessionId 及已观测用量；默认账本为 usage.json，显式迁移后为 history.sqlite。Provider 返回的成本优先于价格表估算；写失败记录 usage_persistence_failed，不重放已完成请求。</li>
@@ -824,7 +831,10 @@ ai set codex proxy off</pre>
           </section>
 
           <section class="panel" id="codex-usage">
-            <h2>Codex App 用量采集</h2>
+            <h2>Codex 本机用量采集</h2>
+            <p>运行记录同时显示「Codex App 回合」和「Codex CLI · ChatGPT」，复用采集开关和起点。按原生回合 ID 关联状态、模型与时间；中止或证据缺失显示未知。App 回合显示会话配置 Provider，来自原生会话元数据。它是任务回合，不是单次模型请求；汇总明确上下文中唯一未结束回合的已观测 Token，不推断实际 Provider、成本、重试或切换。最多展示最近 100 个回合，受增量扫描限制，可能需多次刷新追上。</p>
+            <p>用量统计默认显示今天的 UTC 自然日。Web 日志流水支持时间和 Provider 筛选、搜索及 CSV/JSON 导出；通过刷新按钮手动刷新，用量统计页仅展示用量记录；时间按浏览器本地时区显示，Token 按 k、w、亿缩写，不可用时显示 —，导出保留原始值。</p>
+            <p>运行总览的错误提示点击「查看记录」后在当前浏览器隐藏，新错误会重新提示；日志保留。</p>
             <p>Web 配置快照在受管配置保存前、恢复前或手动创建；页面刷新不会定时创建备份。</p>
             <p>本地配置的工具配置页并排展示 Claude Code 与 Codex。选择 Provider 时自动只读探测模型目录，不调用模型；Claude Code 可编辑会话默认模型和权限模式，模型族别名覆盖在同一表单中；Codex 可统一预览并修改推理强度、沙箱模式和审批策略，ChatGPT 模式仅显示本机文件凭证中可读取的账号邮箱。</p>
             <details open>
@@ -834,13 +844,13 @@ ai set codex proxy off</pre>
 ai set codex usage status
 ai set codex usage map openai 我的站
 ai set codex usage off</pre>
-                <p>Web 不显示采集设置，仍可通过 CLI 管理。未知 Provider ID 按原 ID 归属；无法确认账户的 openai 标为 ChatGPT（账户未知），既有 CLI 映射仍优先。仅采集开启后的桌面会话，独立 CLI、SDK 和云端任务尚不覆盖。会话账户标识与当前凭证账户匹配时，新记录可按账户名称归属；其他情况标为账户未知，已入账记录不改写。</p>
+                <p>Web 不显示采集设置，仍可通过 CLI 管理。未知 Provider ID 按原 ID 归属；无法确认账户的 openai 标为 ChatGPT（账户未知），既有 CLI 映射仍优先。采集开启后的桌面会话和由新版 <code>ai use codex chatgpt</code> 创建的 CLI 会话。CLI 启动与采集需使用同一个 Codex 目录。会话账户标识与当前凭证账户匹配时，新记录可按账户名称归属；其他情况标为账户未知，已入账记录不改写。</p>
                 <ul>
                   <li>首次同步时默认开启，已有关闭设置保持关闭，从采集起点开始。刷新面板或执行 <code>ai status</code> / <code>ai set codex usage status</code> 时同步；面板打开时约每 15 秒刷新，无需重启 App。首次启用前和关闭期间的历史不补录，更换目录重新设置采集起点，关闭后已有统计保留。</li>
-                  <li>只读 <code>sessions</code> 和 <code>archived_sessions</code> 中带 Codex Desktop 身份的本机会话记录，以实际 <code>model_provider</code> 和模型入账。未知 ID 按原 ID 归属，已有手动映射仍优先；不按当前配置猜测旧会话归属。</li>
+                  <li>只读 <code>sessions</code> 和 <code>archived_sessions</code> 中带受支持来源的本机会话记录，以实际 <code>model_provider</code> 和模型入账。未知 ID 按原 ID 归属，已有手动映射仍优先；不按当前配置猜测旧会话归属。</li>
                   <li>合并到原有 Provider 图表、周用量和模型价格列表。Cache Read 已含在输入，reasoning 已含在输出，不重复计数；费用按 Provider/模型配置估算，ChatGPT 订阅的估算不代表额外账单。</li>
                   <li>重复事件、并发同步、文件重读和游标恢复不会重复记账。Runtime 代理会话、独立 CLI 与 SDK 会话排除；不修改 Codex 登录、网络配置，不保存提示词、回复、附件或密钥。</li>
-                  <li>这是对 Codex 内部 JSONL 格式的适配，并非稳定公开 API；格式变化可能暂停采集，非法或回退的计数跳过并显示诊断，目录不可读时保留原账本。云端任务和未带桌面身份的记录不在范围内。</li>
+                  <li>这是对 Codex 内部 JSONL 格式的适配，并非稳定公开 API；格式变化可能暂停采集，非法或回退的计数跳过并显示诊断，目录不可读时保留原账本。云端任务和无来源标记的 CLI 会话不在范围内。</li>
                   <li><code>codex-usage.json</code> 保存采集设置，<code>codex-usage-state.json</code> 保存增量游标，不进入 Web 配置快照，恢复快照不会自动启用采集或回退采集起点。</li>
                 </ul>
               </div>
@@ -927,15 +937,30 @@ ai telegram status --all</pre>
                   <li>legacy <code>telegram.json</code> 首次会自动迁移为命名 Bot <code>default</code>；删除 <code>default</code> 后，列表、生命周期命令和 Bot 服务不会再从 legacy 配置重建它。无目标 <code>ai telegram config</code> 仍可管理 legacy global config。</li>
                   <li><code>config set ... --bot &lt;name&gt;</code> 只修改指定 Bot，不影响全局或其他 Bot；token 不会出现在命令日志或终端输出中。</li>
                   <li>命名 Bot 的配置、PID、日志和会话保存在 <code>~/.ai-gateway/telegram/bots/&lt;name&gt;.json|.pid|.log|.sqlite</code>。</li>
+                  <li>在 Web 的「消息接入」填写 <code>Agent</code> 或 <code>~/Agent</code>，都会选择用户主目录下的现有 <code>Agent</code> 目录。也可填写绝对路径，留空则使用主目录。CLI 的 <code>defaultCwd</code> 支持 <code>~</code> 和 <code>~/</code>。</li>
                   <li>为保持兼容，存在命名 Bot 时，无目标 <code>start</code>、<code>stop</code>、<code>status</code> 仍作用于全部命名 Bot。</li>
                   <li>默认只有 <code>allowedUserIds</code> 中的 Telegram 用户可以访问 Bot；如需开放给所有用户，显式设置 <code>allowAllUsers: true</code>。</li>
-                  <li>远程执行复用 AI Gateway 顶层 provider；不配置固定 provider/model 时按优先级自动选择。</li>
-                  <li><code>/start</code> 或 <code>/reset</code> 先选择 Provider/Model，再直接以按钮列出历史绝对路径，末尾可选择“自定义”，不再先点击“已存在”。</li>
+                  <li>Runtime Provider 模式复用 Runtime Provider；未指定时按优先级自动选择。</li>
+                  <li><code>/start</code> 或 <code>/reset</code> 会自动采用 Bot 已配置的可用默认项目目录。目录未配置或不可用时才会显示目录选择菜单。Provider 模式先选择 Provider 和模型，ChatGPT 模式的 Codex 直接进入工作目录步骤。</li>
                   <li><code>/provider</code> 以按钮列出全部 AI Provider，可编辑名称、Base URL、API Key、默认模型、模式和优先级，二次确认后删除，或从列表底部添加。操作复用 <code>ai provider</code> 的核心 CRUD 和检查逻辑。</li>
                   <li>Provider API Key 在详情中只显示“已配置”，不会写入 Bot 应用日志；输入后 Bot 会尽力立即删除该 Telegram 消息。未完成表单在 Bot 重启后需要重新开始。</li>
-                  <li>Telegram Codex 执行会自动走本地 OpenAI 兼容代理记录 provider usage；<code>/usage</code> 有 provider cost 时直接展示，否则按 <code>model-pricing.json</code> 估算。</li>
+                  <li>Provider 模式通过本地代理采集用量；<code>/usage</code> 有 provider cost 时直接展示，缺少成本时按 <code>model-pricing.json</code> 估算。</li>
                   <li>如果本机不能直连 <code>api.telegram.org</code>，设置 <code>proxyUrl</code> 或环境变量 <code>HTTPS_PROXY</code> / <code>ALL_PROXY</code>。交互式新增或编辑 Bot 时分别输入主机/IP与端口；例如输入 <code>127.0.0.1</code> 和 <code>8081</code> 会自动保存为 <code>http://127.0.0.1:8081</code>。已有代理会显示当前地址并提供编辑、关闭和取消选项；新地址会先检查代理端点，再通过该代理调用 Telegram <code>getMe</code>，失败时新增 Bot 不保存代理、编辑已有 Bot 保留旧代理。旧的 <code>host:port</code> 与完整 URL 仍兼容。</li>
                 </ul>
+              </div>
+            </details>
+            <details>
+              <summary>用 ChatGPT 账号运行 Codex</summary>
+              <div class="detail-body">
+                <p>使用运行 Bot 的系统用户和同一个 <code>CODEX_HOME</code> 登录，随后退出 CLI 再配置 Bot。</p>
+                <pre>ai use codex chatgpt
+ai telegram config set defaultEngine codex --bot ops
+ai telegram config set codexAuth chatgpt --bot ops
+ai telegram stop --bot ops
+ai telegram start --bot ops</pre>
+                <p>在本地 Web 的「消息接入」选择 ChatGPT 账号后，可单独设置 ChatGPT 模型。切回 Runtime Provider 可继续编辑原有 Provider 和模型。已有对话可发 <code>/codex</code>，<code>codexModel</code> 可覆盖 Codex 默认模型。出站代理依次取 Bot 代理、Runtime 默认代理、进程的代理环境变量。使用 Clash 时由 Clash 规则选节点组。用量流水来源为 <code>codex_telegram_chatgpt</code>。</p>
+                <p>用 ChatGPT 登录的 Codex 改图时，发一张参考图，在图片说明中写明修改要求，或等 Bot 收齐参考图后单独发送要求。相册请在发完后单独发送要求。生成的图片会自动发回当前聊天，超出照片规格时以文件发送。</p>
+                <p>在 Telegram 发送 <code>/model</code> 或点 <code>/config</code> 中的当前模型，可选择本机 Codex 缓存的模型和它支持的推理档位。新设置从该 Bot 的下一条请求生效。选择“跟随 Codex 默认模型”可清除模型和档位覆盖。</p>
               </div>
             </details>
             <details>

@@ -82,6 +82,7 @@ export function summarizeCalls(logs: HistoryLog[], knownSessionIds: ReadonlySet<
     const last = events.at(-1)!;
     const span = Date.parse(last.timestamp) - Date.parse(first.timestamp);
     const usage = events.filter(event => event.action === "openai_usage_proxy_recorded");
+    if (!usage.length && terminal?.action === "task_completed" && terminal.totalTokens !== null) usage.push(terminal);
     const sum = (field: "inputTokens" | "outputTokens" | "totalTokens" | "costUsd") => usage.length && usage.every(event => event[field] !== null)
       ? usage.reduce((total, event) => total + event[field]!, 0) : null;
     return {

@@ -4,14 +4,15 @@ import { readUsage } from "../config/usage-store.js";
 import { projectHistoryLogs, summarizeCalls } from "./execution-history.js";
 import { SettingsInputError } from "../config/service-exposure.js";
 import { queryDatabaseHistory } from "../config/history-database.js";
+import { getNativeCodexCalls } from "../usage/codex-app-usage.js";
 import type { SessionRecord, UsageEvent } from "../types.js";
 
 function projectSession({ id, tool, provider, model, startedAt, endedAt, status, exitCode, actualProvider, actualModel, nativeSessionId, traceId, resumedFrom }: SessionRecord) {
   return { id, tool, provider, model, startedAt, endedAt, status, exitCode, actualProvider, actualModel, nativeSessionId, traceId, resumedFrom };
 }
 
-function projectUsage({ id, createdAt, provider, model, inputTokens, outputTokens, totalTokens, sessionId, traceId, costUsd, costSource }: UsageEvent) {
-  return { id, createdAt, provider, model, inputTokens, outputTokens, totalTokens, sessionId, traceId, costUsd, costSource };
+function projectUsage({ id, createdAt, provider, model, source, tool, inputTokens, outputTokens, totalTokens, cacheReadInputTokens, sessionId, traceId, costUsd, costSource }: UsageEvent) {
+  return { id, createdAt, provider, model, source, tool, inputTokens, outputTokens, totalTokens, cacheReadInputTokens, sessionId, traceId, costUsd, costSource };
 }
 
 export async function queryWebHistory(input: URLSearchParams) {
@@ -47,7 +48,7 @@ export async function queryWebHistory(input: URLSearchParams) {
   else if (kind === "sessions") items = sessions.reverse();
   else {
     const logs = projectHistoryLogs(await readRecentLogs(Number.MAX_SAFE_INTEGER));
-    items = kind === "calls" ? summarizeCalls(logs, new Set(sessions.map(item => item.id))) : logs.reverse();
+    items = kind === "calls" ? [...summarizeCalls(logs, new Set(sessions.map(item => item.id))), ...await getNativeCodexCalls().catch(() => [])].sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt)) : logs.reverse();
   }
   const filtered = items.filter(item => matches(item as Record<string, unknown>));
   return { kind, total: filtered.length, offset, items: filtered.slice(offset, offset + limit), nextOffset: offset + limit < filtered.length ? offset + limit : null };

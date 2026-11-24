@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -8,6 +8,8 @@ import { parse } from "smol-toml";
 import type { Provider } from "../types.js";
 import { resolveToolCommand } from "../runner/command-resolver.js";
 import { getRunnerEngine } from "../runner/engine-registry.js";
+import { applyProxyToEnv } from "../network/proxy.js";
+import { CODEX_CHATGPT_CLI_ORIGINATOR } from "./codex-session-source.js";
 
 const LOCK_OPTIONS = {
   realpath: false,
@@ -22,6 +24,11 @@ const LOCK_OPTIONS = {
 } satisfies lockfile.LockOptions;
 
 const RESERVED_PROVIDER_IDS = new Set(["openai", "ollama", "lmstudio"]);
+const CHATGPT_CLI_ARGS = [
+  "-c", 'model_provider="openai"',
+  "-c", 'forced_login_method="chatgpt"',
+  "-c", 'cli_auth_credentials_store="file"'
+];
 const CODEX_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -432,12 +439,7 @@ async function configureChatGpt(
     snapshotFile(authPath)
   ]);
   try {
-    const exitCode = await (runner ?? runCodexChatGptLogin)({ codexHome });
-    if (exitCode !== 0) {
-      throw new Error(`ChatGPT login failed with exit code ${exitCode}.`);
-    }
-    await validateChatGptAuth(authPath);
-    await fs.chmod(authPath, 0o600);
+    await completeChatGptLogin(authPath, (runner ?? runCodexChatGptLogin)({ codexHome }));
     const currentConfig = configSnapshot?.content.toString("utf8") ?? "";
     await atomicWriteFile(configPath, applyCodexOptions(buildCodexChatGptConfig(currentConfig, model), configOptions ?? {}), configSnapshot?.mode ?? 0o600);
   } catch (error) {
@@ -479,23 +481,97 @@ async function configureCustomProvider(
   }
 }
 
-async function runCodexChatGptLogin({ codexHome }: { codexHome: string }): Promise<number> {
+export async function runCodexWithChatGpt(model?: string): Promise<number> {
+  const command = requireCodexCommand();
+  const codexHome = resolveCodexHome();
+  const authPath = path.join(codexHome, "auth.json");
+  await fs.mkdir(codexHome, { recursive: true, mode: 0o700 });
+  const release = await lockfile.lock(path.join(codexHome, "config.toml"), LOCK_OPTIONS);
+  try {
+    const authorized = await validateChatGptAuth(authPath).then(() => true, () => false);
+    if (!authorized) {
+      const snapshot = await snapshotFile(authPath);
+      try {
+        await completeChatGptLogin(authPath, spawnCodexWithChatGpt(command, codexHome, ["login"]));
+      } catch (error) {
+        await restoreFile(authPath, snapshot);
+        throw error;
+      }
+    }
+  } finally {
+    await release();
+  }
+  const args = model ? [`--model=${model}`] : [];
+  // A shared daemon would miss the per-launch originator environment variable.
+  const help = spawnSync(command, ["--help"], { encoding: "utf8", timeout: 5_000 });
+  if (help.stdout?.includes("--no-daemon")) args.unshift("--no-daemon");
+  return spawnCodexWithChatGpt(command, codexHome, args, CODEX_CHATGPT_CLI_ORIGINATOR);
+}
+
+async function completeChatGptLogin(authPath: string, login: Promise<number>): Promise<void> {
+  const code = await login;
+  if (code !== 0) throw new Error(`ChatGPT login failed with exit code ${code}.`);
+  await validateChatGptAuth(authPath);
+  await fs.chmod(authPath, 0o600);
+}
+
+function requireCodexCommand(): string {
   const command = resolveToolCommand("codex");
   if (!command) {
     throw new Error("Codex CLI not found. Run `ai setup --install-tools` first.");
   }
+  return command;
+}
+
+async function runCodexChatGptLogin({ codexHome }: { codexHome: string }): Promise<number> {
+  return spawnCodexWithChatGpt(requireCodexCommand(), codexHome, ["login"]);
+}
+
+function buildCodexChatGptEnv(codexHome: string, originator?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome };
+  for (const key of ["OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AI_GATEWAY_BASE_URL"]) {
+    delete env[key];
+  }
+  if (originator) env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE = originator;
+  return env;
+}
+
+export async function prepareCodexChatGptExec(originator: string, proxyUrl: string | null, reasoningEffort?: string) {
+  const command = requireCodexCommand();
+  const codexHome = resolveCodexHome();
+  try {
+    await validateChatGptAuth(path.join(codexHome, "auth.json"));
+  } catch {
+    throw new Error("未检测到 ChatGPT 登录。请使用运行 Bot 的系统用户和同一个 CODEX_HOME 执行 ai use codex chatgpt 登录。");
+  }
+  return {
+    command,
+    configArgs: reasoningEffort
+      ? [...CHATGPT_CLI_ARGS, "-c", `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`]
+      : CHATGPT_CLI_ARGS,
+    env: applyProxyToEnv(buildCodexChatGptEnv(codexHome, originator), proxyUrl)
+  };
+}
+
+function spawnCodexWithChatGpt(command: string, codexHome: string, args: string[], originator?: string): Promise<number> {
+  const env = buildCodexChatGptEnv(codexHome, originator);
   return new Promise<number>((resolve, reject) => {
-    const child = spawn(command, ["-c", "cli_auth_credentials_store=\"file\"", "login"], {
-      env: { ...process.env, CODEX_HOME: codexHome },
-      stdio: "inherit"
+    const child = spawn(command, [...CHATGPT_CLI_ARGS, ...args], { env, stdio: "inherit" });
+    const interrupt = () => child.kill("SIGINT");
+    const terminate = () => child.kill("SIGTERM");
+    const cleanup = () => {
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", terminate);
+    };
+    process.on("SIGINT", interrupt);
+    process.on("SIGTERM", terminate);
+    child.once("error", (error) => {
+      cleanup();
+      reject(error);
     });
-    child.once("error", reject);
     child.once("close", (code, signal) => {
-      if (signal) {
-        reject(new Error(`ChatGPT login was interrupted by ${signal}.`));
-        return;
-      }
-      resolve(code ?? 1);
+      cleanup();
+      resolve(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 1) : 1));
     });
   });
 }
@@ -510,7 +586,8 @@ async function validateChatGptAuth(authPath: string): Promise<void> {
   if (!isRecord(auth) || auth.auth_mode !== "chatgpt" || !isRecord(auth.tokens)) {
     throw new Error("ChatGPT login did not produce valid Codex credentials.");
   }
-  if (typeof auth.tokens.access_token !== "string" || typeof auth.tokens.refresh_token !== "string") {
+  if (typeof auth.tokens.access_token !== "string" || !auth.tokens.access_token.trim()
+    || typeof auth.tokens.refresh_token !== "string" || !auth.tokens.refresh_token.trim()) {
     throw new Error("ChatGPT login credentials are incomplete.");
   }
 }
@@ -649,6 +726,35 @@ async function atomicWriteFile(filePath: string, content: string | Buffer, mode:
 function resolveCodexHome(explicit?: string): string {
   const value = explicit ?? process.env.CODEX_HOME;
   return value ? path.resolve(value) : path.join(os.homedir(), ".codex");
+}
+
+export type CodexChatGptModel = { slug: string; reasoningEfforts: string[] };
+
+export async function readCodexChatGptModels(): Promise<CodexChatGptModel[]> {
+  try {
+    const catalog: unknown = JSON.parse(await fs.readFile(path.join(resolveCodexHome(), "models_cache.json"), "utf8"));
+    if (!isRecord(catalog) || !Array.isArray(catalog.models)) return [];
+    const models = catalog.models.flatMap((model: unknown) => {
+      if (!isRecord(model) || model.visibility !== "list" || typeof model.slug !== "string"
+        || !/^[a-z0-9][a-z0-9._-]*$/i.test(model.slug)) return [];
+      const priority = typeof model.priority === "number" && Number.isFinite(model.priority) ? model.priority : Infinity;
+      const reasoningEfforts = Array.isArray(model.supported_reasoning_levels)
+        ? [...new Set(model.supported_reasoning_levels.flatMap((level: unknown) =>
+            isRecord(level) && typeof level.effort === "string" && /^[a-z]{1,24}$/.test(level.effort)
+              ? [level.effort] : []
+          ))]
+        : [];
+      return [{ slug: model.slug, reasoningEfforts, priority }];
+    });
+    models.sort((left, right) => left.priority - right.priority);
+    const catalogBySlug = new Map<string, CodexChatGptModel>();
+    for (const { slug, reasoningEfforts } of models) {
+      if (!catalogBySlug.has(slug)) catalogBySlug.set(slug, { slug, reasoningEfforts });
+    }
+    return [...catalogBySlug.values()];
+  } catch {
+    return [];
+  }
 }
 
 function ensureTrailingNewline(value: string): string {

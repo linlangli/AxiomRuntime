@@ -24,9 +24,15 @@ const currentTab = computed(() => tabs.find(item => item.id === tab.value)!)
 const categories: Record<string, string> = { model: '模型请求', check: '服务检查', config: '配置变更', system: '系统运行' }
 const levels: Record<string, string> = { info: '信息', warn: '警告', error: '错误' }
 const results: Record<CallItem['state'], string> = { succeeded: '执行成功', failed: '执行失败', unknown: '结果未知' }
+function callSourceLabel(call: CallItem) {
+  if (call.source === 'codex_cli_chatgpt') return 'Codex CLI · ChatGPT'
+  return call.source === 'codex_app' ? 'Codex App 回合' : 'Runtime'
+}
+function callResult(call: CallItem) { return call.source ? ({ succeeded: '回合完成', failed: '回合失败', unknown: '结果未知' })[call.state] : results[call.state] }
 const resultClass = (state: CallItem['state']) => state === 'succeeded' ? 'ok' : state === 'failed' ? 'error' : 'unknown'
 const providers = computed(() => [...new Set([
   ...props.data.providers.map(item => item.name),
+  ...props.data.calls.flatMap(call => call.route),
   ...props.data.logs.flatMap(event => [event.provider, event.from, event.to]),
   ...props.data.sessions.flatMap(session => [session.provider, ...(session.actualProvider ? [session.actualProvider] : [])])
 ].filter((name): name is string => Boolean(name)))].sort())
@@ -40,7 +46,7 @@ const totals = computed(() => [
 function matches(value: string, query: string) { return value.toLowerCase().includes(query.trim().toLowerCase()) }
 const calls = computed(() => dayCalls.value.filter(call =>
   (status.value === 'all' || (status.value === 'switched' ? call.switchCount > 0 : status.value === 'retried' ? call.retryCount > 0 : call.state === status.value)) &&
-  matches(`${call.id} ${call.model ?? ''} ${call.tool ?? ''} ${call.route.join(' ')} ${results[call.state]}`, queries.value.calls)))
+  matches(`${callSourceLabel(call)} ${call.id} ${call.model ?? ''} ${call.tool ?? ''} ${call.route.join(' ')} ${results[call.state]}`, queries.value.calls)))
 const sessions = computed(() => props.data.sessions.filter(session =>
   (!props.selectedDay || session.startedAt.startsWith(props.selectedDay)) && (!provider.value || session.provider === provider.value || session.actualProvider === provider.value) &&
   matches(`${session.id} ${session.tool} ${session.provider} ${session.model} ${session.actualProvider ?? ''} ${session.actualModel ?? ''}`, queries.value.sessions)))
@@ -53,6 +59,8 @@ const actionLabels: Record<string, string> = {
   tool_run_settled: '工具执行成功', runtime_provider_settled: '模型任务执行成功', runtime_server_request_settled: '收到上游响应', openai_usage_proxy_request_settled: '模型请求结束',
   tool_candidates_exhausted: '所有工具候选执行失败', runtime_provider_candidates_exhausted: '所有任务候选执行失败',
   runtime_server_candidates_exhausted: '所有请求候选执行失败', runtime_server_request_failed: '请求执行失败', provider_candidates_unavailable: '没有可用 Provider',
+  codex_cli_chatgpt_task_started: 'Codex CLI 回合开始', codex_cli_chatgpt_task_complete: 'Codex CLI 回合结束', codex_cli_chatgpt_turn_aborted: 'Codex CLI 回合中止',
+  codex_app_task_started: 'Codex App 回合开始', codex_app_task_complete: 'Codex App 回合结束', codex_app_turn_aborted: 'Codex App 回合中止',
   task_completed: '任务已完成', task_failed: '任务执行失败',
   openai_usage_proxy_request: '发送模型请求', openai_usage_proxy_recorded: '记录模型用量', openai_usage_proxy_no_usage: '响应未包含用量',
   openai_usage_proxy_error: '模型代理异常', openai_usage_proxy_upstream_error: '上游连接异常',
@@ -129,15 +137,15 @@ onBeforeUnmount(() => { drawer.value?.close(); restoreScroll() })
 
   <template v-if="tab === 'calls'">
     <div class="history-totals"><div v-for="item in totals" :key="item.label" class="history-total"><span class="history-total-icon" :class="item.tone"><component :is="item.icon" :size="18" /></span><div><span>{{ item.label }}</span><strong>{{ item.count }}</strong></div></div></div>
-    <div class="info-banner"><Clock3 :size="17" /><p>基于最近 {{ data.logs.length }} 条日志，按执行归组；一次工具执行可能包含多次模型请求。未记录终止事件的调用显示“结果未知”。{{ selectedDay ? '日期按 UTC 事件日期筛选。' : '' }}</p></div>
+    <div class="info-banner"><Clock3 :size="17" /><p>包含 Runtime 执行与 Codex 原生回合。回合可能包含多次模型请求，并展示可关联的已观测 Token。未记录终止事件的调用显示“结果未知”。{{ selectedDay ? '日期按 UTC 事件日期筛选。' : '' }}</p></div>
     <section class="card call-card">
       <div class="card-head"><div><h2>调用记录 <span class="hand-tag">every run has a story</span></h2><p>{{ calls.length }} 条匹配记录 · 点击查看执行过程</p></div></div>
       <div class="call-list">
         <button v-for="call in calls" :key="call.id" class="call-row" :aria-label="`查看调用：${call.model ?? '模型未记录'}，${results[call.state]}，${date(call.startedAt)}`" @click="openCall(call.id)">
           <span class="call-icon" :class="resultClass(call.state)"><CheckCircle2 v-if="call.state === 'succeeded'" :size="19" /><TriangleAlert v-else-if="call.state === 'failed'" :size="19" /><CircleHelp v-else :size="19" /></span>
-          <span class="call-main"><strong>{{ call.model ?? '模型未记录' }}</strong><small>{{ call.tool ?? '工具未记录' }} · {{ call.provider ? `结果 Provider：${call.provider}` : `起始 Provider：${call.initialProvider ?? '未记录'}` }}</small><span class="call-tags"><span v-if="call.switchCount" class="chip">切换 {{ call.switchCount }} 次</span><span v-if="call.retryCount" class="chip">重试 {{ call.retryCount }} 次</span><span v-if="!call.provider" class="call-muted">结果 Provider 未记录</span></span></span>
+          <span class="call-main"><strong>{{ call.model ?? '模型未记录' }}</strong><span v-if="call.source" class="chip">{{ callSourceLabel(call) }}</span><small>{{ call.tool ?? '工具未记录' }} · {{ call.source ? `会话配置 Provider：${call.initialProvider ?? '未记录'}` : call.provider ? `结果 Provider：${call.provider}` : `起始 Provider：${call.initialProvider ?? '未记录'}` }}</small><span class="call-tags"><span v-if="call.switchCount" class="chip">切换 {{ call.switchCount }} 次</span><span v-if="call.retryCount" class="chip">重试 {{ call.retryCount }} 次</span><span v-if="!call.provider && !call.source" class="call-muted">结果 Provider 未记录</span></span></span>
           <span class="call-time"><span>{{ date(call.startedAt) }}</span><small>{{ callDuration(call) }}</small></span>
-          <span class="pill" :class="resultClass(call.state)">{{ results[call.state] }}</span><ChevronRight :size="16" class="call-chevron" />
+          <span class="pill" :class="resultClass(call.state)">{{ callResult(call) }}</span><ChevronRight :size="16" class="call-chevron" />
         </button>
       </div>
       <div v-if="!calls.length" class="empty"><CircleHelp :size="30" /><p>{{ data.calls.length ? '没有匹配的调用记录，请调整日期、结果或搜索条件。' : '暂无可关联的调用记录。通过 Runtime 执行任务后，有 traceId 的调用会显示在这里。' }}</p><small>未带调用 ID 的事件仍可在“系统日志”查看。</small></div>
@@ -166,8 +174,8 @@ onBeforeUnmount(() => { drawer.value?.close(); restoreScroll() })
   <Teleport to="body"><dialog ref="drawer" class="history-drawer" aria-labelledby="call-detail-title" @click="backdropClick" @close="selected = null; restoreScroll()">
     <div v-if="detail" class="drawer-body">
       <header class="drawer-heading"><div><span class="eyebrow">EXECUTION DETAILS</span><h2 id="call-detail-title">调用详情</h2></div><button class="icon-button" aria-label="关闭调用详情" autofocus @click="closeDrawer"><X :size="18" /></button></header>
-      <section class="result-paper"><span class="pill" :class="resultClass(detail.state)">{{ results[detail.state] }}</span><h3>{{ detail.model ?? '模型未记录' }}</h3><p v-if="detail.state === 'unknown'">日志窗口内缺少终止事件，无法确认最终结果。</p><dl><div><dt>结果 Provider</dt><dd>{{ detail.provider ?? '未记录' }}</dd></div><div><dt>执行工具</dt><dd>{{ detail.tool ?? '未记录' }}</dd></div><div><dt>首条事件</dt><dd>{{ date(detail.startedAt) }}</dd></div><div><dt>{{ detail.durationMs !== null ? '记录耗时' : '事件记录跨度' }}</dt><dd>{{ duration(detail.durationMs ?? detail.observedDurationMs) }}</dd></div></dl></section>
-      <p class="drawer-note">结果 Provider 取自终止事件。工具执行可能包含多次请求，此处不能代表每次请求的实际承接者；未记录耗时时仅显示事件跨度。</p>
+      <section class="result-paper"><span class="pill" :class="resultClass(detail.state)">{{ callResult(detail) }}</span><p v-if="detail.source">{{ callSourceLabel(detail) }} · 用量汇总回合内可关联的 Token。</p><h3>{{ detail.model ?? '模型未记录' }}</h3><p v-if="detail.state === 'unknown'">缺少可确认结果的终止证据，或回合已中止，最终结果未知。</p><dl><div><dt>{{ detail.source ? '会话配置 Provider' : '结果 Provider' }}</dt><dd>{{ (detail.source ? detail.initialProvider : detail.provider) ?? '未记录' }}</dd></div><div><dt>执行工具</dt><dd>{{ detail.tool ?? '未记录' }}</dd></div><div><dt>首条事件</dt><dd>{{ date(detail.startedAt) }}</dd></div><div><dt>{{ detail.durationMs !== null ? '记录耗时' : '事件记录跨度' }}</dt><dd>{{ duration(detail.durationMs ?? detail.observedDurationMs) }}</dd></div></dl></section>
+      <p v-if="detail.source" class="drawer-note">会话配置 Provider 来自 Codex 原生会话元数据，不能证明每次模型请求的实际承接者。</p><p v-else class="drawer-note">结果 Provider 取自终止事件。工具执行可能包含多次请求，此处不能代表每次请求的实际承接者；未记录耗时时仅显示事件跨度。</p>
       <section class="drawer-section"><div class="drawer-section-heading"><h3>Provider 过程</h3><span>{{ detail.switchCount }} 次切换 · {{ detail.retryCount }} 次同 Provider 重试</span></div><div class="route-summary"><template v-for="(name, index) in detail.route" :key="`${index}-${name}`"><ArrowRight v-if="index" :size="14" /><span>{{ name }}</span></template><span v-if="!detail.route.length">暂无 Provider 过程</span></div><p class="drawer-note">按已记录事件展示，跳过候选不作为实际承接记录；重试和切换分别计数。</p></section>
       <section class="drawer-section"><h3>事件时间线</h3><div class="timeline history-timeline"><div v-for="(event, index) in detail.events" :key="index" class="timeline-row"><div class="timeline-dot" :class="event.level"></div><strong>{{ eventTitle(event) }}</strong><p v-if="event.provider || event.model">{{ event.provider ?? '' }}{{ event.model ? ` · ${event.model}` : '' }}</p><p v-if="event.from || event.to">{{ event.from ?? '—' }} → {{ event.to ?? '—' }}</p><p v-if="event.reason">{{ reasons[event.reason] ?? event.reason }}</p><small>{{ date(event.timestamp) }}<template v-if="event.status !== null"> · 状态 {{ event.status }}</template><template v-if="event.attempt !== null"> · 第 {{ event.attempt }} 次尝试</template></small><details class="event-raw"><summary>原始字段</summary><pre>{{ JSON.stringify(event, null, 2) }}</pre></details></div></div></section>
       <section class="drawer-section"><h3>本次记录用量</h3><p>Token：{{ detail.totalTokens ?? '未记录' }} · 成本：{{ detail.costUsd == null ? '未记录' : `$${detail.costUsd.toFixed(6)}` }}<template v-if="detail.costSource">（{{ detail.costSource === 'provider' ? 'Provider 返回' : '价格表估算' }}）</template></p><p class="drawer-note">仅显示相同请求 ID 下观测到的用量。旧记录缺少关联时保持未知。</p></section>

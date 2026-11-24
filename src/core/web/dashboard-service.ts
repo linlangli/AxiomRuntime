@@ -12,10 +12,11 @@ import { getConfigRoot } from "../config/paths.js";
 import { getLocalSettings } from "./local-settings.js";
 import { projectHistoryLogs, summarizeCalls } from "./execution-history.js";
 import { providerIdForName } from "../integrations/codex-provider-config.js";
-import { syncCodexAppUsage } from "../usage/codex-app-usage.js";
+import { getNativeCodexCalls, syncCodexAppUsage } from "../usage/codex-app-usage.js";
 
 export async function getWebDashboard() {
   const codexUsage = await syncCodexAppUsage();
+  const nativeCalls = await getNativeCodexCalls().catch(() => []);
   const [statuses, cache, usage, logs, sessions, pricing, codex, settings] = await Promise.all([
     getProviderStatuses(), readCache(), readUsage(), readRecentLogs(300), listRecentSessions(30), readModelPricing(), readCodexConfigSummary(), getLocalSettings()
   ]);
@@ -100,7 +101,7 @@ export async function getWebDashboard() {
         }))
     },
     pricing,
-    calls: summarizeCalls(safeLogs, new Set(sessions.map(session => session.id))),
+    calls: [...summarizeCalls(safeLogs, new Set(sessions.map(session => session.id))), ...nativeCalls].sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt)),
     logs: safeLogs.reverse(),
     sessions: sessions.map(({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom, actualProvider, actualModel, nativeSessionId, traceId, resumedFrom }) =>
       ({ id, tool, provider, model, startedAt, endedAt, status, exitCode, fallbackFrom, actualProvider, actualModel, nativeSessionId, traceId, resumedFrom })),

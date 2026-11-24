@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import { getTelegramBotConfigPath, getTelegramBotDbPath, getTelegramBotDir, getTelegramConfigPath, getTelegramDbPath } from "./paths.js";
+import { expandHomePath, getTelegramBotConfigPath, getTelegramBotDbPath, getTelegramBotDir, getTelegramConfigPath, getTelegramDbPath } from "./paths.js";
 import { readJsonFile, updateJsonFile, writeJsonFile } from "./json-store.js";
 import { readBoolean, readNumber, readOptionalString, readString } from "./schema.js";
 import { normalizeProxyUrl } from "../network/proxy.js";
@@ -14,6 +14,9 @@ export type TelegramConfig = {
   allowAllUsers: boolean;
   allowedUserIds: number[];
   defaultEngine: TelegramEngineName;
+  codexAuth?: "provider" | "chatgpt";
+  codexModel?: string;
+  codexReasoningEffort?: string;
   defaultCwd: string;
   defaultPermissionMode: TelegramPermissionMode;
   sessionTimeoutHours: number;
@@ -26,6 +29,10 @@ export type TelegramConfig = {
 
 const VALID_ENGINES = new Set<TelegramEngineName>(["claude", "codex"]);
 const VALID_PERMISSION_MODES = new Set<TelegramPermissionMode>(["readOnly", "default", "acceptEdits", "bypassPermissions"]);
+
+export function usesTelegramCodexChatGpt(engine: TelegramEngineName, config?: TelegramConfig): boolean {
+  return engine === "codex" && config?.codexAuth === "chatgpt";
+}
 
 export async function loadTelegramConfig(): Promise<TelegramConfig> {
   const raw = await readJsonFile<unknown>(getTelegramConfigPath(), getDefaultTelegramConfig());
@@ -41,7 +48,7 @@ export async function saveTelegramConfig(config: TelegramConfig): Promise<Telegr
 
 export async function updateTelegramConfig(patch: Partial<TelegramConfig>): Promise<TelegramConfig> {
   const next = await updateJsonFile(getTelegramConfigPath(), getDefaultTelegramConfig(), (current) =>
-    normalizeTelegramConfig({ ...normalizeTelegramConfig(current), ...patch })
+    mergeTelegramConfig(current, patch)
   );
   await chmodConfigFile();
   return normalizeTelegramConfig(next);
@@ -55,6 +62,14 @@ export async function setTelegramConfigValue(key: string, value: string): Promis
   return updateTelegramConfig({ [key]: parsed } as Partial<TelegramConfig>);
 }
 
+function mergeTelegramConfig(current: unknown, patch: Partial<TelegramConfig>): TelegramConfig {
+  const config = normalizeTelegramConfig(current);
+  if (Object.hasOwn(patch, "codexModel") && patch.codexModel !== config.codexModel) {
+    delete config.codexReasoningEffort;
+  }
+  return normalizeTelegramConfig({ ...config, ...patch });
+}
+
 export function normalizeTelegramConfig(value: unknown): TelegramConfig {
   const defaults = getDefaultTelegramConfig();
   const input = isConfigRecord(value) ? value : {};
@@ -65,6 +80,7 @@ export function normalizeTelegramConfig(value: unknown): TelegramConfig {
   const allowedUserIds = normalizeAllowedUserIds(input.allowedUserIds);
   const provider = readOptionalString(input, "provider");
   const model = readOptionalString(input, "model");
+  const codexModel = readOptionalString(input, "codexModel");
   const rawProxyUrl = readOptionalString(input, "proxyUrl");
   const proxyUrl = rawProxyUrl ? normalizeProxyUrl(rawProxyUrl) : null;
   const dbPath = readString(input, "dbPath", { fallback: defaults.dbPath }) || defaults.dbPath;
@@ -74,7 +90,10 @@ export function normalizeTelegramConfig(value: unknown): TelegramConfig {
     allowAllUsers: readBoolean(input.allowAllUsers ?? defaults.allowAllUsers),
     allowedUserIds,
     defaultEngine: VALID_ENGINES.has(defaultEngine as TelegramEngineName) ? defaultEngine as TelegramEngineName : defaults.defaultEngine,
-    defaultCwd: String(input.defaultCwd ?? defaults.defaultCwd).trim() || defaults.defaultCwd,
+    ...(input.codexAuth === "chatgpt" ? { codexAuth: "chatgpt" as const } : {}),
+    codexModel,
+    codexReasoningEffort: codexModel ? readOptionalString(input, "codexReasoningEffort") : undefined,
+    defaultCwd: expandHomePath(String(input.defaultCwd ?? defaults.defaultCwd).trim()) || defaults.defaultCwd,
     defaultPermissionMode,
     sessionTimeoutHours: Number.isFinite(sessionTimeoutHours) && sessionTimeoutHours > 0 ? sessionTimeoutHours : defaults.sessionTimeoutHours,
     maxOutputLength: Number.isFinite(maxOutputLength) && maxOutputLength >= 500 ? maxOutputLength : defaults.maxOutputLength,
@@ -109,6 +128,10 @@ export function parseTelegramConfigValue(key: keyof TelegramConfig, rawValue: st
   if (key === "defaultPermissionMode") {
     return normalizePermissionMode(value);
   }
+  if (key === "codexAuth") {
+    if (value !== "chatgpt" && value !== "provider") throw new Error("codexAuth must be provider or chatgpt.");
+    return value;
+  }
   if (key === "proxyUrl") {
     return normalizeProxyUrl(value) ?? undefined;
   }
@@ -128,6 +151,9 @@ export function describeTelegramConfig(config: TelegramConfig): string[] {
     `allowAllUsers: ${config.allowAllUsers ? "true" : "false"}`,
     `allowedUserIds: ${config.allowedUserIds.length ? config.allowedUserIds.join(", ") : "(empty)"}`,
     `defaultEngine: ${config.defaultEngine}`,
+    `codexAuth: ${config.codexAuth ?? "provider"}`,
+    `codexModel: ${config.codexModel ?? "(Codex default)"}`,
+    `codexReasoningEffort: ${config.codexReasoningEffort ?? "(Codex default)"}`,
     `defaultCwd: ${config.defaultCwd}`,
     `defaultPermissionMode: ${config.defaultPermissionMode}`,
     `sessionTimeoutHours: ${config.sessionTimeoutHours}`,
@@ -177,6 +203,8 @@ function isTelegramConfigKey(key: string): key is keyof TelegramConfig {
     "allowAllUsers",
     "allowedUserIds",
     "defaultEngine",
+    "codexAuth",
+    "codexModel",
     "defaultCwd",
     "defaultPermissionMode",
     "sessionTimeoutHours",
@@ -239,7 +267,7 @@ export async function updateBotConfig(name: string, patch: Partial<TelegramConfi
   const defaults = getDefaultBotConfig(name);
   await fs.mkdir(getTelegramBotDir(), { recursive: true });
   const next = await updateJsonFile(configPath, defaults, (current) => {
-    const normalized = normalizeTelegramConfig({ ...normalizeTelegramConfig(current), ...patch });
+    const normalized = mergeTelegramConfig(current, patch);
     if (normalized.dbPath === getTelegramDbPath()) {
       normalized.dbPath = getTelegramBotDbPath(name);
     }

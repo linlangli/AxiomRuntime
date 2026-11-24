@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { collectNativeTurn, collectNativeUsage, projectNativeTurns, validNativeTurn, type NativeTurn } from "./codex-app-calls.js";
 import fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import os from "node:os";
@@ -9,6 +10,7 @@ import { readProviders } from "../config/providers-store.js";
 import { appendUsageEvents } from "../config/usage-store.js";
 import { SettingsInputError } from "../config/service-exposure.js";
 import { providerIdForName } from "../integrations/codex-provider-config.js";
+import { CODEX_CHATGPT_CLI_ORIGINATOR, CODEX_CHATGPT_TELEGRAM_ORIGINATOR, type CodexNativeSource } from "../integrations/codex-session-source.js";
 import { isRecord } from "../utils/is-record.js";
 import { writeLog } from "../logs/log-service.js";
 import type { TokenUsage, UsageEvent } from "../types.js";
@@ -20,10 +22,14 @@ export type CodexAppUsageConfig = {
   providerMappings: Record<string, string>;
 };
 type Cursor = {
+  callsVersion?: number;
+  turns?: NativeTurn[];
   identity: string;
   offset: number;
   droppingLine?: boolean;
   sessionId?: string;
+  source?: CodexNativeSource | false;
+  // Present on cursor files from before native CLI collection.
   desktop?: boolean;
   startedAt?: string;
   providerId?: string;
@@ -77,7 +83,7 @@ export async function configureCodexAppUsage(input: Record<string, unknown>): Pr
       if (error instanceof SyntaxError || error instanceof SettingsInputError) return defaultConfig();
       throw error;
     });
-    if (typeof input.enabled !== "boolean") throw new SettingsInputError("请选择是否启用 Codex App 用量采集。");
+    if (typeof input.enabled !== "boolean") throw new SettingsInputError("请选择是否启用 Codex 本机用量采集。");
     const requestedHome = input.codexHome ?? previous.codexHome;
     if (typeof requestedHome !== "string" || !path.isAbsolute(requestedHome)) throw new SettingsInputError("Codex 目录必须是本机绝对路径。");
     let codexHome = path.resolve(requestedHome);
@@ -100,7 +106,7 @@ export async function configureCodexAppUsage(input: Record<string, unknown>): Pr
     };
     await writeJsonFile(configPath(), config);
     recent.delete(getConfigRoot());
-    await writeLog({ category: "system", action: "codex_usage_configured", message: "Codex App usage collection settings updated.", metadata: { enabled: config.enabled, mappings: Object.keys(config.providerMappings).length } });
+    await writeLog({ category: "system", action: "codex_usage_configured", message: "Codex native usage collection settings updated.", metadata: { enabled: config.enabled, mappings: Object.keys(config.providerMappings).length } });
   });
 }
 
@@ -118,13 +124,22 @@ export async function syncCodexAppUsage(options: { force?: boolean } = {}): Prom
   return operation;
 }
 
-async function sync(): Promise<CodexAppUsageStatus> {
+async function loadOrInitializeConfig(): Promise<CodexAppUsageConfig> {
   let config = await getCodexAppUsageConfig();
   const exists = await fs.stat(configPath()).then(() => true).catch(error => { if (error.code === "ENOENT") return false; throw error; });
   if (!exists) {
     config = { ...config, enabled: true, enabledAt: new Date().toISOString() };
     await writeJsonFile(configPath(), config);
   }
+  return config;
+}
+
+export async function initializeCodexUsageCollection(): Promise<void> {
+  await withJsonFileLock(lockPath(), loadOrInitializeConfig);
+}
+
+async function sync(): Promise<CodexAppUsageStatus> {
+  const config = await loadOrInitializeConfig();
   if (!config.enabled || !config.enabledAt) return { ...config, ...emptyStatus() };
   let state = emptyState(config);
   const events: UsageEvent[] = [];
@@ -172,11 +187,16 @@ async function sync(): Promise<CodexAppUsageStatus> {
       const identity = `${stat.dev}:${stat.ino}`;
       let cursor = state.files[key];
       if (!cursor || cursor.identity !== identity || cursor.offset > stat.size
-        || (cursor.desktop === true && !cursor.accountChecked)
+        || cursor.desktop === false
+        || ((cursor.desktop === true || cursor.source) && (!cursor.accountChecked || cursor.callsVersion !== 2))
         || cursor.unmappedProviderIds?.some(identifier => resolveProvider(identifier))
         || (cursor.offset > 0 && cursor.checkpoint !== await checkpoint(file, cursor.offset))) cursor = { identity, offset: 0 };
       state.files[key] = cursor;
-      if (cursor.desktop === false || cursor.offset === stat.size || remaining <= 0) continue;
+      if (cursor.desktop === true && cursor.source === undefined) {
+        cursor.source = "codex_app";
+        delete cursor.desktop;
+      }
+      if (cursor.source === false || cursor.offset === stat.size || remaining <= 0) continue;
       const readLimit = Math.min(remaining, stat.size - cursor.offset);
       remaining -= readLimit;
       await readLines(file, cursor, readLimit, line => {
@@ -184,15 +204,22 @@ async function sync(): Promise<CodexAppUsageStatus> {
           const event: unknown = JSON.parse(line);
           if (!isRecord(event) || !isRecord(event.payload)) return;
           const payload = event.payload;
+          if (cursor.source && cursor.source !== "codex_telegram_chatgpt") collectNativeTurn(cursor, event, config.enabledAt!);
           if (event.type === "session_meta" && !cursor.sessionId) {
             cursor.sessionId = validName(payload.id) ? payload.id : validName(payload.session_id) ? payload.session_id : undefined;
-            cursor.desktop = payload.originator === "Codex Desktop" && validName(payload.model_provider) && payload.model_provider !== "ai_gateway_selected";
             cursor.providerId = validName(payload.model_provider) ? payload.model_provider : undefined;
+            const desktop = payload.originator === "Codex Desktop";
+            const chatGptCli = payload.originator === CODEX_CHATGPT_CLI_ORIGINATOR && payload.source === "cli";
+            const chatGptTelegram = payload.originator === CODEX_CHATGPT_TELEGRAM_ORIGINATOR && payload.source === "exec";
+            cursor.source = desktop && cursor.providerId !== "ai_gateway_selected" ? "codex_app"
+              : cursor.providerId === "openai" && chatGptCli ? "codex_cli_chatgpt"
+              : cursor.providerId === "openai" && chatGptTelegram ? "codex_telegram_chatgpt" : false;
             cursor.accountId = validName(payload.creator_account_id) ? payload.creator_account_id : undefined;
             cursor.accountChecked = true;
+            cursor.callsVersion = 2;
             cursor.startedAt = typeof payload.timestamp === "string" && Number.isFinite(Date.parse(payload.timestamp)) ? payload.timestamp : undefined;
-            if (payload.originator === "Codex Desktop" && (!cursor.sessionId || !cursor.providerId || !cursor.startedAt)) {
-              cursor.desktop = false;
+            if ((desktop || chatGptCli || chatGptTelegram) && (!cursor.sessionId || !cursor.providerId || !cursor.startedAt)) {
+              cursor.source = false;
               state.invalidEvents += 1;
             }
           } else if (event.type === "turn_context") {
@@ -200,7 +227,7 @@ async function sync(): Promise<CodexAppUsageStatus> {
             if (validName(payload.model_provider)) cursor.providerId = payload.model_provider;
           } else if (event.type === "event_msg" && payload.type === "token_count" && isRecord(payload.info)) {
             const totals = tokenUsage(payload.info.total_token_usage);
-            if (!cursor.desktop || !cursor.sessionId) return;
+            if (!cursor.source || !cursor.sessionId) return;
             if (!totals) { state.invalidEvents += 1; return; }
             const previous = cursor.totals;
             cursor.totals = totals;
@@ -210,17 +237,22 @@ async function sync(): Promise<CodexAppUsageStatus> {
             const delta = previous ? subtract(totals, previous) : tokenUsage(payload.info.last_token_usage);
             if (!delta || !delta.totalTokens || delta.inputTokens > totals.inputTokens || delta.outputTokens > totals.outputTokens
               || (delta.cacheReadInputTokens ?? 0) > (totals.cacheReadInputTokens ?? 0)) { state.invalidEvents += 1; return; }
+            if (cursor.source !== "codex_app" && cursor.providerId !== "openai") return;
+            collectNativeUsage(cursor, delta, new Date(timestamp).toISOString());
             if (!cursor.providerId || cursor.providerId === "ai_gateway_selected" || !cursor.model) { state.invalidEvents += 1; return; }
             const accountProvider = cursor.providerId === "openai" && cursor.accountId && tokens && cursor.accountId === tokens.account_id && accountName ? `ChatGPT（${accountName}）` : undefined;
             const provider = accountProvider ?? resolveProvider(cursor.providerId);
             if (!provider) { cursor.unmappedProviderIds = [...new Set([...(cursor.unmappedProviderIds ?? []), cursor.providerId])]; return; }
             const id = crypto.createHash("sha256").update(JSON.stringify([config.codexHome, cursor.sessionId, event.timestamp, totals])).digest("hex");
-            events.push({ id: `codex_app:${id}`, source: "codex_app", tool: "codex", provider, model: cursor.model, ...delta, createdAt: new Date(timestamp).toISOString() });
+            events.push({ id: `${cursor.source}:${id}`, source: cursor.source, tool: "codex", provider, model: cursor.model, ...delta, createdAt: new Date(timestamp).toISOString() });
           }
         } catch { state.invalidEvents += 1; }
       });
       cursor.checkpoint = await checkpoint(file, cursor.offset);
     }
+    const recentTurns = Object.values(state.files).flatMap(cursor => cursor.turns ?? []).sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt));
+    const keep = new Set(recentTurns.slice(0, 200));
+    for (const cursor of Object.values(state.files)) if (cursor.turns) cursor.turns = cursor.turns.filter(turn => keep.has(turn));
     await appendUsageEvents(events);
     state.unmappedProviderIds = [...new Set(Object.values(state.files).flatMap(cursor => cursor.unmappedProviderIds ?? []))].sort();
     state.lastSyncAt = new Date().toISOString();
@@ -231,16 +263,26 @@ async function sync(): Promise<CodexAppUsageStatus> {
   return { ...config, lastSyncAt: state.lastSyncAt, lastError: state.lastError, unmappedProviderIds: state.unmappedProviderIds, invalidEvents: state.invalidEvents };
 }
 
+export async function getNativeCodexCalls() {
+  const config = await getCodexAppUsageConfig();
+  if (!config.enabled) return [];
+  const state: unknown = await readJsonFile(statePath(), null);
+  if (!isRecord(state) || state.codexHome !== config.codexHome || state.enabledAt !== config.enabledAt || !isRecord(state.files)) return [];
+  return projectNativeTurns(config.codexHome, Object.values(state.files).filter(validCursor));
+}
+
 function emptyStatus() {
   return { lastSyncAt: null, lastError: null, unmappedProviderIds: [] as string[], invalidEvents: 0 };
 }
 function failureStatus(config: CodexAppUsageConfig, state: SyncState, error: unknown): CodexAppUsageStatus {
   const code = (error as NodeJS.ErrnoException)?.code;
   return { ...config, lastSyncAt: state.lastSyncAt, unmappedProviderIds: state.unmappedProviderIds, invalidEvents: state.invalidEvents,
-    lastError: `Codex App 用量同步失败（${typeof code === "string" && /^[A-Z_]+$/.test(code) ? code : "read_error"}）；请检查采集目录或重新保存设置，原账本保留。` };
+    lastError: `Codex 本机用量同步失败（${typeof code === "string" && /^[A-Z_]+$/.test(code) ? code : "read_error"}）；请检查采集目录或重新保存设置，原账本保留。` };
 }
 function validCursor(value: unknown): value is Cursor {
   return isRecord(value) && typeof value.identity === "string" && Number.isSafeInteger(value.offset) && Number(value.offset) >= 0
+    && (value.source === undefined || value.source === false || value.source === "codex_app" || value.source === "codex_cli_chatgpt" || value.source === "codex_telegram_chatgpt")
+    && (value.turns === undefined || (Array.isArray(value.turns) && value.turns.length <= 30 && value.turns.every(validNativeTurn)))
     && (value.unmappedProviderIds === undefined || (Array.isArray(value.unmappedProviderIds) && value.unmappedProviderIds.every(validName)))
     && (value.totals === undefined || (isRecord(value.totals) && tokenUsage({ input_tokens: value.totals.inputTokens, output_tokens: value.totals.outputTokens, cached_input_tokens: value.totals.cacheReadInputTokens }) !== undefined));
 }

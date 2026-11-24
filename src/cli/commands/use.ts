@@ -1,16 +1,40 @@
 import { readCache, recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../../core/config/cache-store.js";
+import { runCodexWithChatGpt } from "../../core/integrations/codex-provider-config.js";
 import { newTraceId, writeLog } from "../../core/logs/log-service.js";
 import { refreshAllProviders } from "../../core/providers/provider-service.js";
 import { resolveProviderCandidatesForTool, type ResolvedRun } from "../../core/runner/fallback.js";
 import { runTool } from "../../core/runner/tool-runner.js";
 import type { CliToolType, SessionRecord } from "../../core/types.js";
+import { initializeCodexUsageCollection } from "../../core/usage/codex-app-usage.js";
 import { promptConfirm, promptSelect } from "../prompts/prompt.js";
 
-export async function runUseCommand(args: string[], resume: { nativeSessionId?: string; cwd?: string; resumedFrom?: string } = {}): Promise<void> {
-  const tool = await getTool(args[0]);
-  const providerName = args[1];
-  const modelName = args[2];
+export async function runUseCommand(args: string[]): Promise<void> {
+  if (args[0] === "codex" && args[1] === "chatgpt") {
+    if (args.length > 3 || args[2]?.startsWith("-")) throw new Error("Usage: ai use codex chatgpt [model]");
+    await initializeCodexUsageCollection().catch(() => writeLog({
+      level: "warn",
+      category: "system",
+      action: "codex_usage_initialization_failed",
+      message: "Codex usage collection settings could not be initialized."
+    }));
+    process.exitCode = await runCodexWithChatGpt(args[2]);
+    return;
+  }
+  if (args[0] === "codex" && args[1] === "--provider") {
+    if (!args[2] || args.length > 4) throw new Error("Usage: ai use codex --provider <name> [model]");
+    await runProviderUseCommand("codex", args[2], args[3]);
+    return;
+  }
+  await runProviderUseCommand(args[0], args[1], args[2]);
+}
 
+export async function runProviderUseCommand(
+  toolName?: string,
+  providerName?: string,
+  modelName?: string,
+  resume: { nativeSessionId?: string; cwd?: string; resumedFrom?: string } = {}
+): Promise<void> {
+  const tool = await getTool(toolName);
   if (!providerName) {
     await refreshAllProviders();
   }
@@ -43,7 +67,7 @@ export async function runLastCommand(): Promise<void> {
     console.log("No last selection found.");
     return;
   }
-  await runUseCommand([cache.lastSelection.tool, cache.lastSelection.provider, cache.lastSelection.model]);
+  await runProviderUseCommand(cache.lastSelection.tool, cache.lastSelection.provider, cache.lastSelection.model);
 }
 
 async function getTool(value?: string): Promise<CliToolType> {

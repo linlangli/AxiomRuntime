@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { findImageRollout, readCodexTurnImages } from "../../core/integrations/codex-generated-images.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +11,11 @@ import { sumKnownProxyCosts, sumProxyUsage } from "../../core/runner/openai-usag
 import { requiresDangerousConfirmation } from "../interaction/approval.js";
 import { writeTelegramLog } from "../log.js";
 import { isRecord } from "../../core/utils/is-record.js";
+import { loadRuntimeConfig } from "../../core/config/runtime-config.js";
+import { prepareCodexChatGptExec } from "../../core/integrations/codex-provider-config.js";
+import { CODEX_CHATGPT_TELEGRAM_ORIGINATOR } from "../../core/integrations/codex-session-source.js";
+import { initializeCodexUsageCollection } from "../../core/usage/codex-app-usage.js";
+import type { TokenUsage } from "../../core/types.js";
 
 export class CodexEngine implements Engine {
   readonly name = "codex" as const;
@@ -16,7 +23,18 @@ export class CodexEngine implements Engine {
   private controllers = new Map<number, AbortController>();
 
   async execute(params: EngineExecuteParams): Promise<ExecutionResult> {
-    const runtime = await prepareEngineRuntime("codex", params.providerName, params.modelName);
+    const { native, runtime } = params.codexChatGpt
+      ? {
+          native: await prepareCodexChatGptExec(
+            CODEX_CHATGPT_TELEGRAM_ORIGINATOR,
+            params.codexChatGpt.proxyUrl ?? (await loadRuntimeConfig()).proxyUrl ?? null,
+            params.codexChatGpt.reasoningEffort
+          ),
+          runtime: null
+        }
+      : { native: null, runtime: await prepareEngineRuntime("codex", params.providerName, params.modelName) };
+    const provider = runtime?.provider.name ?? "ChatGPT";
+    const model = runtime?.model ?? params.modelName;
     const controller = new AbortController();
     this.controllers.set(params.chatId, controller);
     const signal = params.signal ?? controller.signal;
@@ -35,23 +53,42 @@ export class CodexEngine implements Engine {
       await writeTelegramLog({
         action: "codex_start",
         message: `Starting Codex for Telegram chat ${params.chatId}`,
-        metadata: { ...summarizeRuntime(runtime.provider, runtime.model, "codex"), cwd: params.cwd }
+        traceId: native ? params.traceId : undefined,
+        metadata: {
+          ...(runtime ? summarizeRuntime(runtime.provider, runtime.model, "codex") : { engine: "codex", provider, model }),
+          cwd: params.cwd
+        }
       });
 
-      const args = buildCodexArgs(params.prompt, runtime.model, params.cwd, permissionMode, {
+      if (native) {
+        await initializeCodexUsageCollection().catch(() => writeTelegramLog({
+          level: "warn", action: "codex_usage_init_failed", message: "Unable to initialize local Codex usage collection."
+        }));
+      }
+      const imageHome = native && params.imagePaths?.length ? native.env.CODEX_HOME : undefined;
+      const previousRollout = imageHome && params.resume ? await findImageRollout(imageHome, params.resume).catch(() => undefined) : undefined;
+      const prompt = imageHome ? [
+        `[Telegram image request ${randomUUID()}]`,
+        "For image edits, use the native image_gen.imagegen tool with the attached reference images. Telegram delivers its result automatically. If the tool fails, explain the failure. For questions about an image, answer normally.",
+        params.prompt
+      ].join("\n\n") : params.prompt;
+      const args = buildCodexArgs(prompt, model, params.cwd, permissionMode, runtime ? {
         baseUrl: runtime.usageProxy.baseUrl
-      }, params.resume, params.imagePaths);
+      } : undefined, params.resume, params.imagePaths);
       const progressParser = createJsonLineAccumulator((event) => handleCodexProgressEvent(event, params.onProgress));
-      const result = await spawnCapture({
+      const launch = runtime ? {
         command: runtime.command,
         args,
-        cwd: params.cwd,
         env: {
           ...runtime.env,
           OPENAI_API_KEY: runtime.provider.apiKey,
           OPENAI_BASE_URL: runtime.usageProxy.baseUrl,
           AI_GATEWAY_BASE_URL: runtime.usageProxy.baseUrl
-        },
+        }
+      } : { command: native.command, args: [...native.configArgs, ...args], env: native.env };
+      const result = await spawnCapture({
+        ...launch,
+        cwd: params.cwd,
         signal,
         timeoutMs: params.timeoutMs,
         onStdout: (chunk) => progressParser.push(chunk)
@@ -59,7 +96,7 @@ export class CodexEngine implements Engine {
       progressParser.end();
 
       if (result.timedOut) {
-        throw new Error(formatEngineTimeout("Codex", params.timeoutMs, runtime.provider.name, runtime.model));
+        throw new Error(formatEngineTimeout("Codex", params.timeoutMs, provider, model));
       }
       if (result.aborted) {
         throw new Error("任务已停止。");
@@ -67,17 +104,17 @@ export class CodexEngine implements Engine {
       if (result.code !== 0) {
         throw new Error(formatCodexFailure(
           [result.stderr, result.stdout].filter((value) => value.trim()).join("\n") || `Codex exited with code ${result.code}`,
-          runtime.provider.name,
-          runtime.model
+          provider,
+          model
         ));
       }
       await params.onProgress?.({ phase: "done" });
       const parsed = parseCodexOutput(result.stdout, Date.now() - startTime);
-      const sessionId = parsed.sessionId ?? findLatestCodexSessionId({
+      const sessionId = parsed.sessionId ?? (runtime ? findLatestCodexSessionId({
         cwd: params.cwd,
         startedAtMs: startTime,
         finishedAtMs: Date.now()
-      });
+      }) : undefined);
       if (sessionId && !parsed.sessionId) {
         await writeTelegramLog({
           action: "codex_session_detected",
@@ -85,18 +122,29 @@ export class CodexEngine implements Engine {
           metadata: { chatId: params.chatId, cwd: params.cwd }
         });
       }
+      let generatedImages;
+      if (imageHome) {
+        generatedImages = sessionId
+          ? await readCodexTurnImages(imageHome, sessionId, prompt, previousRollout).catch(() => ({
+              images: [], notice: "无法读取本次 Codex 生图记录。"
+            }))
+          : { images: [], notice: "未检测到 Codex 会话 ID，无法读取生图结果。" };
+      }
       return {
         ...parsed,
+        ...(generatedImages ? { generatedImages } : {}),
+        ...(generatedImages?.images.length && parsed.response === stripAnsi(result.stdout).trim()
+          ? { response: "Codex 已生成图片。" } : {}),
         sessionId,
-        cost: sumKnownProxyCosts(runtime.usageProxy.getRecords()),
-        usage: sumProxyUsage(runtime.usageProxy.getRecords()),
-        provider: runtime.provider.name,
-        model: runtime.model
+        cost: runtime ? sumKnownProxyCosts(runtime.usageProxy.getRecords()) : undefined,
+        usage: runtime ? sumProxyUsage(runtime.usageProxy.getRecords()) : parsed.usage,
+        provider,
+        model: runtime?.model
       };
     } finally {
       this.processes.delete(params.chatId);
       this.controllers.delete(params.chatId);
-      await cleanupRuntime(runtime);
+      if (runtime) await cleanupRuntime(runtime);
     }
   }
 
@@ -122,7 +170,7 @@ export type CodexProviderOverride = {
 
 export function buildCodexArgs(
   prompt: string,
-  model: string,
+  model: string | undefined,
   cwd: string,
   permissionMode: string,
   providerOverride?: CodexProviderOverride,
@@ -135,8 +183,7 @@ export function buildCodexArgs(
     ...buildCodexProviderOverrideArgs(providerOverride),
     "--json",
     "--skip-git-repo-check",
-    "-m",
-    model,
+    ...(model ? ["-m", model] : []),
     ...(resume ? [] : ["-C", cwd])
   ];
 
@@ -166,6 +213,7 @@ export function buildCodexArgs(
   for (const imagePath of imagePaths) {
     args.push("--image", imagePath);
   }
+  if (imagePaths.length) args.push("--");
   args.push(prompt);
   return args;
 }
@@ -195,12 +243,18 @@ export function parseCodexOutput(raw: string, duration: number): ExecutionResult
   const events = extractJsonLines(raw);
   let response = "";
   let sessionId: string | undefined;
+  let threadId: string | undefined;
+  let usage: TokenUsage | undefined;
   const toolCalls: ToolCallResult[] = [];
   const filesChanged = new Set<string>();
 
   for (const event of events) {
     if (!isRecord(event)) continue;
+    if (event.type === "thread.started" && typeof event.thread_id === "string" && isUuidLike(event.thread_id)) {
+      threadId = event.thread_id;
+    }
     sessionId = readCodexSessionId(event) ?? sessionId;
+    if (event.type === "turn.completed") usage = readCodexTurnUsage(event.usage) ?? usage;
     const message = readCodexMessage(event);
     if (message) response = message;
     const toolCall = readCodexToolCall(event);
@@ -215,11 +269,26 @@ export function parseCodexOutput(raw: string, duration: number): ExecutionResult
   }
 
   return {
-    sessionId,
+    sessionId: threadId ?? sessionId,
     response,
     toolCalls,
     filesChanged: [...filesChanged],
+    ...(usage ? { usage } : {}),
     duration
+  };
+}
+
+function readCodexTurnUsage(value: unknown): TokenUsage | undefined {
+  if (!isRecord(value)) return undefined;
+  const input = value.input_tokens;
+  const output = value.output_tokens;
+  const cached = value.cached_input_tokens;
+  if (typeof input !== "number" || typeof output !== "number" || input < 0 || output < 0
+    || ![input, output, input + output].every(Number.isSafeInteger)) return undefined;
+  return {
+    inputTokens: input, outputTokens: output, totalTokens: input + output,
+    ...(typeof cached === "number" && Number.isSafeInteger(cached) && cached >= 0 && cached <= input
+      ? { cacheReadInputTokens: cached } : {})
   };
 }
 

@@ -4,6 +4,7 @@ import { Formatter } from "../interaction/formatter.js";
 import {
   askCustomWorkdir,
   completeAgentProfile,
+  selectChatGptModel,
   selectCli,
   selectReadyCli,
   selectReadyMode,
@@ -39,6 +40,17 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
     }
 
     if (await handleProviderAdminCallback(ctx, data)) return;
+
+    if (data.startsWith("chatgpt-model:")) {
+      await selectChatGptModel(ctx, deps, data.slice("chatgpt-model:".length));
+      return;
+    }
+    if (data.startsWith("cg-effort:")) {
+      const [, key, effort] = data.split(":");
+      if (key && effort) await selectChatGptModel(ctx, deps, key, effort);
+      else await ctx.answerCallbackQuery();
+      return;
+    }
 
     if (data.startsWith("perm:")) {
       const [, action, id] = data.split(":");
@@ -106,7 +118,7 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
         return;
       }
       if (category === "workdir" && action === "pick" && first) {
-        const cwd = resolveWorkdirCallbackValue(first, deps.sessionManager.getWorkdirs(chatId));
+        const cwd = resolveWorkdirCallbackValue(first, deps.sessionManager, chatId);
         if (!cwd) {
           await ctx.answerCallbackQuery({ text: "工作路径不存在" });
           await showWorkdirList(ctx, deps);
@@ -214,7 +226,7 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
         return;
       }
       if (category === "workdir" && action === "pick" && first) {
-        const cwd = resolveWorkdirCallbackValue(first, deps.sessionManager.getWorkdirs(chatId));
+        const cwd = resolveWorkdirCallbackValue(first, deps.sessionManager, chatId);
         if (!cwd) {
           await ctx.answerCallbackQuery({ text: "工作路径不存在" });
           await showWorkdirList(ctx, deps, { scope: "ready" });
@@ -323,9 +335,10 @@ export function registerCallbackHandler(bot: Bot, deps: MessageHandlerDeps & {
   });
 }
 
-function resolveWorkdirCallbackValue(value: string, workdirs: string[]): string | null {
+function resolveWorkdirCallbackValue(value: string, manager: MessageHandlerDeps["sessionManager"], chatId: number): string | null {
+  if (value === "default") return manager.getDefaultWorkdir() ?? null;
   if (/^\d+$/.test(value)) {
-    return workdirs[Number(value)] ?? null;
+    return manager.getWorkdirs(chatId)[Number(value)] ?? null;
   }
   try {
     return decodeURIComponent(value);

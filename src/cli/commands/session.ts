@@ -2,7 +2,7 @@ import { clearAllSessions, getSession, listRecentSessions } from "../../core/ses
 import { writeLog } from "../../core/logs/log-service.js";
 import type { SessionRecord } from "../../core/types.js";
 import { promptSelect } from "../prompts/prompt.js";
-import { runUseCommand } from "./use.js";
+import { runProviderUseCommand } from "./use.js";
 
 export async function runSessionCommand(args: string[]): Promise<void> {
   const subcommand = args[0];
@@ -46,7 +46,7 @@ async function resumeSession(sessionId: string): Promise<void> {
   const provider = session.actualProvider ?? session.provider;
   const model = session.actualModel ?? session.model;
   console.log(`${session.nativeSessionId ? "Resuming native conversation" : "Restarting with saved launch settings"}: ${session.tool} / ${provider} / ${model}`);
-  await runUseCommand([session.tool, provider, model], {
+  await runProviderUseCommand(session.tool, provider, model, {
     cwd: session.projectPath, nativeSessionId: session.nativeSessionId, resumedFrom: session.id
   });
 }

@@ -5,6 +5,7 @@ import type { Engine } from "./engine/types.js";
 import type { ApprovalManager } from "./interaction/approval.js";
 import type { MemoryService } from "./memory/memory-service.js";
 import type { SessionManager } from "./session/manager.js";
+import type { SetupDeps } from "./handlers/setup.js";
 
 export type TelegramHandlerDeps = {
   bot: Bot;
@@ -15,6 +16,8 @@ export type TelegramHandlerDeps = {
   config: TelegramConfig;
   engines: TelegramEngineMap;
   memoryService?: MemoryService;
+  initializeWorkdir?: SetupDeps["initializeWorkdir"];
+  updateConfig?: SetupDeps["updateConfig"];
 };
 
 export type TelegramHandlerRegistrar = (bot: Bot, deps: TelegramHandlerDeps) => void;

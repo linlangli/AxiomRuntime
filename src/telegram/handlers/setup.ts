@@ -1,12 +1,15 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import type { Bot, Context, InlineKeyboard } from "grammy";
+import { InlineKeyboard, type Bot, type Context } from "grammy";
 import { readCache } from "../../core/config/cache-store.js";
+import { expandHomePath } from "../../core/config/paths.js";
+import { readCodexChatGptModels, type CodexChatGptModel } from "../../core/integrations/codex-provider-config.js";
 import { listProviders } from "../../core/providers/provider-service.js";
 import { resolveProviderForTool } from "../../core/runner/fallback.js";
 import type { Provider } from "../../core/types.js";
-import { updateTelegramConfig, type TelegramConfig, type TelegramEngineName, type TelegramPermissionMode } from "../config.js";
+import { updateTelegramConfig, usesTelegramCodexChatGpt, type TelegramConfig, type TelegramEngineName, type TelegramPermissionMode } from "../config.js";
 import type { TelegramEngineMap } from "../engine/registry.js";
 import type { Engine } from "../engine/types.js";
 import { safeSetChatCommandMenu } from "../interaction/command-menu.js";
@@ -40,6 +43,7 @@ export type SetupDeps = {
   codexEngine?: Engine;
   engines?: Partial<TelegramEngineMap>;
   memoryService?: MemoryService;
+  initializeWorkdir?: (ctx: Context, engine: TelegramEngineName, options: { edit?: boolean }) => Promise<void>;
   updateConfig?: (patch: Partial<TelegramConfig>) => Promise<TelegramConfig>;
 };
 
@@ -58,6 +62,10 @@ export async function showSetupProviderPicker(
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const session = deps.sessionManager.getOrCreate(chatId);
+  if (usesTelegramCodexChatGpt(options.forcedEngine ?? session.engine, deps.config)) {
+    await selectChatGptCodex(ctx, deps, session, { edit: options.edit });
+    return;
+  }
   if (session.setupStep !== "ready") {
     deps.sessionManager.update(session.id, { setupStep: "model" });
   }
@@ -138,17 +146,32 @@ export async function selectSetupModel(
     botContextFingerprint: null,
     setupStep: "workdir"
   });
-  await showWorkdirStart(ctx, deps, { edit: true });
+  await continueWorkdirSetup(ctx, deps, { edit: true });
+}
+
+async function continueWorkdirSetup(ctx: Context, deps: SetupDeps, options: { edit?: boolean }): Promise<void> {
+  const cwd = deps.sessionManager.getDefaultWorkdir();
+  if (!cwd) {
+    await showWorkdirStart(ctx, deps, options);
+    return;
+  }
+  await setWorkdir(ctx, deps, cwd, {
+    ...options,
+    afterSet: async ({ engine }) => {
+      await deps.initializeWorkdir?.(ctx, engine, options);
+    }
+  });
 }
 
 export async function showWorkdirStart(ctx: Context, deps: SetupDeps, options: { edit?: boolean; scope?: "setup" | "ready"; prompt?: string } = {}): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const workdirs = deps.sessionManager.getWorkdirs(chatId);
-  const text = options.prompt ?? Formatter.workdirList(workdirs);
+  const defaultCwd = deps.sessionManager.getDefaultWorkdir();
+  const text = options.prompt ?? Formatter.workdirList(workdirs, defaultCwd);
   const extra = {
     parse_mode: "HTML",
-    reply_markup: buildWorkdirStartKeyboard(workdirs, options.scope ?? "setup")
+    reply_markup: buildWorkdirStartKeyboard(workdirs, options.scope ?? "setup", defaultCwd)
   } as const;
   if (options.edit) {
     try {
@@ -165,19 +188,11 @@ export async function showWorkdirList(ctx: Context, deps: SetupDeps, options: { 
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const workdirs = deps.sessionManager.getWorkdirs(chatId);
-  const extra = {
-    parse_mode: "HTML",
-    reply_markup: buildWorkdirListKeyboard(workdirs, options.scope ?? "setup")
-  } as const;
-  if (options.edit) {
-    try {
-      await ctx.editMessageText(Formatter.workdirList(workdirs), extra);
-      return;
-    } catch {
-      // The original message may no longer be editable; fall back to a fresh prompt.
-    }
-  }
-  await ctx.reply(Formatter.workdirList(workdirs), extra);
+  const defaultCwd = deps.sessionManager.getDefaultWorkdir();
+  const text = Formatter.workdirList(workdirs, defaultCwd);
+  const extra = { parse_mode: "HTML", reply_markup: buildWorkdirListKeyboard(workdirs, options.scope ?? "setup", defaultCwd) } as const;
+  if (options.edit) await editOrReply(ctx, text, extra);
+  else await ctx.reply(text, extra);
 }
 
 export async function askCustomWorkdir(ctx: Context, deps: SetupDeps, options: { edit?: boolean; returnToReady?: boolean } = {}): Promise<void> {
@@ -211,7 +226,7 @@ export async function setWorkdir(
   const chatId = ctx.chat?.id;
   if (!chatId) return null;
   const session = deps.sessionManager.getOrCreate(chatId);
-  const cwd = options.fromCustomInput ? resolveHomeChild(rawPath) : expandHome(rawPath.trim());
+  const cwd = options.fromCustomInput ? resolveHomeChild(rawPath) : expandHomePath(rawPath.trim());
   if (!cwd || cwd === os.homedir()) {
     await ctx.reply(Formatter.workdirRequired(), { parse_mode: "HTML" });
     return null;
@@ -364,6 +379,96 @@ export async function selectReadyCli(ctx: Context, deps: SetupDeps, engine: Tele
   await showReadyProviderPicker(ctx, deps, { forcedEngine: engine, reselect: true });
 }
 
+export async function showTelegramModelPicker(ctx: Context, deps: SetupDeps): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const session = deps.sessionManager.getOrCreate(chatId);
+  if (usesTelegramCodexChatGpt(session.engine, deps.config)) {
+    await showChatGptModelPicker(ctx, deps, session, false);
+  } else if (session.setupStep === "ready") {
+    await showReadyProviderPicker(ctx, deps, { reselect: true });
+  } else {
+    await showSetupProviderPicker(ctx, deps, { reselect: true });
+  }
+}
+
+async function showChatGptModelPicker(ctx: Context, deps: SetupDeps, session: TelegramSession, edit: boolean): Promise<void> {
+  const models = await readCodexChatGptModels();
+  const current = deps.config?.codexModel;
+  const keyboard = new InlineKeyboard()
+    .text(current ? "跟随 Codex 默认模型" : "✓ 跟随 Codex 默认模型", "chatgpt-model:default").row();
+  for (const { slug } of models.slice(0, 98)) {
+    const effort = deps.config?.codexReasoningEffort;
+    const label = slug === current ? `✓ ${slug}${effort ? ` · ${effort}` : ""}` : slug;
+    keyboard.text(label, `chatgpt-model:${chatGptModelKey(slug)}`).row();
+  }
+  if (session.setupStep === "ready") keyboard.text("返回", "ready:back");
+  const text = models.length
+    ? "选择 ChatGPT 模型和推理档位。"
+    : "本机暂无 Codex 模型列表。请打开已登录的 Codex 刷新列表，再发送 /model。";
+  const extra = { parse_mode: "HTML", reply_markup: keyboard } as const;
+  if (edit) await editOrReply(ctx, text, extra);
+  else await ctx.reply(text, extra);
+}
+
+export async function selectChatGptModel(ctx: Context, deps: SetupDeps, key: string, effort?: string): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const session = deps.sessionManager.getOrCreate(chatId);
+  if (!usesTelegramCodexChatGpt(session.engine, deps.config)) {
+    await ctx.answerCallbackQuery({ text: "请先切换到使用 ChatGPT 登录的 Codex。" });
+    return;
+  }
+
+  if (key === "back") {
+    await ctx.answerCallbackQuery();
+    await showChatGptModelPicker(ctx, deps, session, true);
+    return;
+  }
+
+  let selected: CodexChatGptModel | undefined;
+  if (key !== "default") {
+    selected = (await readCodexChatGptModels()).find(model => chatGptModelKey(model.slug) === key);
+    if (!selected) {
+      await ctx.answerCallbackQuery({ text: "此模型已从列表移除，请重新选择。" });
+      await showChatGptModelPicker(ctx, deps, session, true);
+      return;
+    }
+    if (effort === undefined && selected.reasoningEfforts.length) {
+      await ctx.answerCallbackQuery();
+      await showChatGptEffortPicker(ctx, deps, selected, key);
+      return;
+    }
+    if (effort && effort !== "default" && !selected.reasoningEfforts.includes(effort)) {
+      await ctx.answerCallbackQuery({ text: "此模型已不支持该档位，请重新选择。" });
+      await showChatGptEffortPicker(ctx, deps, selected, key);
+      return;
+    }
+  }
+  await updateRuntimeTelegramConfig(deps, {
+    codexModel: selected?.slug,
+    codexReasoningEffort: selected && effort !== "default" ? effort : undefined
+  });
+  await ctx.answerCallbackQuery({ text: "ChatGPT 设置已更新" });
+  await showChatGptModelPicker(ctx, deps, session, true);
+}
+
+async function showChatGptEffortPicker(ctx: Context, deps: SetupDeps, model: CodexChatGptModel, key: string): Promise<void> {
+  const current = model.slug === deps.config?.codexModel ? deps.config?.codexReasoningEffort : undefined;
+  const keyboard = new InlineKeyboard()
+    .text(current ? "跟随 Codex 设置" : "✓ 跟随 Codex 设置", `cg-effort:${key}:default`).row();
+  for (const effort of model.reasoningEfforts) {
+    const callback = `cg-effort:${key}:${effort}`;
+    if (callback.length <= 64) keyboard.text(effort === current ? `✓ ${effort}` : effort, callback).row();
+  }
+  keyboard.text("返回模型列表", "chatgpt-model:back");
+  await editOrReply(ctx, `选择 ${model.slug} 的推理档位`, { parse_mode: "HTML", reply_markup: keyboard });
+}
+
+function chatGptModelKey(model: string): string {
+  return createHash("sha256").update(model).digest("base64url");
+}
+
 export async function showReadyProviderPicker(
   ctx: Context,
   deps: SetupDeps,
@@ -371,6 +476,12 @@ export async function showReadyProviderPicker(
 ): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
+  const session = deps.sessionManager.getOrCreate(chatId);
+  if (usesTelegramCodexChatGpt(options.forcedEngine ?? session.engine, deps.config)) {
+    if (options.forcedEngine) await selectChatGptCodex(ctx, deps, session, { edit: true });
+    else await showChatGptModelPicker(ctx, deps, session, true);
+    return;
+  }
   const choices = await getProviderChoices(options.forcedEngine);
   if (!choices.length) {
     await editOrReply(ctx, "🤖 没有可用的 Provider / Model", {
@@ -465,11 +576,32 @@ export async function selectReadyMode(ctx: Context, deps: SetupDeps, mode: Teleg
 }
 
 async function getResolvedProvider(engine: TelegramEngineName, config?: TelegramConfig): Promise<{ provider?: { name: string; model: string }; error?: string }> {
+  if (usesTelegramCodexChatGpt(engine, config)) {
+    const model = config?.codexModel ?? "Codex 默认模型";
+    const effort = config?.codexReasoningEffort;
+    return { provider: { name: "ChatGPT", model: effort ? `${model} · ${effort}` : model } };
+  }
   try {
     const resolved = await resolveProviderForTool(engine, config?.provider, config?.model);
     return { provider: { name: resolved.provider.name, model: resolved.model } };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function selectChatGptCodex(ctx: Context, deps: SetupDeps, session: TelegramSession, options: { edit?: boolean }): Promise<void> {
+  if (deps.config?.defaultEngine !== "codex") await updateRuntimeTelegramConfig(deps, { defaultEngine: "codex" });
+  const next = deps.sessionManager.update(session.id, {
+    ...(session.engine !== "codex" ? { engine: "codex", engineSessionId: null, botContextFingerprint: null } : {}),
+    setupStep: session.setupStep === "ready" ? "ready" : "workdir"
+  });
+  if (next.setupStep === "workdir") {
+    await continueWorkdirSetup(ctx, deps, options);
+  } else {
+    if (deps.bot && session.engine !== "codex") {
+      await safeSetChatCommandMenu(deps.bot, next.chatId, next.engine, deps.sessionManager.listCustomCommands(next.chatId, next.cwd));
+    }
+    await showReadyCard(ctx, deps, next, options);
   }
 }
 
@@ -587,6 +719,7 @@ async function generateProfileText(
 ): Promise<string | null> {
   const engine = resolveSetupEngine(deps, session.engine);
   if (!engine) return null;
+  const codexChatGpt = usesTelegramCodexChatGpt(session.engine, deps.config);
   try {
     const result = await engine.execute({
       chatId: ctx.chat?.id ?? session.chatId,
@@ -594,8 +727,11 @@ async function generateProfileText(
       cwd: session.cwd,
       resume: null,
       permissionMode: session.permissionMode,
-      providerName: deps.config?.provider,
-      modelName: deps.config?.model,
+      providerName: codexChatGpt ? undefined : deps.config?.provider,
+      modelName: codexChatGpt ? deps.config?.codexModel : deps.config?.model,
+      ...(codexChatGpt ? {
+        codexChatGpt: { proxyUrl: deps.config?.proxyUrl, reasoningEffort: deps.config?.codexReasoningEffort }
+      } : {}),
       timeoutMs: AGENT_PROFILE_GENERATION_TIMEOUT_MS,
       onPermission: async () => true
     });
@@ -623,10 +759,4 @@ function formatProfileMemory(memoryService: MemoryService, chatId: number): stri
 function resolveHomeChild(value: string): string {
   const name = value.trim().replace(/^~\//, "").replace(/^\/+/, "");
   return path.join(os.homedir(), name);
-}
-
-function expandHome(value: string): string {
-  if (value === "~") return os.homedir();
-  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
-  return value;
 }

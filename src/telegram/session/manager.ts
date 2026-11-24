@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { TelegramConfig } from "../config.js";
 import type { TokenUsage } from "../../core/types.js";
 import type { SessionStore } from "./store.js";
@@ -216,6 +218,16 @@ export class SessionManager {
 
   getWorkdirs(chatId: number, limit = 8): string[] {
     return this.store.listWorkdirs(chatId, limit).filter((p) => fs.existsSync(p));
+  }
+
+  getDefaultWorkdir(): string | undefined {
+    const cwd = this.config.defaultCwd;
+    if (!path.isAbsolute(cwd) || path.relative(os.homedir(), cwd) === "") return undefined;
+    try {
+      return fs.statSync(cwd).isDirectory() ? cwd : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   addCustomCommand(chatId: number, cwd: string, cmd: CustomCommand): void {

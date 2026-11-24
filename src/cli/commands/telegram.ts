@@ -453,6 +453,8 @@ async function editBotConfigInteractive(name: string): Promise<void> {
       { label: "allowAllUsers", value: "allowAllUsers" },
       { label: "allowedUserIds", value: "allowedUserIds" },
       { label: "defaultEngine", value: "defaultEngine" },
+      { label: "codexAuth", value: "codexAuth" },
+      { label: "codexModel", value: "codexModel" },
       { label: "defaultCwd", value: "defaultCwd" },
       { label: "defaultPermissionMode", value: "defaultPermissionMode" },
       { label: "sessionTimeoutHours", value: "sessionTimeoutHours" },
@@ -490,7 +492,7 @@ async function editBotConfigInteractive(name: string): Promise<void> {
       if (proxyUrl !== undefined) config = await saveBotConfig(name, { ...config, proxyUrl: proxyUrl ?? undefined });
       continue;
     }
-    const current = String(config[field as keyof TelegramConfig] ?? "");
+    const current = String(config[field as keyof TelegramConfig] ?? (field === "codexAuth" ? "provider" : ""));
     const value = field === "token"
       ? await promptText("token (leave empty to keep current)") || current
       : await promptText(field, { defaultValue: current });
@@ -508,6 +510,8 @@ async function editTelegramConfigInteractive(): Promise<void> {
       { label: "allowAllUsers", value: "allowAllUsers" },
       { label: "allowedUserIds", value: "allowedUserIds" },
       { label: "defaultEngine", value: "defaultEngine" },
+      { label: "codexAuth", value: "codexAuth" },
+      { label: "codexModel", value: "codexModel" },
       { label: "defaultCwd", value: "defaultCwd" },
       { label: "defaultPermissionMode", value: "defaultPermissionMode" },
       { label: "sessionTimeoutHours", value: "sessionTimeoutHours" },
@@ -544,7 +548,7 @@ async function editTelegramConfigInteractive(): Promise<void> {
       if (proxyUrl !== undefined) config = await saveTelegramConfig({ ...config, proxyUrl: proxyUrl ?? undefined });
       continue;
     }
-    const current = String(config[field as keyof TelegramConfig] ?? "");
+    const current = String(config[field as keyof TelegramConfig] ?? (field === "codexAuth" ? "provider" : ""));
     const value = field === "token"
       ? await promptText("token (leave empty to keep current)") || current
       : await promptText(field, { defaultValue: current });

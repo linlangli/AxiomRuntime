@@ -4,6 +4,8 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { GrammyError } from "grammy";
+import { findImageRollout, readCodexTurnImages } from "../dist/core/integrations/codex-generated-images.js";
 import {
   parseTelegramTargetArgs,
   runTelegramCommand
@@ -23,6 +25,8 @@ import {
 import { botExists, migrateLegacyConfig } from "../dist/telegram/bot-registry.js";
 import { upsertProviderCache } from "../dist/core/config/cache-store.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
+import { setRuntimeProxy } from "../dist/core/config/runtime-config.js";
+import { queryWebHistory } from "../dist/core/web/history-service.js";
 import { requiresDangerousConfirmation } from "../dist/telegram/interaction/approval.js";
 import {
   getBaseBotCommands,
@@ -53,7 +57,7 @@ import {
   buildWorkdirListKeyboard,
   buildWorkdirStartKeyboard
 } from "../dist/telegram/interaction/keyboards.js";
-import { buildCodexArgs, findLatestCodexSessionId, formatCodexFailure, parseCodexOutput } from "../dist/telegram/engine/codex-engine.js";
+import { buildCodexArgs, CodexEngine, findLatestCodexSessionId, formatCodexFailure, parseCodexOutput } from "../dist/telegram/engine/codex-engine.js";
 import { buildClaudeArgs, formatClaudeFailure, parseClaudeOutput } from "../dist/telegram/engine/claude-engine.js";
 import { createTelegramEngines, listTelegramEngineNames } from "../dist/telegram/engine/registry.js";
 import { createJsonLineAccumulator, spawnCapture } from "../dist/telegram/engine/process-utils.js";
@@ -62,6 +66,7 @@ import { TelegramHandlerRegistry } from "../dist/telegram/handler-registry.js";
 import { TelegramTaskLifecycleRegistry } from "../dist/telegram/lifecycle-registry.js";
 import { isRetryableTelegramNetworkError, withTelegramNetworkRetry } from "../dist/telegram/network-retry.js";
 import { deleteRecentChatMessages, registerCommands, shouldHandleStartCommand } from "../dist/telegram/handlers/command.js";
+import { registerCallbackHandler } from "../dist/telegram/handlers/callback.js";
 import { registerDocumentHandler } from "../dist/telegram/handlers/document.js";
 import {
   handleMemoryCommand,
@@ -78,7 +83,7 @@ import {
   isProviderSecretInput,
   showProviderAdminPanel
 } from "../dist/telegram/handlers/provider.js";
-import { completeAgentProfile, inferEngineFromModel, setWorkdir } from "../dist/telegram/handlers/setup.js";
+import { completeAgentProfile, inferEngineFromModel, setWorkdir, startSetup } from "../dist/telegram/handlers/setup.js";
 import { parseModelPriceInput } from "../dist/telegram/handlers/usage.js";
 import { SessionManager } from "../dist/telegram/session/manager.js";
 import { SessionStore } from "../dist/telegram/session/store.js";
@@ -1305,6 +1310,11 @@ test("workdir setup keyboard lists existing paths directly before custom input",
     [{ text: "/Users/linlangli/Script", callback_data: "setup:workdir:pick:0" }],
     [{ text: "back", callback_data: "setup:workdir:back" }]
   ]);
+  assert.deepEqual(buildWorkdirStartKeyboard(["/tmp/Agent", "/tmp/Other"], "ready", "/tmp/Agent").inline_keyboard, [
+    [{ text: "默认 · /tmp/Agent", callback_data: "ready:workdir:pick:default" }],
+    [{ text: "/tmp/Other", callback_data: "ready:workdir:pick:1" }],
+    [{ text: "自定义", callback_data: "ready:workdir:custom" }]
+  ]);
   assert.deepEqual(buildCliKeyboard().inline_keyboard, [[
     { text: "Claude Code", callback_data: "setup:cli:claude" },
     { text: "Codex", callback_data: "setup:cli:codex" }
@@ -1550,7 +1560,7 @@ test("typing status sends Telegram chat action immediately", () => {
   assert.deepEqual(calls, [[123, "typing"]]);
 });
 
-test("workdir setup runs native init before asking for profile", async () => {
+test("Telegram start uses the configured directory without history and runs init automatically", async () => {
   await withTempHome(async (tempDir) => {
     const projectDir = path.join(tempDir, "project");
     await fs.mkdir(projectDir, { recursive: true });
@@ -1560,6 +1570,7 @@ test("workdir setup runs native init before asking for profile", async () => {
       allowAllUsers: false,
       allowedUserIds: [123],
       defaultEngine: "codex",
+      codexAuth: "chatgpt",
       defaultCwd: projectDir,
       defaultPermissionMode: "bypassPermissions",
       sessionTimeoutHours: 24,
@@ -1570,8 +1581,6 @@ test("workdir setup runs native init before asking for profile", async () => {
     };
     const store = new SessionStore(dbPath);
     const manager = new SessionManager(store, config);
-    const setup = manager.startSetup(123);
-    manager.update(setup.id, { engine: "codex", setupStep: "workdir" });
 
     const engineCalls = [];
     const fakeEngine = {
@@ -1587,16 +1596,19 @@ test("workdir setup runs native init before asking for profile", async () => {
       claudeEngine: { ...fakeEngine, name: "claude" },
       codexEngine: fakeEngine,
       approvalManager: { request: async () => true },
-      config
+      config,
+      initializeWorkdir: (ctx, engine, options) => runCliInit(ctx, deps, engine, options)
     };
 
     const replies = [];
+    let keyboard;
     const edits = [];
     const typing = [];
     const ctx = {
       chat: { id: 123 },
-      reply: async (text) => {
+      reply: async (text, extra) => {
         replies.push(text);
+        keyboard = extra?.reply_markup?.inline_keyboard;
       },
       editMessageText: async (text) => {
         edits.push(text);
@@ -1609,19 +1621,20 @@ test("workdir setup runs native init before asking for profile", async () => {
       }
     };
 
-    await setWorkdir(ctx, deps, projectDir, {
-      edit: true,
-      afterSet: (next) => runCliInit(ctx, deps, next.engine)
-    });
+    assert.deepEqual(manager.getWorkdirs(123), []);
+    await startSetup(ctx, deps);
+    assert.deepEqual(manager.getWorkdirs(123), [projectDir]);
+    assert.ok(replies.every((text) => !/选择一个已存在|还没有记录过工作路径/.test(text)));
+    assert.equal(keyboard[0][0].callback_data, "setup:agent:skip");
 
     assert.equal(engineCalls.length, 1);
     assert.equal(engineCalls[0].prompt, "/init");
     assert.equal(engineCalls[0].cwd, projectDir);
+    assert.deepEqual(engineCalls[0].codexChatGpt, { proxyUrl: undefined });
     assert.equal(engineCalls[0].permissionMode, "bypassPermissions");
     assert.equal(engineCalls[0].timeoutMs, 180000);
     assert.equal(manager.getOrCreate(123).setupStep, "agent_profile");
-    assert.equal(edits.some((text) => String(text).includes("介绍一下我和你")), true);
-    assert.equal(replies.some((text) => String(text).includes("介绍一下我和你")), false);
+    assert.equal(replies.some((text) => String(text).includes("介绍一下我和你")), true);
     assert.equal(replies.some((text) => String(text).includes("initialized")), false);
     assert.deepEqual(typing[0], [123, "typing"]);
 
@@ -1632,6 +1645,14 @@ test("workdir setup runs native init before asking for profile", async () => {
     assert.equal(replies.some((text) => String(text).includes("已就绪")), false);
     await assert.rejects(fs.readFile(path.join(projectDir, "PROMPT.md"), "utf8"), /ENOENT/);
     await assert.rejects(fs.readFile(path.join(projectDir, "BOT.md"), "utf8"), /ENOENT/);
+    for (const unavailable of [path.join(tempDir, "missing"), os.homedir()]) {
+      config.defaultCwd = unavailable;
+      await startSetup(ctx, deps);
+      assert.equal(manager.getOrCreate(123).setupStep, "workdir");
+      assert.equal(keyboard[0][0].callback_data, "setup:workdir:pick:0");
+      assert.equal(keyboard[0][0].text, projectDir);
+    }
+    assert.equal(engineCalls.length, 1);
     store.close();
   });
 });
@@ -2107,6 +2128,162 @@ test("telegram provider fallback clears cross-provider resume and keeps recent c
   });
 });
 
+test("Telegram ChatGPT uses native Codex login, proxy precedence and an isolated resumable thread", { skip: process.platform === "win32" }, async () => {
+  await withTempHome(async root => {
+    const home = path.join(root, "codex-home");
+    const capture = path.join(root, "launch.json");
+    const threadId = "019f4110-5969-7f73-9576-bd071405af09";
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+    await fs.mkdir(home);
+    await fs.writeFile(path.join(root, "codex"), `#!/usr/bin/env node
+      const fs = require("node:fs");
+      const args = process.argv.slice(2);
+      if (args[0] === "--version") process.exit(0);
+      const { CODEX_HOME, HTTPS_PROXY, OPENAI_API_KEY, OPENAI_BASE_URL, CODEX_INTERNAL_ORIGINATOR_OVERRIDE } = process.env;
+      fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ args, CODEX_HOME, HTTPS_PROXY, OPENAI_API_KEY, OPENAI_BASE_URL, CODEX_INTERNAL_ORIGINATOR_OVERRIDE }));
+      if (args.includes("--image")) {
+        const dir = require("node:path").join(CODEX_HOME, "sessions", "2026", "01", "01");
+        fs.mkdirSync(dir, { recursive: true });
+        const thread = ${JSON.stringify(threadId)};
+        const turn = require("node:crypto").randomUUID();
+        const imageEvent = { type: "Extension", kind: "image_gen.generation", id: turn, status: "completed", result: ${JSON.stringify(png)} };
+        const items = [{ type: "UserMessage", content: [{ type: "text", text: args.at(-1) }] }, imageEvent];
+        for (const item of items) fs.appendFileSync(dir + "/rollout-test-" + thread + ".jsonl",
+          JSON.stringify({ type: "event_msg", payload: { type: "item_completed", thread_id: thread, turn_id: turn, item } }) + "\\n");
+      }
+      console.log(JSON.stringify({ type: "thread.started", thread_id: ${JSON.stringify(threadId)} }));
+      console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "ok" } }));
+      console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 40, output_tokens: 5, cached_input_tokens: 10 } }));
+    `, { mode: 0o700 });
+    const env = {
+      CODEX_HOME: home, PATH: `${root}${path.delimiter}${process.env.PATH}`, OPENAI_API_KEY: "stale-key",
+      OPENAI_BASE_URL: "https://unused.example", HTTPS_PROXY: "http://127.0.0.1:7899"
+    };
+    const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+    Object.assign(process.env, env);
+    const config = normalizeTelegramConfig({
+      defaultEngine: "codex", codexAuth: "chatgpt", provider: "removed-provider",
+      model: "provider-model", defaultCwd: root, dbPath: path.join(root, "bot.sqlite")
+    });
+    const store = new SessionStore(config.dbPath);
+    const manager = new SessionManager(store, config);
+    const engine = new CodexEngine();
+    try {
+      const ctx = { chat: { id: 123 }, reply: async () => undefined, api: { sendChatAction: async () => true } };
+      const deps = { config, sessionManager: manager, codexEngine: engine, approvalManager: { request: async () => true } };
+      const active = manager.getOrCreate(123);
+      manager.update(active.id, { setupStep: "ready", engineSessionId: "old-provider-thread" });
+      await assert.rejects(engine.execute({ chatId: 123, cwd: root, prompt: "hello", codexChatGpt: {}, onPermission: async () => true }), /未检测到 ChatGPT 登录/);
+      await fs.writeFile(path.join(home, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "fake", refresh_token: "fake" } }));
+      await setRuntimeProxy("http://127.0.0.1:7897");
+      config.proxyUrl = "http://127.0.0.1:7890";
+
+      assert.equal(await executePrompt(ctx, deps, "first"), true);
+      const first = JSON.parse(await fs.readFile(capture, "utf8"));
+      assert.equal(first.CODEX_HOME, home);
+      assert.equal(first.HTTPS_PROXY, config.proxyUrl);
+      assert.equal(first.OPENAI_API_KEY, undefined);
+      assert.equal(first.OPENAI_BASE_URL, undefined);
+      assert.equal(first.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, "axiomruntime_chatgpt_telegram");
+      assert.ok(first.args.includes('model_provider="openai"'));
+      assert.ok(first.args.includes('forced_login_method="chatgpt"'));
+      assert.ok(first.args.includes("--json"));
+      assert.ok(!first.args.includes("resume"));
+      assert.ok(!first.args.includes("-m"));
+
+      delete config.proxyUrl;
+      config.codexModel = "chatgpt-model";
+      config.codexReasoningEffort = "xhigh";
+      assert.equal(await executePrompt(ctx, deps, "second"), true);
+      const second = JSON.parse(await fs.readFile(capture, "utf8"));
+      assert.equal(second.HTTPS_PROXY, "http://127.0.0.1:7897");
+      assert.ok(second.args.includes("resume") && second.args.includes(threadId));
+      assert.equal(second.args[second.args.indexOf("-m") + 1], "chatgpt-model");
+      assert.ok(second.args.includes('model_reasoning_effort="xhigh"'));
+
+      await setRuntimeProxy(null);
+      const usage = await engine.execute({ chatId: 123, cwd: root, prompt: "check env", codexChatGpt: {}, onPermission: async () => true });
+      assert.equal(usage.usage.cacheReadInputTokens, 10);
+      assert.equal(JSON.parse(await fs.readFile(capture, "utf8")).HTTPS_PROXY, env.HTTPS_PROXY);
+      const history = await queryWebHistory(new URLSearchParams({ kind: "calls" }));
+      assert.equal(history.total, 2);
+      assert.ok(history.items.every(call => call.state === "succeeded" && call.provider === "ChatGPT" && call.totalTokens === 45));
+
+      const handlers = new Map();
+      registerDocumentHandler({ on: (event, callback) => handlers.set(event, callback) }, deps);
+      const uploaded = [];
+      const mediaCtx = {
+        ...ctx, getFile: async () => ({ file_path: "test/reference.png" }),
+        replyWithPhoto: async file => { uploaded.push(["photo", await file.toRaw()]); },
+        replyWithDocument: async file => { uploaded.push(["document", await file.toRaw()]); },
+      };
+      const previousFetch = globalThis.fetch;
+      globalThis.fetch = async () => new Response(Buffer.from(png, "base64"));
+      try {
+        await handlers.get("message:photo")({ ...mediaCtx, message: {
+          message_id: 42, photo: [{ file_id: "reference" }], caption: "把方块变成绿色"
+        } });
+        const imageLaunch = JSON.parse(await fs.readFile(capture, "utf8"));
+        assert.match(imageLaunch.args.at(-1), /image_gen\.imagegen/);
+        assert.match(imageLaunch.args.at(-1), /把方块变成绿色/);
+        assert.ok(imageLaunch.args.includes("--image"));
+        assert.equal(imageLaunch.args.at(-2), "--");
+        assert.deepEqual(uploaded, [["photo", Buffer.from(png, "base64")]]);
+        assert.deepEqual(manager.getOrCreate(123).attachments, []);
+
+        await handlers.get("message:document")({ ...mediaCtx, message: {
+          message_id: 43, document: { file_name: "reference.png", mime_type: "image/png" }
+        } });
+        assert.equal(uploaded.length, 1);
+        assert.equal(manager.getOrCreate(123).attachments.length, 1);
+        assert.equal(await executePrompt({
+          ...mediaCtx, replyWithPhoto: async () => {
+            throw new GrammyError("photo rejected", { error_code: 400, description: "PHOTO_INVALID_DIMENSIONS" }, "sendPhoto", {});
+          }
+        }, deps, "把背景改为蓝色"), true);
+        assert.deepEqual(uploaded, [["photo", Buffer.from(png, "base64")], ["document", Buffer.from(png, "base64")]]);
+      } finally {
+        globalThis.fetch = previousFetch;
+      }
+    } finally {
+      store.close();
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name]; else process.env[name] = value;
+      }
+    }
+  });
+});
+
+test("Codex image delivery reads only completed native items in the matching turn", async () => {
+  await withTempHome(async home => {
+    const thread = "019f4110-5969-7f73-9576-bd071405af09";
+    const dir = path.join(home, "sessions", "2026", "01", "01");
+    const file = path.join(dir, `rollout-test-${thread}.jsonl`);
+    await fs.mkdir(dir, { recursive: true });
+    const record = (turn, item) => JSON.stringify({ type: "event_msg", payload: {
+      type: "item_completed", thread_id: thread, turn_id: turn, item
+    } }) + "\n";
+    const user = text => ({ type: "UserMessage", content: [{ type: "text", text }] });
+    const image = { type: "Extension", kind: "image_gen.generation", status: "completed", id: "native_call",
+      result: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=" };
+    await fs.writeFile(file, record("old", user("old prompt")) + record("old", image));
+    const previous = await findImageRollout(home, thread);
+    const outside = path.join(home, "private.png");
+    await fs.writeFile(outside, Buffer.from(image.result, "base64"));
+    await fs.appendFile(file, record("current", user("new prompt"))
+      + record("other", image) + record("current", { type: "AgentMessage", text: outside })
+      + record("current", { ...image, result: "", savedPath: outside }));
+    const blocked = await readCodexTurnImages(home, thread, "new prompt", previous);
+    assert.equal(blocked.images.length, 0);
+    assert.match(blocked.notice, /无法读取/);
+    await fs.appendFile(file, record("current", { ...image, id: "valid" }) + record("current", { ...image, id: "valid" }));
+    const result = await readCodexTurnImages(home, thread, "new prompt", previous);
+    assert.equal(result.images.length, 1);
+    assert.deepEqual(result.images[0].bytes, Buffer.from(image.result, "base64"));
+    assert.equal((await readCodexTurnImages(home, thread, "unmatched", previous)).images.length, 0);
+  });
+});
+
 test("telegram executePrompt serializes tasks for the same chat", async () => {
   await withTempHome(async (tempDir) => {
     const dbPath = path.join(tempDir, "telegram.sqlite");
@@ -2398,6 +2575,99 @@ test("fresh clears telegram window without resetting engine context", async () =
     assert.equal(current.conversation.length, 1);
     assert.match(String(replies[0]), /聊天记录已清理/);
     store.close();
+  });
+});
+
+test("Telegram ChatGPT model picker saves the selected model and effort and resumes the current thread", async () => {
+  await withTempHome(async root => {
+    const previousHome = process.env.CODEX_HOME;
+    const codexHome = path.join(root, "codex");
+    const catalog = path.join(codexHome, "models_cache.json");
+    await fs.mkdir(codexHome);
+    process.env.CODEX_HOME = codexHome;
+    const config = await updateBotConfig("personal", {
+      defaultEngine: "codex", codexAuth: "chatgpt", defaultCwd: root, provider: "existing-provider", model: "existing-model"
+    });
+    const store = new SessionStore(config.dbPath);
+    const manager = new SessionManager(store, config);
+    const calls = [];
+    const codex = {
+      name: "codex",
+      execute: async params => {
+        calls.push(params);
+        return { response: "ok", provider: "ChatGPT", sessionId: "thread" };
+      },
+      abort: () => undefined
+    };
+    const deps = {
+      sessionManager: manager, config, engines: { codex }, approvalManager: {},
+      updateConfig: patch => updateBotConfig("personal", patch)
+    };
+    try {
+      const models = [
+        { slug: "example-hidden", visibility: "hide" },
+        { slug: "example-slow", visibility: "list", priority: 2 },
+        {
+          slug: "example-fast", visibility: "list", priority: 1,
+          supported_reasoning_levels: [{ effort: "medium" }, { effort: "ultra" }]
+        }
+      ];
+      await fs.writeFile(catalog, JSON.stringify({ models }));
+      const session = manager.getOrCreate(123);
+      manager.update(session.id, { engineSessionId: "chatgpt:thread" });
+      const commands = new Map();
+      registerCommands({ command: (name, callback) => commands.set(name, callback) }, deps);
+      let handleCallback;
+      registerCallbackHandler({ on: (_, callback) => { handleCallback = callback; } }, deps);
+      let keyboard;
+      let toast;
+      const ctx = {
+        chat: { id: 123 },
+        reply: async (_, extra) => { if (extra?.reply_markup?.inline_keyboard) keyboard = extra.reply_markup.inline_keyboard; },
+        editMessageText: async (_, extra) => { keyboard = extra.reply_markup.inline_keyboard; },
+        answerCallbackQuery: async ({ text } = {}) => { toast = text; },
+        api: { sendChatAction: async () => true }
+      };
+      const click = data => handleCallback({ ...ctx, callbackQuery: { data } });
+      await commands.get("model")(ctx);
+      assert.deepEqual(keyboard.flat().map(button => button.text), ["✓ 跟随 Codex 默认模型", "example-fast", "example-slow", "返回"]);
+      assert.equal(calls.length, 0);
+      const fast = keyboard[1][0].callback_data;
+      const slow = keyboard[2][0].callback_data;
+
+      await fs.writeFile(catalog, JSON.stringify({ models: [models[2]] }));
+      await click(slow);
+      assert.match(toast, /已从列表移除/);
+      await click(fast);
+      assert.deepEqual(keyboard.flat().map(button => button.text), ["✓ 跟随 Codex 设置", "medium", "ultra", "返回模型列表"]);
+      assert.equal((await loadBotConfig("personal")).codexModel, undefined);
+      const ultra = keyboard[2][0].callback_data;
+      assert.ok(Buffer.byteLength(ultra) <= 64);
+      await click(ultra.replace(/:ultra$/, ":max"));
+      assert.match(toast, /已不支持该档位/);
+      await click(ultra);
+      const saved = await loadBotConfig("personal");
+      assert.equal(saved.codexModel, "example-fast");
+      assert.equal(saved.codexReasoningEffort, "ultra");
+      assert.equal(saved.provider, "existing-provider");
+      assert.equal(saved.model, "existing-model");
+      assert.equal(keyboard[1][0].text, "✓ example-fast · ultra");
+      assert.equal(await executePrompt(ctx, deps, "hello"), true);
+      assert.equal(calls[0].modelName, "example-fast");
+      assert.equal(calls[0].codexChatGpt.reasoningEffort, "ultra");
+      assert.equal(calls[0].resume, "thread");
+
+      const reloaded = await updateBotConfig("personal", { codexModel: "another-model" });
+      assert.equal(reloaded.codexReasoningEffort, undefined);
+      await click("chatgpt-model:default");
+      assert.equal((await loadBotConfig("personal")).codexModel, undefined);
+      assert.equal(config.codexModel, undefined);
+      assert.equal(config.codexReasoningEffort, undefined);
+    } finally {
+      store.close();
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
   });
 });
 

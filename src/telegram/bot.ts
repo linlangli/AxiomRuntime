@@ -4,7 +4,7 @@ import { createTelegramEngines, type TelegramEngineMap } from "./engine/registry
 import { registerCallbackHandler } from "./handlers/callback.js";
 import { registerCommands } from "./handlers/command.js";
 import { registerDocumentHandler } from "./handlers/document.js";
-import { registerMessageHandler } from "./handlers/message.js";
+import { registerMessageHandler, runCliInit } from "./handlers/message.js";
 import { isProviderSecretInput } from "./handlers/provider.js";
 import { installTelegramHandlers, registerTelegramHandler } from "./handler-registry.js";
 import { ApprovalManager } from "./interaction/approval.js";
@@ -112,7 +112,10 @@ export async function createBot(botName?: string): Promise<TelegramRuntime> {
       : updateTelegramConfig(patch)
   };
   registerBuiltInTelegramHandlers();
-  installTelegramHandlers(bot, deps);
+  installTelegramHandlers(bot, {
+    ...deps,
+    initializeWorkdir: (ctx, engine, options) => runCliInit(ctx, deps, engine, options)
+  });
 
   await safeSetDefaultCommandMenu(bot);
   await refreshStoredChatCommandMenus(bot, sessionManager);

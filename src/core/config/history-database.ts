@@ -158,7 +158,7 @@ export async function queryDatabaseHistory(kind: "usage" | "sessions", input: UR
     }
     const query = input.get("q")?.toLowerCase();
     if (query) {
-      const fields = kind === "usage" ? ["id", "createdAt", "provider", "model", "traceId", "sessionId", "inputTokens", "outputTokens", "totalTokens", "costUsd", "costSource"]
+      const fields = kind === "usage" ? ["id", "createdAt", "provider", "model", "source", "tool", "traceId", "sessionId", "inputTokens", "outputTokens", "totalTokens", "cacheReadInputTokens", "costUsd", "costSource"]
         : ["id", "tool", "provider", "model", "actualProvider", "actualModel", "startedAt", "endedAt", "status", "exitCode", "nativeSessionId", "traceId", "resumedFrom"];
       clauses.push(`(${fields.map(field => `instr(lower(CAST(COALESCE(json_extract(payload, '$.${field}'), '') AS TEXT)), ?) > 0`).join(" OR ")})`);
       values.push(...fields.map(() => query));

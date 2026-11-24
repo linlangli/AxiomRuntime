@@ -27,6 +27,66 @@ import { getCliCommand, listInteractiveCliCommands, registerCliCommand } from ".
 import { generateImage } from "../dist/core/images/image-generation-service.js";
 import { applyProxyToEnv, checkProxyEndpoint, normalizeProxyUrl, splitProxyUrl } from "../dist/core/network/proxy.js";
 
+test("ai use codex chatgpt logs in on demand and keeps native config intact", { skip: process.platform === "win32" }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "axiom-use-chatgpt-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  const codexHome = path.join(root, "codex-home");
+  const authPath = path.join(codexHome, "auth.json");
+  const configPath = path.join(codexHome, "config.toml");
+  const callsPath = path.join(root, "calls.jsonl");
+  const config = 'model_provider = "my-provider"\n';
+  const priorAuth = JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "test-key" });
+  await fs.mkdir(bin);
+  await fs.mkdir(codexHome);
+  await fs.writeFile(configPath, config);
+  await fs.writeFile(authPath, priorAuth, { mode: 0o600 });
+  await fs.writeFile(path.join(bin, "codex"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.includes("--version")) process.exit(0);
+if (args.includes("--help")) { console.log("  --no-daemon"); process.exit(0); }
+fs.appendFileSync(process.env.TEST_CODEX_CALLS, JSON.stringify({ args, originator: process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE ?? null, dirty: ["OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AI_GATEWAY_BASE_URL"].some(key => key in process.env) }) + "\\n");
+if (args.includes("login")) {
+  fs.writeFileSync(process.env.CODEX_HOME + "/auth.json", process.env.TEST_CODEX_FAIL ? "partial" : JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "access", refresh_token: "refresh" } }));
+  process.exit(process.env.TEST_CODEX_FAIL ? 1 : 0);
+}
+process.exit(7);
+`, { mode: 0o700 });
+  const run = (args, overrides = {}) => spawnSync(process.execPath, [path.resolve("dist/cli/index.js"), "use", "codex", ...args], {
+    encoding: "utf8", timeout: 10_000,
+    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, AI_GATEWAY_HOME: root, CODEX_HOME: codexHome,
+      TEST_CODEX_CALLS: callsPath, CODEX_INTERNAL_ORIGINATOR_OVERRIDE: undefined, OPENAI_API_KEY: "stale", OPENAI_BASE_URL: "https://old.test", CODEX_API_KEY: "stale", CODEX_ACCESS_TOKEN: "stale", AI_GATEWAY_BASE_URL: "https://old.test", ...overrides }
+  });
+  const calls = async () => (await fs.readFile(callsPath, "utf8")).trim().split("\n").map(JSON.parse);
+
+  const cancelled = run(["chatgpt"], { TEST_CODEX_FAIL: "1" });
+  assert.equal(cancelled.status, 1, cancelled.stderr);
+  assert.match(cancelled.stderr, /ChatGPT login failed/);
+  assert.equal(await fs.readFile(authPath, "utf8"), priorAuth);
+  assert.equal((await calls()).length, 1);
+
+  const launched = run(["chatgpt"]);
+  assert.equal(launched.status, 7, launched.stderr);
+  assert.equal(run(["chatgpt", "gpt-test"]).status, 7);
+  const launchArgs = ["-c", 'model_provider="openai"', "-c", 'forced_login_method="chatgpt"', "-c", 'cli_auth_credentials_store="file"'];
+  assert.deepEqual(await calls(), [
+    { args: [...launchArgs, "login"], originator: null, dirty: false },
+    { args: [...launchArgs, "login"], originator: null, dirty: false },
+    { args: [...launchArgs, "--no-daemon"], originator: "axiomruntime_chatgpt_cli", dirty: false },
+    { args: [...launchArgs, "--no-daemon", "--model=gpt-test"], originator: "axiomruntime_chatgpt_cli", dirty: false }
+  ]);
+  assert.equal(await fs.readFile(configPath, "utf8"), config);
+  assert.equal((await fs.stat(authPath)).mode & 0o777, 0o600);
+  const usageConfig = JSON.parse(await fs.readFile(path.join(root, "codex-usage.json"), "utf8"));
+  assert.equal(usageConfig.enabled, true);
+  assert.equal(usageConfig.codexHome, codexHome);
+
+  const sameNameProvider = run(["--provider", "chatgpt"]);
+  assert.equal(sameNameProvider.status, 1);
+  assert.equal((await calls()).length, 4);
+});
+
 test("normalizes provider levels by priority", () => {
   const providers = normalizeProviders([
     { name: "b", baseUrl: "https://b.test/", apiKey: "b", mode: "auto", level: 2, model: "gpt-5" },

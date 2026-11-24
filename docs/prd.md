@@ -88,7 +88,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 
 ## 3. 当前能力清单
 
-本机 Web 已补齐持久 Claude 连接配置、具名 Telegram Bot 生命周期、历史分页/导出与轮询、凭证轮换/有效期/Provider 与模型范围/请求频率及总次数额度，以及通过现有 Runtime API 进行对话、向量、图片、Agent 和注册只读工具的实际调用。公网成功验收绑定配置指纹，配置变化后重新验收。SSH 准备支持指纹核对、专用密钥、公钥授权与诊断；Nginx/Certbot 部署需先预览再明确确认执行，回滚限于专属站点配置。以上不代表企业统一 Policy/预算/工具授权已实现；完整记忆模块尚未实现，Web 暂不展示记忆设置入口。Windows Task Scheduler 适配为 🟡，命令编排测试通过，实机验收仍是退出条件。
+本机 Web 已补齐持久 Claude 连接配置、具名 Telegram Bot 生命周期、历史分页/导出与轮询（日志流水支持时间、Provider 筛选及 Token 列，用量统计页限定用量记录，统计时间默认选中今天（UTC 自然日））、凭证轮换/有效期/Provider 与模型范围/请求频率及总次数额度，以及通过现有 Runtime API 进行对话、向量、图片、Agent 和注册只读工具的实际调用。公网成功验收绑定配置指纹，配置变化后重新验收。SSH 准备支持指纹核对、专用密钥、公钥授权与诊断；Nginx/Certbot 部署需先预览再明确确认执行，回滚限于专属站点配置。以上不代表企业统一 Policy/预算/工具授权已实现；完整记忆模块尚未实现，Web 暂不展示记忆设置入口。Windows Task Scheduler 适配为 🟡，命令编排测试通过，实机验收仍是退出条件。
 
 ### 3.1 Provider 管理 🟢
 
@@ -110,7 +110,8 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | 启动 Claude Code | 🟢 | 临时 `--settings`，不碰 `~/.claude/settings.json`；execution scope 删除进程继承的 `ANTHROPIC_AUTH_TOKEN`，并以空值遮蔽用户 settings 中的同名变量，避免与 Provider API Key 冲突 |
-| 启动 Codex | 🟢 | `-c model_provider=` + `env_key`，不碰全局 `auth.json`/`config.toml` |
+| 启动 Codex（Runtime Provider） | 🟢 | `-c model_provider=` + `env_key`，不碰全局 `auth.json`/`config.toml` |
+| 使用 ChatGPT 账号启动 Codex CLI | 🟢 | `ai use codex chatgpt [model]` 复用文件凭证或委托原生浏览器登录，失败恢复凭证；原生连接的 Token 和回合由本机 Codex 采集 |
 | 运行时降级 | 🟡 | `ai use` 在同一原生 CLI 会话内对**会产生补全的模型端点**做请求级切换；失败先在当前 Provider 原地重试（限流/`5xx`/连接层错误可重试，`401`/`403`/`404` 直接换），重试耗尽才轮转，已有输出则等待用户重新提交/重试确认。辅助端点（`/v1/messages/count_tokens` 等中转站常未实现的路径）的 `404` 不触发轮转，也不计入健康分。`ai failover off` 一键全局关闭跨 Provider 自动降级（候选链折叠为单候选，只尝试选定或默认 Provider，失败即报错不轮转；原地重试不受影响）。待确认状态仅由带请求体的模型 POST（不含 multipart）消费；GET、空请求和辅助端点不确认 |
 | 健康分恢复 | 🟢 | 一次真实成功探测把 `healthScore` 直接置满，不靠固定步长累加填坑，避免误判造成的低分长期滞留 |
 | 切换提示不破坏 TUI | 🟢 | 会话期间提示走协议内错误事件由原生 CLI 渲染，退出后再打印切换汇总；父进程不在 TUI 重绘期间写终端 |
@@ -126,7 +127,7 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | 真实用量采集 | 🟢 | execution-scoped 本地代理，解析真实响应 |
-| Codex App 本机用量 | 🟢 | 首次同步默认开启后只读桌面会话真实 Token，按实际 Provider/模型归属，复用唯一账本；内部 JSONL 格式适配，云端任务不覆盖 |
+| Codex 本机用量 | 🟢 | 只读 Codex App 和带来源标记的 ChatGPT CLI 会话真实 Token，按实际 Provider/模型归属，复用唯一账本；内部 JSONL 格式适配，云端任务不覆盖 |
 | Anthropic + OpenAI 双协议 | 🟢 | Claude 走 `/v1/messages`，Codex 走 OpenAI 兼容 `/v1` |
 | streaming 用量合并 | 🟢 | input/cache/output 在同一响应内合并 |
 | 服务商返回成本优先 | 🟢 | 有 `cost_usd` 用真实值 |
@@ -158,7 +159,9 @@ AxiomRuntime 是一个 **AI Runtime**：统一执行入口 + 受治理的记忆 
 |---|---|---|
 | 多 Bot 隔离 | 🟢 | 配置/PID/日志/会话按 bot 分离 |
 | 白名单鉴权 | 🟢 | 默认只允许 `allowedUserIds` |
-| 引导式初始化 | 🟢 | 服务商 → 模型 → 工作目录 → 引擎 |
+| 引导式初始化 | 🟢 | Runtime Provider 模式先选服务商和模型，ChatGPT 模式的 Codex 直接进入工作目录步骤。已配置且可用时自动采用默认项目目录 |
+| Codex 参考图改图 | 🟢 | ChatGPT 登录模式接受单张图片说明或先传参考图再发指令，使用 Codex CLI 内置生图工具。当前回合的生成结果自动回传到发起聊天，发送失败时提示回传状态。 |
+| Codex ChatGPT 登录 | 🟢 | 具名 Bot 可在 CLI 或本机 Web 选择已有 ChatGPT 登录，Telegram `/model` 可从本机 Codex 目录选择模型和对应推理档位。支持出站代理、调用记录与原生 Token 采集 |
 | 流式进度 | 🟢 | 编辑同一条消息，1500ms 节流 |
 | 上下文管理 | 🟢 | 最近 12 轮，1400 token 预算 |
 | 固定上下文 | 🟢 | `/pin` 最多 3 条 |
@@ -458,9 +461,9 @@ Web 是**企业控制面的操作界面**，不是 Provider 配置页的放大�
 
 本机启动验收要求：控制面静态入口缺失或无法读取时，在监听端口和打开浏览器前失败，明确提示源码构建或 npm 重装步骤；正常构建需验证首页及其引用的静态资源可访问。
 
-🟢 本机控制面已拆分为运行总览、用量统计、本地配置、运行记录、对外服务、帮助中心六个一级页面。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 汇总表、Token 趋势、GitHub 式周列 × 7 天小方格调用活动和带圆角轻量涂鸦纹理的占比图；短区间保留至少 70 天日历上下文，区间外日期以淡灰格标识，不作为零用量计入统计。成本卡片支持通过 core pricing API 按 Provider/模型维护美元/百万 token 价格，Provider 完整下拉列表合并当前配置、历史 usage 和已有价格键，模型下拉合并缓存目录、默认模型、历史 usage 模型和已有价格键，并支持手动输入模型；切换 Provider 时刷新对应模型和价格，空模型目录清除上一 Provider 的模型；按当前日期与 Provider 筛选计算成本，未定价事件单独计数；区间内空日期补零，点击日期跳转运行记录。数据来自唯一 usage 账本，包括 Runtime 代理和显式启用后的 Codex App 本机采集；不推测其他未采集的外部调用。App 采集不生成 Runtime 调用链路或工具会话。
+🟢 本机控制面已拆分为运行总览、用量统计、本地配置、运行记录、对外服务、帮助中心六个一级页面。用量统计支持 今天/7/30 个 UTC 自然日筛选、Provider 汇总表、Token 趋势、GitHub 式周列 × 7 天小方格调用活动和带圆角轻量涂鸦纹理的占比图；短区间保留至少 70 天日历上下文，区间外日期以淡灰格标识，不作为零用量计入统计。成本卡片支持通过 core pricing API 按 Provider/模型维护美元/百万 token 价格，Provider 完整下拉列表合并当前配置、历史 usage 和已有价格键，模型下拉合并缓存目录、默认模型、历史 usage 模型和已有价格键，并支持手动输入模型；切换 Provider 时刷新对应模型和价格，空模型目录清除上一 Provider 的模型；按当前日期与 Provider 筛选计算成本，未定价事件单独计数；区间内空日期补零，点击日期跳转运行记录。数据来自唯一 usage 账本，包括 Runtime 代理和显式启用后的 Codex App 本机采集；不推测其他未采集的外部调用。App 采集不生成 Runtime 调用链路或工具会话；运行记录提供标明来源的 Codex App 回合投影，按 session/turn ID 关联明确状态、模型和时间，可汇总唯一明确上下文中的已观测 Token，不推断请求级成本/实际 Provider，元数据和扫描有界。
 
-🟢 运行记录分为调用记录、工具会话、系统日志。调用列表按执行归组，侧边详情展示结果、Provider 过程与中文时间线；同 Provider 重试与跨 Provider 切换分开计数，缺少终止事件显示结果未知，结果 Provider 仅取明确终止证据。工具会话显示初始配置、起止、时长和退出码，调用关联只接受明确且匹配的 `sessionId`。系统日志按模型请求/服务检查/配置变更/系统运行分类，支持级别、Provider、分类和搜索筛选。最近记录摘要仍取 300 条日志和 30 次会话；完整历史区支持日志、调用、会话、用量分页查询、搜索、CSV/JSON 下载与每 2 秒刷新。新模型请求按独立 `traceId` 展示观测到的用量、成本来源、耗时及父 `executionId`，旧记录缺失关联时保持未知；下载只含白名单字段并防止 CSV 公式注入。
+🟢 运行记录分为调用记录、工具会话、系统日志。调用记录包含 Runtime 执行、Codex App 回合和 ChatGPT CLI 回合，后者明确标记任务粒度，失败/成功依原生终止证据，缺失或中止保持未知。调用列表按执行归组，侧边详情展示结果、Provider 过程与中文时间线；同 Provider 重试与跨 Provider 切换分开计数，缺少终止事件显示结果未知，结果 Provider 仅取明确终止证据。工具会话显示初始配置、起止、时长和退出码，调用关联只接受明确且匹配的 `sessionId`。系统日志按模型请求/服务检查/配置变更/系统运行分类，支持级别、Provider、分类和搜索筛选。最近记录摘要仍取 300 条日志和 30 次会话；用量统计页提供用量分页查询、搜索、CSV/JSON 下载与手动刷新。新模型请求按独立 `traceId` 展示观测到的用量、成本来源、耗时及父 `executionId`，旧记录缺失关联时保持未知；下载只含白名单字段并防止 CSV 公式注入。
 
 🟢 帮助中心的命令手册与 `ai help` 打开的 `docs/USAGE.html` 同源，完整覆盖命令索引、安装配置、模型使用、服务管理、记忆配置、消息接入、状态诊断、会话报告、凭据与历史、配置文件。`ai secrets` / `ai history` 的详细用法直接导航到凭据与历史，完整列出状态、迁移、备份、恢复及显式回滚的适用前提和限制；会话续用与请求日志筛选同步写入相应分类。验收要求正文规则、参数、注意事项及代码示例完整保留；支持命令分组筛选、跨分类全文搜索、详细说明导航、命令/整段示例复制、展开/收起与移动端目录。复制只写入剪贴板，不执行命令或配置写入。
 
@@ -542,7 +545,7 @@ ai log --print --trace trc_70d90ad64d1846bf   # 只打印该链路的各跳，�
 
 “本地配置 / 工具配置”页把已实现的 `ai set codex` core integration service 呈现为可查看、可确认、可回滚的 Web 管理操作。页面说明 Codex App、CLI 与 IDE extension 在同一 `CODEX_HOME` 下共享用户级 `config.toml`，同时区分 CLI `-c` 的进程级临时覆盖。页面读取并展示当前 `model_provider`、model、proxy、`config.toml` / `auth.json` 托管状态，但 API Key 只显示 configured/missing，不回显明文。
 
-🟢 本机用量采集设置已交付：历史会话 Provider ID 用于用量归属，独立于当前 Codex 用户级配置；删除 Runtime Provider 不会改写历史会话。Web 读取用户级配置的 Provider ID 以确定配置状态，凭证存在不等于登录状态已验证。Web 不提供采集设置，`ai set codex usage on|off|status|map <codex-provider-id> <provider-name>` 仍可管理。首次同步默认开启，保留既有关闭设置；启用后在 dashboard 刷新或 `ai status` 时同步真实计数，按 Provider/模型汇入现有图表、价格估算与周用量。仅在会话账户 ID 与当前凭证匹配时，新记录按凭证账户名称归属；无法确认时标记账户未知，已入账记录不改写。验收覆盖自动匹配、未知 ID 归属、账户匹配与Cache Read 不重复计数、CLI/SDK 与 Runtime 代理排除、并发/文件重读/归档/游标恢复去重、关闭后保留数据且重新启用不补计关闭期间，以及异常格式或目录不可读时主面板继续可用。采集不保存对话和凭证，不修改 Codex 原生配置，不要求重启 App；内部 JSONL 格式兼容与云端运行仍是明确边界。
+🟢 本机用量采集设置已交付：历史会话 Provider ID 用于用量归属，独立于当前 Codex 用户级配置；删除 Runtime Provider 不会改写历史会话。Web 读取用户级配置的 Provider ID 以确定配置状态，凭证存在不等于登录状态已验证。Web 不提供采集设置，`ai set codex usage on|off|status|map <codex-provider-id> <provider-name>` 仍可管理。首次同步默认开启，保留既有关闭设置；启用后在 dashboard 刷新或 `ai status` 时同步真实计数，按 Provider/模型汇入现有图表、价格估算与周用量。仅在会话账户 ID 与当前凭证匹配时，新记录按凭证账户名称归属；无法确认时标记账户未知，已入账记录不改写。验收覆盖自动匹配、未知 ID 归属、账户匹配与Cache Read 不重复计数、未标记 CLI、SDK 与 Runtime 代理排除、并发/文件重读/归档/游标恢复去重、关闭后保留数据且重新启用不补计关闭期间，以及异常格式或目录不可读时主面板继续可用。采集不保存对话和凭证，不修改 Codex 原生配置，不要求重启 App；内部 JSONL 格式兼容与云端运行仍是明确边界。
 
 设置区必须覆盖三种与 CLI 等价的模式：`chatgpt`、`provider [name] [model]`、`proxy <endpoint|off>`。提交前显示等价 CLI 命令、目标配置 diff、重启需求、备份与失败回滚语义；提交后显示 operation progress 和最终 restart 状态。Web 不自行拼装或写入 TOML/JSON，所有读写复用同一 core integration API。
 

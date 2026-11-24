@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { configureCodexAppUsage, getCodexAppUsageConfig, syncCodexAppUsage } from "../dist/core/usage/codex-app-usage.js";
+import { configureCodexAppUsage, getCodexAppUsageConfig, getNativeCodexCalls, syncCodexAppUsage } from "../dist/core/usage/codex-app-usage.js";
 import { appendUsageEvent, appendUsageEvents, readUsage } from "../dist/core/config/usage-store.js";
 import { writeProviders } from "../dist/core/config/providers-store.js";
 import { providerIdForName } from "../dist/core/integrations/codex-provider-config.js";
+import { queryWebHistory } from "../dist/core/web/history-service.js";
 import { getWebDashboard } from "../dist/core/web/dashboard-service.js";
 import { applyLocalSettings } from "../dist/core/web/local-settings.js";
 import { upsertModelPrice } from "../dist/core/usage/pricing.js";
@@ -128,6 +129,51 @@ test("Runtime proxy sessions, standalone CLI and SDK sessions are excluded", () 
   assert.deepEqual((await readUsage()).events, []);
 }));
 
+test("Web shows marked ChatGPT CLI rounds and usage once alongside App records", () => isolated(async ({ root, codexHome, time }) => {
+  const lifecycle = (offset, type) => ({ timestamp: time(offset), type: "event_msg", payload: { type, turn_id: "turn-cli" } });
+  const turnContext = { ...context(), timestamp: time(15) };
+  turnContext.payload.turn_id = "turn-cli";
+  const cliMeta = { originator: "axiomruntime_chatgpt_cli", source: "cli" };
+  const records = [lifecycle(10, "task_started"), turnContext, usage(time, 20, tokens(100, 20, 30)),
+    usage(time, 25, tokens(100, 20, 30)), lifecycle(30, "task_complete")];
+  const cliFile = await session(codexHome, [metadata(time, "openai", { ...cliMeta, id: "marked" }), ...records], "marked.jsonl");
+  await session(codexHome, [metadata(time, "first", { id: "desktop" }), ...records], "desktop.jsonl");
+  await session(codexHome, [metadata(time, "openai", { ...cliMeta, id: "bare", originator: "codex_cli_rs" }), ...records], "bare.jsonl");
+  await session(codexHome, [metadata(time, "ai_gateway_selected", { ...cliMeta, id: "proxied" }), ...records], "proxy.jsonl");
+  await session(codexHome, [metadata(time, "openai", { ...cliMeta, id: "exec", source: "exec" }), ...records], "exec.jsonl");
+  await Promise.all([sync(), sync()]);
+  await fs.mkdir(path.join(codexHome, "archived_sessions"));
+  await fs.rename(cliFile, path.join(codexHome, "archived_sessions", "marked.jsonl"));
+  await fs.rm(path.join(root, "codex-usage-state.json"));
+  await sync();
+
+  const dashboard = await getWebDashboard();
+  assert.equal(dashboard.usage.totalTokens, 240);
+  assert.deepEqual(dashboard.calls.map(call => call.source).sort(), ["codex_app", "codex_cli_chatgpt"]);
+  const [call] = dashboard.calls.filter(item => item.source === "codex_cli_chatgpt");
+  assert.deepEqual([call.state, call.model, call.inputTokens, call.outputTokens, call.totalTokens], ["succeeded", "gpt-test", 100, 20, 120]);
+  const ledger = await queryWebHistory(new URLSearchParams({ kind: "usage", q: "codex_cli_chatgpt" }));
+  assert.equal(ledger.total, 1);
+  assert.equal(ledger.items[0].provider, "ChatGPT（账户未知）");
+  assert.equal(ledger.items[0].cacheReadInputTokens, 30);
+  assert.equal((await queryWebHistory(new URLSearchParams({ kind: "calls", q: "codex_cli_chatgpt" }))).total, 1);
+}));
+
+test("Telegram ChatGPT native sessions import usage once without projecting duplicate calls", () => isolated(async ({ codexHome, time }) => {
+  const originator = "axiomruntime_chatgpt_telegram";
+  const event = usage(time, 10, tokens(12, 3, 5));
+  await session(codexHome, [metadata(time, "openai", { originator, source: "exec" }), context("observed-model"), event], "bot.jsonl");
+  await session(codexHome, [metadata(time, "first", { originator, source: "exec" }), context(), event], "other-provider.jsonl");
+  await session(codexHome, [metadata(time, "openai", { originator, source: "cli" }), context(), event], "other-source.jsonl");
+  await sync();
+  await sync();
+  const history = await queryWebHistory(new URLSearchParams({ kind: "usage", q: "codex_telegram_chatgpt" }));
+  assert.equal(history.total, 1);
+  assert.equal(history.items[0].model, "observed-model");
+  assert.equal(history.items[0].totalTokens, 15);
+  assert.deepEqual(await getNativeCodexCalls(), []);
+}));
+
 test("partial writes, large transcript lines, corrupt JSON and counter resets never invent usage", () => isolated(async ({ codexHome, time }) => {
   const file = await session(codexHome, [metadata(time), context()]);
   const next = JSON.stringify(usage(time, 10, tokens(100, 20, 40)));
@@ -226,4 +272,54 @@ test("Web and CLI use shared collection settings without changing native Codex c
   assert.equal((await getCodexAppUsageConfig()).providerMappings.openai, "first");
   assert.equal(await fs.readFile(file, "utf8"), 'model_provider = "first"\n');
   assert.equal((await fs.readdir(root)).includes("web-backups"), false);
+}));
+
+test("native Desktop turns are correlated by ID, deduplicated and projected without transcript or ledger writes", () => isolated(async ({ root, codexHome, time }) => {
+  const event = (offset, type, payload = {}) => ({ timestamp: time(offset), type: "event_msg", payload: { type, turn_id: "turn-one", ...payload } });
+  const records = [metadata(time), event(10, "task_started"), { timestamp: time(11), type: "turn_context", payload: { turn_id: "turn-one", model: "gpt-test" } },
+    event(12, "task_complete", { turn_id: "wrong-turn", error: null }),
+    event(20, "task_complete", { duration_ms: 10, error: null, last_agent_message: "private-result-text" }),
+    event(21, "task_complete", { error: "private-error-text" })];
+  const file = await session(codexHome, records);
+  await sync(); await sync();
+  const calls = await getNativeCodexCalls();
+  assert.equal(calls.length, 1); assert.equal(calls[0].source, "codex_app"); assert.equal(calls[0].state, "succeeded");
+  assert.equal(calls[0].model, "gpt-test"); assert.equal(calls[0].durationMs, 10); assert.equal(calls[0].provider, null);
+  assert.equal(calls[0].inputTokens, null); assert.equal((await readUsage()).events.length, 0);
+  const dashboard = await getWebDashboard(); assert.equal(dashboard.calls.filter(call => call.source === "codex_app").length, 1);
+  assert.equal((await queryWebHistory(new URLSearchParams({ kind: "calls" }))).total, 1);
+  await fs.mkdir(path.join(codexHome, "archived_sessions"));
+  await fs.rename(file, path.join(codexHome, "archived_sessions", "moved.jsonl"));
+  await sync(); assert.equal((await getNativeCodexCalls())[0].id, calls[0].id);
+  for (const text of [JSON.stringify(dashboard), await fs.readFile(path.join(root, "codex-usage-state.json"), "utf8")]) assert.doesNotMatch(text, /private-result-text|private-error-text|private-prompt-text/);
+}));
+
+test("native missing outcomes, interrupted turns and non-Desktop sources do not invent success", () => isolated(async ({ codexHome, time }) => {
+  const event = (offset, type, id, payload = {}) => ({ timestamp: time(offset), type: "event_msg", payload: { type, turn_id: id, ...payload } });
+  await session(codexHome, [metadata(time), event(10, "task_started", "a"), event(11, "turn_aborted", "a"), event(12, "task_started", "b"), event(13, "task_complete", "b"), event(14, "task_started", "c"), event(15, "task_complete", "c", { error: "private-error" }), event(16, "task_started", "d")]);
+  await session(codexHome, [metadata(time, "first", { id: "cli", originator: "codex_cli_rs" }), event(10, "task_started", "cli")], "cli.jsonl");
+  await sync();
+  assert.deepEqual((await getNativeCodexCalls()).map(call => call.state).sort(), ["failed", "succeeded", "unknown", "unknown"]);
+  await configureCodexAppUsage({ enabled: false }); assert.deepEqual(await getNativeCodexCalls(), []);
+}));
+
+test("native turns sum validated token deltas once and completion without error is successful", () => isolated(async ({ root, codexHome, time }) => {
+  const event = (offset, type, id) => ({ timestamp: time(offset), type: "event_msg", payload: { type, turn_id: id } });
+  await session(codexHome, [metadata(time), event(10, "task_started", "a"), { timestamp: time(11), type: "turn_context", payload: { turn_id: "a", model: "gpt-test" } }, usage(time, 12, tokens(100, 20)), usage(time, 13, tokens(100, 20)), usage(time, 14, tokens(130, 30)), event(15, "task_complete", "a")]);
+  await sync(); await sync();
+  const [call] = await getNativeCodexCalls(); assert.equal(call.state, "succeeded");
+  assert.equal(call.inputTokens, 130); assert.equal(call.outputTokens, 30); assert.equal(call.totalTokens, 160);
+  assert.equal((await readUsage()).events.reduce((sum, row) => sum + row.totalTokens, 0), 160);
+  const file = path.join(root, "codex-usage-state.json"); const state = JSON.parse(await fs.readFile(file, "utf8"));
+  for (const cursor of Object.values(state.files)) { cursor.callsVersion = 1; for (const turn of cursor.turns ?? []) { delete turn.usage; turn.state = "unknown"; } }
+  await fs.writeFile(file, JSON.stringify(state)); await sync();
+  assert.equal((await getNativeCodexCalls())[0].totalTokens, 160);
+  assert.equal((await getNativeCodexCalls())[0].state, "succeeded");
+  assert.equal((await readUsage()).events.reduce((sum, row) => sum + row.totalTokens, 0), 160);
+}));
+
+test("ambiguous open native turns leave usage unassigned", () => isolated(async ({ codexHome, time }) => {
+  const start = id => ({ timestamp: time(10), type: "event_msg", payload: { type: "task_started", turn_id: id } });
+  await session(codexHome, [metadata(time), start("a"), start("b"), { timestamp: time(11), type: "turn_context", payload: { turn_id: "b", model: "gpt-test" } }, usage(time, 12, tokens(10, 2))]);
+  await sync(); assert.ok((await getNativeCodexCalls()).every(call => call.totalTokens === null));
 }));

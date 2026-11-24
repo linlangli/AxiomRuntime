@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { InputFile, type Bot, type Context } from "grammy";
+import { GrammyError, InputFile, type Bot, type Context } from "grammy";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import type { TelegramConfig, TelegramEngineName } from "../config.js";
+import { usesTelegramCodexChatGpt, type TelegramConfig, type TelegramEngineName } from "../config.js";
 import type { Engine, ExecutionResult } from "../engine/types.js";
 import { getTelegramEngine, type TelegramEngineMap } from "../engine/registry.js";
 import { recordProviderRuntimeFailure, recordProviderRuntimeSuccess } from "../../core/config/cache-store.js";
@@ -63,6 +63,7 @@ function getLatestPromptMessage(chatId: number): PromptMessageEntry | null {
 type ProviderAttempt = {
   providerName?: string;
   modelName?: string;
+  reasoningEffort?: string;
   providerLabel: string;
   modelLabel?: string;
   fallbackFrom?: string;
@@ -263,7 +264,7 @@ export async function executePrompt(
   );
 }
 
-async function executePromptLocked(
+export async function executePromptLocked(
   ctx: Context,
   deps: MessageHandlerDeps,
   text: string,
@@ -302,17 +303,23 @@ async function executePromptLocked(
     throttleMs: options.progressThrottleMs
   });
 
+  const codexChatGpt = usesTelegramCodexChatGpt(session.engine, deps.config);
+  const traceId = newTraceId();
+  const resumePrefix = "chatgpt:";
+  const previousId = session.engineSessionId;
+  let resumeId: string | null = null;
+  if (previousId && previousId.startsWith(resumePrefix) === codexChatGpt) {
+    resumeId = codexChatGpt ? previousId.slice(resumePrefix.length) : previousId;
+  }
   try {
     const engine = resolveMessageEngine(deps, session.engine);
-    // 一条消息的处理是一条调用链路：解析跳过与后续每次 provider 切换共享同一个 traceId。
-    const traceId = newTraceId();
     const attempts = await resolveTelegramProviderAttempts(session.engine, deps.config, traceId);
     let result: ExecutionResult | null = null;
     let successfulAttempt: ProviderAttempt | null = null;
     let lastError: unknown = null;
 
     for (const [index, attempt] of attempts.entries()) {
-      const resume = attempt.preferred ? session.engineSessionId : null;
+      const resume = attempt.preferred ? resumeId : null;
       const promptWithContext = await applyPromptMiddlewares({
         chatId,
         prompt: text,
@@ -332,6 +339,13 @@ async function executePromptLocked(
           permissionMode: session.permissionMode,
           providerName: attempt.providerName,
           modelName: attempt.modelName,
+          ...(codexChatGpt ? {
+            codexChatGpt: {
+              proxyUrl: deps.config.proxyUrl,
+              ...(attempt.reasoningEffort ? { reasoningEffort: attempt.reasoningEffort } : {})
+            },
+            traceId
+          } : {}),
           imagePaths: session.attachments
             .filter((attachment) => attachment.kind === "image" || attachment.mimeType?.startsWith("image/"))
             .map((attachment) => attachment.path),
@@ -417,8 +431,10 @@ async function executePromptLocked(
           assistant: result.response || "(empty)"
         }).conversation
       : session.conversation;
+    const threadId = result.sessionId ?? resumeId;
+    const storedThreadId = threadId && codexChatGpt ? `${resumePrefix}${threadId}` : threadId;
     const completedSession = deps.sessionManager.update(session.id, {
-      engineSessionId: successfulAttempt.preferred ? result.sessionId ?? session.engineSessionId : null,
+      engineSessionId: successfulAttempt.preferred ? storedThreadId : null,
       conversation,
       status: "idle",
       attachments: []
@@ -426,16 +442,22 @@ async function executePromptLocked(
     cleanupConsumedAttachments(session.attachments);
     deps.sessionManager.recordProviderUsage(session.id, {
       provider: result.provider ?? deps.config.provider ?? "unknown",
-      model: result.model ?? deps.config.model,
+      model: codexChatGpt ? result.model : result.model ?? deps.config.model,
       costUsd: result.cost,
       usage: result.usage
     });
+    const { generatedImages, ...textResult } = result;
     if (!options.silentSuccess) {
-      await sendResult(ctx, session.engine, result, deps.config.maxOutputLength, reporter);
+      if (generatedImages) {
+        const notice = await sendGeneratedImages(ctx, generatedImages, traceId);
+        if (notice) textResult.response = [textResult.response, notice].filter(Boolean).join("\n\n");
+      }
+      await sendResult(ctx, session.engine, textResult, deps.config.maxOutputLength, reporter);
     }
     await writeTelegramLog({
       action: "task_completed",
       message: `Completed ${session.engine} task for Telegram chat ${chatId}`,
+      traceId: codexChatGpt ? traceId : undefined,
       metadata: {
         chatId,
         engine: session.engine,
@@ -443,6 +465,7 @@ async function executePromptLocked(
         model: result.model,
         sessionId: result.sessionId,
         duration: result.duration,
+        ...(codexChatGpt ? { durationMs: result.duration, ...result.usage } : {}),
         fallbackFrom: successfulAttempt.fallbackFrom ?? null,
         preferredProvider: successfulAttempt.preferred
       }
@@ -451,7 +474,7 @@ async function executePromptLocked(
       chatId,
       engine: session.engine,
       session: completedSession,
-      result,
+      result: textResult,
       fallbackFrom: successfulAttempt.fallbackFrom ?? null,
       preferredProvider: successfulAttempt.preferred
     });
@@ -463,6 +486,7 @@ async function executePromptLocked(
       level: "error",
       action: "task_failed",
       message,
+      traceId: codexChatGpt ? traceId : undefined,
       metadata: { chatId, engine: session.engine }
     });
     await emitTelegramTaskFailed({
@@ -490,6 +514,37 @@ function resolveMessageEngine(deps: MessageHandlerDeps, name: TelegramEngineName
     throw new Error(`Telegram engine is not registered: ${name}`);
   }
   return legacyEngine;
+}
+
+async function sendGeneratedImages(
+  ctx: Context, generatedImages: NonNullable<ExecutionResult["generatedImages"]>, traceId: string
+): Promise<string> {
+  let delivered = 0;
+  for (const image of generatedImages.images) {
+    const file = () => new InputFile(image.bytes, image.filename);
+    try {
+      if (image.photo) {
+        try {
+          await withTelegramNetworkRetry(() => ctx.replyWithPhoto(file()));
+          delivered++;
+          continue;
+        } catch (error) {
+          // Telegram can reject a photo's encoding or dimensions but accept the original file.
+          if (!(error instanceof GrammyError) || error.error_code !== 400) throw error;
+        }
+      }
+      await withTelegramNetworkRetry(() => ctx.replyWithDocument(file()));
+      delivered++;
+    } catch {
+      // Delivery errors do not change model execution or trigger a second generation.
+    }
+  }
+  const notices = [generatedImages.notice];
+  if (delivered < generatedImages.images.length) {
+    notices.push(`Telegram 图片回传成功 ${delivered}/${generatedImages.images.length} 张。`);
+    await writeTelegramLog({ level: "warn", action: "image_delivery_failed", message: "Telegram image upload failed.", traceId });
+  }
+  return notices.filter(Boolean).join("\n\n");
 }
 
 async function sendResult(
@@ -613,6 +668,9 @@ async function resolveTelegramProviderAttempts(
   config: TelegramConfig,
   traceId: string
 ): Promise<ProviderAttempt[]> {
+  if (usesTelegramCodexChatGpt(engine, config)) {
+    return [{ providerLabel: "ChatGPT", modelName: config.codexModel, reasoningEffort: config.codexReasoningEffort, preferred: true }];
+  }
   try {
     const candidates = await resolveProviderCandidatesForTool(engine, config.provider, config.model, traceId);
     if (candidates.length) {

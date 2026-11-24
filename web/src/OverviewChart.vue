@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatTokens } from './token-format'
 import { computed, ref, watch } from 'vue'
 import VChart from 'vue-echarts'
 import type { Dashboard } from './console-api'
@@ -19,7 +20,7 @@ const legendRows = computed(() => providerRows.value.slice(legendPage.value * 8,
 const selectedTotal = computed(() => providerRows.value.reduce((sum, row) => legendSelected.value[row.provider] === false ? sum : sum + row.totalTokens, 0))
 watch(() => props.usage.providers.map(provider => provider.provider).join('|'), () => { legendPage.value = 0; legendSelected.value = {} })
 const fullNumber = (value: number) => new Intl.NumberFormat('zh-CN').format(value)
-const compactNumber = (value: number) => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
+const compactNumber = formatTokens
 const selectedWindowDays = computed(() => Math.max(1, props.windowDays ?? 70))
 const activityWindowDays = computed(() => Math.max(70, selectedWindowDays.value))
 const dates = computed(() => {
@@ -49,7 +50,7 @@ const trendOption = computed(() => ({
   })
 }))
 const providerOption = computed(() => ({
-  tooltip: { ...tooltip, trigger: 'item', confine: true, formatter: '{b}\n{c} Token · {d}%' },
+  tooltip: { ...tooltip, renderMode: 'html', appendToBody: true, extraCssText: 'max-width: min(360px, 80vw); white-space: normal; overflow-wrap: anywhere;', trigger: 'item', confine: false, valueFormatter: (value: number) => `${formatTokens(value)} Token` },
   title: {
     text: compactNumber(selectedTotal.value), subtext: 'Token', left: 'center', top: 'center', itemGap: 5,
     textStyle: { color: '#76664e', fontFamily: 'system-ui, sans-serif', fontSize: 30, fontWeight: 550 },

@@ -48,6 +48,7 @@ export interface LogItem {
   inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null; costUsd?: number | null; costSource?: string | null
 }
 export interface CallItem {
+  source?: 'codex_app' | 'codex_cli_chatgpt'
   id: string; state: 'succeeded' | 'failed' | 'unknown'; startedAt: string; lastEventAt: string; endedAt: string | null
   durationMs: number | null; observedDurationMs: number | null; provider: string | null; initialProvider: string | null
   model: string | null; tool: string | null; route: string[]; switchCount: number; retryCount: number
@@ -64,7 +65,7 @@ export interface ServiceExposure {
 export interface LocalSettings {
   runtime: { proxyUrl?: string; failoverDisabled?: boolean }
   embedding: null | { name: string; baseUrl: string; model: string; providerType: string; queryTask: string; passageTask: string; dimensions: number | null; credentialConfigured: boolean; lastCheckedAt: string | null }
-  bots: Array<{ name: string; running: boolean; pid: number | null; tokenConfigured: boolean; defaultEngine: 'claude' | 'codex'; defaultCwd: string; provider?: string; model?: string; proxyUrl?: string; allowedUserIds: number[]; allowAllUsers: boolean }>
+  bots: Array<{ name: string; running: boolean; pid: number | null; tokenConfigured: boolean; defaultEngine: 'claude' | 'codex'; codexAuth?: 'provider' | 'chatgpt'; codexModel?: string; defaultCwd: string; provider?: string; model?: string; proxyUrl?: string; allowedUserIds: number[]; allowAllUsers: boolean }>
   exposure: ServiceExposure
   backups: Array<{ id: string; createdAt: string }>
   managedFiles: string[]

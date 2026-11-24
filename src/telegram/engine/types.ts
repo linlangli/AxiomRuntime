@@ -1,11 +1,14 @@
 import type { TelegramEngineName, TelegramPermissionMode } from "../config.js";
 import type { TokenUsage } from "../../core/types.js";
 
+import type { CodexImageResult } from "../../core/integrations/codex-generated-images.js";
+
 export type ExecutionResult = {
   sessionId?: string;
   response: string;
   toolCalls?: ToolCallResult[];
   filesChanged?: string[];
+  generatedImages?: CodexImageResult;
   diff?: string;
   cost?: number;
   usage?: TokenUsage;
@@ -42,6 +45,8 @@ export type EngineExecuteParams = {
   imagePaths?: string[];
   providerName?: string;
   modelName?: string;
+  codexChatGpt?: { proxyUrl?: string; reasoningEffort?: string };
+  traceId?: string;
   onPermission: PermissionHandler;
   onProgress?: (update: ProgressUpdate) => void | Promise<void>;
   signal?: AbortSignal;

@@ -204,8 +204,17 @@ ai use claude                          # 默认服务商 + 默认模型
 ai use claude 我的站                    # 指定服务商
 ai use claude 我的站 claude-opus-4-6    # 指定服务商 + 模型
 ai use codex 我的站 gpt-5.5
+ai use codex chatgpt                   # 使用 ChatGPT 账号启动 Codex
 ai last                                # 沿用上次的工具、服务商和模型
 ```
+
+### 用 ChatGPT 账号启动 Codex CLI
+
+运行 `ai use codex chatgpt`。如果 `CODEX_HOME/auth.json` 已有 ChatGPT 凭证，直接启动 Codex；否则由原生 `codex login` 打开浏览器，登录成功后启动。也可以用 `ai use codex chatgpt <model>` 为本次启动指定模型。
+
+登录成功会将 ChatGPT 凭证保存到同一 `CODEX_HOME/auth.json`，可能替换已有的 API Key 凭证；取消或失败时恢复原凭证并结束命令。本次 Provider 选择通过启动参数生效，`config.toml` 保持原样。该模式直连 Codex 的内建 `openai` Provider，Runtime 的 Provider 切换、代理用量和 `ai last` 记录只适用于 Runtime Provider 模式。如果已有一个名为 `chatgpt` 的 Runtime Provider，用 `ai use codex --provider chatgpt [model]` 选择它。
+
+使用新版命令新建回合后，在 `ai web` 的「运行记录 → 调用记录」查看标记为「Codex CLI · ChatGPT」的回合。真实 Token 随本机日志同步进入「用量统计 → 日志流水」，其中可搜索 `codex_cli_chatgpt`。采集使用 `ai set codex usage` 的开关和 Codex 目录，启动 CLI 与采集需指向同一 `CODEX_HOME`。旧版未写入来源标记的 CLI 会话无法补认。
 
 ### 选择规则
 
@@ -277,7 +286,7 @@ ai last                            # 上次选择的工具 / 服务商 / 模型
 
 **Claude Code**：生成一个临时 `--settings` 文件，把 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 写进去再启动。为避免 Claude 同时看到两套认证，本次子进程会移除继承的 `ANTHROPIC_AUTH_TOKEN`，临时 settings 还会用空值遮蔽用户 settings 里的同名变量；**不碰 `~/.claude/settings.json`，也不修改当前 shell。**
 
-**Codex**：通过本次子进程的 `-c model_provider=...` 参数固定服务商，用 `env_key = "OPENAI_API_KEY"` 读注入的 Key。**不碰全局 `auth.json` 和 `config.toml`**，直接执行 `codex` 的行为不受影响。
+**Codex（Runtime Provider 模式）**：通过本次子进程的 `-c model_provider=...` 参数固定服务商，用 `env_key = "OPENAI_API_KEY"` 读注入的 Key。**不碰全局 `auth.json` 和 `config.toml`**，直接执行 `codex` 的行为不受影响。
 
 **Base URL 自动适配**：如果你的 `baseUrl` 是 OpenAI 兼容地址（比如 `https://example.com/v1`），启动 Claude 时会自动去掉 `/v1`，启动 Codex 时保留。
 
@@ -392,22 +401,22 @@ ai set codex proxy off              # 清除
 
 macOS 会同步当前登录会话的 launchd 环境，让重启后的 Codex App 也能继承代理。同步失败会回滚配置且不重启。注销或重启 macOS 后需要重新执行本命令。
 
-### 统计 Codex App 的 Token
+### 统计 Codex 本机用量
 
 ```bash
-ai set codex usage on                 # 开启本机 App 用量采集
+ai set codex usage on                 # 开启本机 Codex 用量采集
 ai set codex usage status             # 同步并查看状态和未匹配的 Provider ID
 ai set codex usage map openai 我的站    # 将原生 Provider ID 显式归属到已配置的服务商
 ai set codex usage off                # 停止采集，保留已有统计
 ```
 
-Web 不再提供采集设置区域；采集配置仍可通过上述 CLI 命令管理。未知 Provider ID 按原 ID 归属，无法确认账户的 `openai` 记录标为 `ChatGPT（账户未知）`；已有 CLI 映射仍优先生效。仅采集开启后的桌面会话，独立 CLI、SDK 和云端任务尚不覆盖。会话的 `creator_account_id` 与当前 ChatGPT 凭证账户一致时，新记录可按凭证中的账户名称归属；缺少或不匹配时标为账户未知，已入账记录不改写。
+Web 不再提供采集设置区域；采集配置仍可通过上述 CLI 命令管理。未知 Provider ID 按原 ID 归属，无法确认账户的 `openai` 记录标为 `ChatGPT（账户未知）`；已有 CLI 映射仍优先生效。采集覆盖启用后的 Codex App 和 `ai use codex chatgpt` 会话。会话的 `creator_account_id` 与当前 ChatGPT 凭证账户一致时，新记录可按凭证中的账户名称归属；缺少或不匹配时标为账户未知，已入账记录不改写。
 
-首次同步时默认开启，从该时刻开始统计真实 Token；已有关闭设置保持关闭。刷新面板或执行 `ai status` / `ai set codex usage status` 时增量同步，打开面板后约每 15 秒刷新；不需要重启 Codex App。首次启用前与关闭期间的用量不补录，已有聊天的新用量仍可采集；已有手动映射仍优先生效。更换 Codex 目录会重新设置采集起点。关闭采集不会删除已入账数据。
+首次同步或首次运行 `ai use codex chatgpt` 时初始化采集，从该时刻开始统计真实 Token。已有关闭设置保持关闭。刷新面板或执行 `ai status` / `ai set codex usage status` 时增量同步，打开面板后约每 15 秒刷新；不需要重启 Codex App。首次启用前与关闭期间的用量不补录，已有聊天的新用量仍可采集；已有手动映射仍优先生效。更换 Codex 目录会重新设置采集起点。关闭采集不会删除已入账数据。
 
-采集只读本机 `sessions` 和 `archived_sessions` 的 Codex Desktop 会话记录，不保存提示词、回复、附件或密钥，不修改登录和网络配置。缓存输入属于输入 Token，reasoning 属于输出 Token，均不重复相加；重复事件、文件重读和进程重启不会重复记账。`ai use codex` / `ai proxy codex` 的代理会话及独立 CLI、SDK 会话排除。成本仍由「用量统计」中的 Provider/模型价格估算，ChatGPT 订阅用量的估算不代表额外账单。
+采集只读所配置 Codex 目录下 `sessions` 和 `archived_sessions` 中的受支持会话，不保存提示词、回复、附件或密钥，不修改登录和网络配置。缓存输入属于输入 Token，reasoning 属于输出 Token，均不重复相加；重复事件、文件重读和进程重启不会重复记账。`ai use codex` / `ai proxy codex` 的代理会话以及直接运行 `codex` 的 CLI、SDK 会话不进入本机采集。成本仍由「用量统计」中的 Provider/模型价格估算，ChatGPT 订阅用量的估算不代表额外账单。
 
-此功能适配 Codex 本地内部 JSONL 格式，并非稳定的公开 API；云端任务与未标记桌面身份的记录不在范围内。格式变化、非法或回退的计数会跳过并在工具配置页提示；目录不可读时保留账本并提示检查设置。采集配置和游标不属于 Web 配置快照，恢复快照不会回退采集起点或自动开启采集。
+此功能适配 Codex 本地内部 JSONL 格式，并非稳定的公开 API；云端任务与未标记来源的 CLI 会话不在范围内。格式变化、非法或回退的计数会跳过并在工具配置页提示；目录不可读时保留账本并提示检查设置。采集配置和游标不属于 Web 配置快照，恢复快照不会回退采集起点或自动开启采集。
 
 ---
 
@@ -457,11 +466,32 @@ ai telegram config set defaultEngine codex --bot ops
 ai telegram config set defaultCwd /workspace/ops --bot ops
 ```
 
+在 `ai web` 的「本地配置 → 消息接入」可填写本机已有目录的绝对路径，也可填写 `Agent` 或 `~/Agent`，两者都指向用户主目录下的 `Agent`。留空时使用用户主目录。CLI 的 `defaultCwd` 支持 `~` 和 `~/`。
+
+### 用 ChatGPT 账号运行 Codex
+
+用运行 Bot 的系统用户，在同一个 `CODEX_HOME` 下执行一次 `ai use codex chatgpt` 完成登录，随后可以退出 CLI。Bot 后台执行会复用该登录，凭证缺失时会提示重新登录。
+
+```bash
+ai telegram config set defaultEngine codex --bot ops
+ai telegram config set codexAuth chatgpt --bot ops
+ai telegram stop --bot ops
+ai telegram start --bot ops
+```
+
+也可在 `ai web` 的「本地配置 → 消息接入」选择「Codex 登录方式 → ChatGPT 账号」，保存后重启 Bot。选择 ChatGPT 时，模型选项切换为「ChatGPT 模型」，原有 Runtime Provider 和模型设置可在切回对应模式后继续使用。已有对话通过 `/codex` 选用 Codex；ChatGPT 模式直接进入工作目录选择或当前会话。默认读取 Codex 的模型配置，可用 `codexModel` 单独覆盖。将 `codexAuth` 设回 `provider` 并重启可恢复 Runtime Provider 模式。切换登录方式会启用对应方式的新 Codex 线程。
+
+Codex 出站代理按 Bot 的 `proxyUrl`、Runtime 默认代理、Bot 的代理环境变量依次选择。使用 Clash 时，把代理地址指向它的 HTTP 或 mixed 端口。Codex 请求由 Clash 的规则决定是否进入 AI 节点组，Telegram API 请求会独立匹配自己的规则。
+
+在 Telegram 发送 `/model`，或在 `/config` 中点击当前模型，可从本机 Codex 缓存的模型列表切换。点选模型后，可在该模型支持的档位中选择推理强度，也可跟随 Codex 设置。模型和档位写入该 Bot 的 `codexModel` 和 `codexReasoningEffort`，下一条请求可继续当前对话并使用新设置。选择「跟随 Codex 默认模型」会清除两项覆盖。列表为空时，可打开已登录的 Codex 刷新后再试。
+
+`ai web` 的「运行记录 → 调用记录」显示 Bot 请求及已观测的回合用量。「用量统计 → 日志流水」可搜索 `codex_telegram_chatgpt`，采集依赖 Bot 与 Web 使用同一 Codex 目录。同一个系统用户与 `CODEX_HOME` 下启用 ChatGPT 模式的 Bot 共享该账号，建议保持 `allowedUserIds` 白名单。
+
 ### 在 Telegram 里怎么用
 
-首次发 `/start`（或 `/reset`）进入初始化：**先选服务商和模型 → 再选工作目录 → 自动确定引擎**。
+首次发 `/start`（或 `/reset`）进入初始化。Runtime Provider 模式先选服务商和模型，ChatGPT 模式的 Codex 直接进入工作目录步骤。
 
-工作目录步骤会直接列出最多 8 个历史绝对路径按钮，末尾有「自定义」。自定义路径固定创建或复用 `~/你输入的名字`。
+Bot 已配置可用的默认项目目录时会自动使用它。未配置或目录不可用时，才会显示历史目录和「自定义」。之后可随时用 `/cwd` 切换目录。
 
 没定工作目录或没选 CLI 就发消息，Bot 会提示你先完成这一步。
 
@@ -479,6 +509,7 @@ ai telegram config set defaultCwd /workspace/ops --bot ops
 | 引用注入 | 回复历史文字会把引用内容作为额外上下文注入，上限 800 token，按不可信内容转义 |
 | 编辑重跑 | 编辑最新一条 prompt 会自动停掉旧执行、用新文本重跑 |
 | 附件 | 一次最多 8 个文件。文本单文件 2MB，图片单文件 10MB，文本总注入预算 3000 token |
+| 参考图改图 | 使用 ChatGPT 登录的 Codex 时，发送一张照片或图片文件，在图片说明里写「把背景改成雪山，保留人物」即可。也可以先发一张或多张参考图，等 Bot 确认收齐后再发一条修改要求。相册请使用后一种方式。Codex 调用内置生图工具，Bot 把本轮生成的图片发回当前聊天；超出照片规格时发送原图文件。只问图片内容时仍按普通看图处理。 |
 | 服务商管理 | `/provider` 可直接在 Telegram 里增删改服务商，复用 CLI 的核心逻辑 |
 | 执行命令 | `/terminal <命令>` 在工作目录执行，最长 60 秒，高风险命令仍需确认 |
 | 费用 | `/usage` 优先用服务商返回的 cost，只有 token 时按 `model-pricing.json` 估算 |
@@ -663,7 +694,7 @@ Web 控制面的「本地配置」提供「服务配置、模型路由、工具�
 
 `tools` 能力对应 `POST /v1/tools/execute`，当前只注册 `runtime.status` 与 `providers.list` 两个只读工具，例如请求体 `{"name":"runtime.status"}`。不接收任意 Shell 命令，不涉及记忆检索。
 
-「运行记录 → 完整历史与导出」可分页查询所有本机记录并下载 CSV/JSON；实时追踪每 2 秒刷新最新页，翻阅旧页时关闭实时追踪。用量统计页也提供完整用量导出。数据仍来自现有账本和日志，不导出 API Key、Token、提示词或对话正文；SQLite 用量/会话支持索引分页，日志页扫描文件但只保留当前页；完整调用聚合仍需扫描，超大历史尚需容量验收。
+用量统计默认选中「今天」（UTC 自然日）。「用量统计 → 日志流水」可按时间、Provider 筛选并搜索，选择 CSV/JSON 导出；使用刷新按钮手动刷新，翻阅历史页时固定查询范围。用量统计页的日志流水只显示用量记录，时间按浏览器本地时区展示；列表显示可观测的输入、输出及总 Token，缺失时显示 `—`，数值按 k、w、亿缩写，导出保留原始数值。用量统计页也提供完整用量导出。数据仍来自现有账本和日志，不导出 API Key、Token、提示词或对话正文；SQLite 用量/会话支持索引分页，日志页扫描文件但只保留当前页；完整调用聚合仍需扫描，超大历史尚需容量验收。
 
 先配置支持目标图片模型的 Provider，并用 `ai status` 刷新模型目录。按页面的四步完成接入：
 
@@ -702,13 +733,13 @@ curl https://ai.example.com/v1/images/edits \
 
 保存开放配置并创建凭证后，在「启动与连接」启动 API 或执行 `ai server start`。托管 API 固定监听 `127.0.0.1:8080`；首次启用开放配置需重启旧前台 API，之后能力关闭与凭证撤销逐请求生效。前台调试模式的旧服务 Token 同样受全局能力范围限制。反代上游由同机/SSH 模式自动生成，不改变本机 API 监听地址。调用凭证支持 Provider／模型白名单、到期时间、每分钟请求数及总请求额度；401 表示无效/过期凭证，403 表示能力或模型范围不符，429 表示限流/额度耗尽。限流为 UTC 分钟窗口，请求通过能力鉴权后即占用次数，后续参数/上游失败也计数；不是 Token 或金额预算。总请求数独立持久化，重启、轮换和配置恢复不重置；Token 轮换立即使旧值失效，新值只显示一次。组织权限仍属规划。
 
-「用量统计」支持最近 7/30/70 个 UTC 自然日和 Provider 筛选。趋势图可切换总量/输入/输出；调用活动采用 GitHub 式按周排列的 7 天小方格，短区间保留浅色日历上下文，不拉伸方格或改变排列语义，统计数字只来自当前筛选区间；Provider 占比使用圆角、无间隔分段、轻量涂鸦纹理和可切换图例的环形图。成本卡片右上角的设置按钮可以按 Provider/模型编辑输入、输出和可选 Cache Read 价格（美元/百万 token）。Provider 下拉完整列出当前所有配置、历史 usage 和已有价格键，直接选择即可切换；模型下拉列出对应 Provider 缓存目录、默认模型、历史 usage 模型和已有价格键，也可选择「手动输入模型…」填写模型 ID。切换 Provider 会更新模型和价格，保存后当前区间立即重算；未配置价格的事件会单独提示且不计入成本。点击趋势或活动日期进入「运行记录 → 调用记录」，保留 UTC 日期筛选。图表包括 Runtime 代理用量及显式启用采集后的 Codex App 本机用量，均按实际 Provider/模型汇总，不推测其他未采集的直接调用。App 用量不会创建 Runtime 调用链路或工具会话记录。
+「用量统计」支持最近 今天/7/30 个 UTC 自然日和 Provider 筛选。趋势图可切换总量/输入/输出；调用活动采用 GitHub 式按周排列的 7 天小方格，短区间保留浅色日历上下文，不拉伸方格或改变排列语义，统计数字只来自当前筛选区间；Provider 占比使用圆角、无间隔分段、轻量涂鸦纹理和可切换图例的环形图。成本卡片右上角的设置按钮可以按 Provider/模型编辑输入、输出和可选 Cache Read 价格（美元/百万 token）。Provider 下拉完整列出当前所有配置、历史 usage 和已有价格键，直接选择即可切换；模型下拉列出对应 Provider 缓存目录、默认模型、历史 usage 模型和已有价格键，也可选择「手动输入模型…」填写模型 ID。切换 Provider 会更新模型和价格，保存后当前区间立即重算；未配置价格的事件会单独提示且不计入成本。点击趋势或活动日期进入「运行记录 → 调用记录」，保留 UTC 日期筛选。图表包括 Runtime 代理用量及显式启用采集后的 Codex App 本机用量，均按实际 Provider/模型汇总，不推测其他未采集的直接调用。App 用量不创建 Runtime 调用链路或工具会话记录；调用记录额外显示只读投影的「Codex App 回合」。
 
 升级后若仍有旧版 `ai web` 进程运行，请在原终端按 `Ctrl+C`，重新运行 `ai web` 打开新版页面；旧数据无需迁移。新版界面遇到旧服务响应时会提示重启，避免使用缺失字段。
 
 「运行记录」分为三个页面：
 
-- **调用记录**：基于最近 300 条日志，按 `traceId` 归组，优先显示结果、模型、Provider 和时间；支持结果、切换、重试、Provider 和搜索筛选。点击打开侧边详情，查看结果摘要、Provider 过程、中文事件时间线和可展开的原始字段。重试与跨 Provider 切换分别计数，配对的切换计划和应用事件只计一次。新模型请求显示已观测 Token、成本及来源、终止耗时与父 `executionId`；辅助请求不进入模型调用汇总。一次工具执行可能包含多个独立请求。旧记录无用量关联时显示未知，不按时间推算。缺少终止事件显示「结果未知」，不推断正在运行；结果 Provider 仅取终止事件，耗时未记录时明确显示事件跨度。
+- **调用记录**：包含 Runtime 执行、「Codex App 回合」和「Codex CLI · ChatGPT」。Codex 回合复用采集开关、目录及启用时间，以原生 session ID + turn ID 关联开始、模型上下文、完成和中止事件；`task_complete` 未带错误或 `error = null` 时显示回合完成，明确错误显示回合失败，其余显示未知。Codex 回合的列表与详情显示「会话配置 Provider」，来自原生会话元数据，不显示 Runtime 的「结果 Provider 未记录」提示。一个 Codex 回合可能包含多次模型请求，不推断实际 Provider、请求级重试/切换或成本；在唯一未结束回合且模型上下文明确时，汇总已验证的 Token 增量，展示已观测用量；只展示明确的耗时或事件跨度，不保存正文。最近投影最多展示 100 个回合，每文件最多保留 30 个、全局最多 200 个元数据；大文件扫描沿用增量限制，可能需多次刷新追上。首次升级游标会重读本次采集起点以来的事件，沿用用量幂等 ID。Runtime 记录基于最近 300 条日志，按 `traceId` 归组，优先显示结果、模型、Provider 和时间；支持结果、切换、重试、Provider 和搜索筛选。点击打开侧边详情，查看结果摘要、Provider 过程、中文事件时间线和可展开的原始字段。重试与跨 Provider 切换分别计数，配对的切换计划和应用事件只计一次。新模型请求显示已观测 Token、成本及来源、终止耗时与父 `executionId`；辅助请求不进入模型调用汇总。一次工具执行可能包含多个独立请求。旧记录无用量关联时显示未知，不按时间推算。缺少终止事件显示「结果未知」，不推断正在运行；结果 Provider 仅取终止事件，耗时未记录时明确显示事件跨度。
 - **工具会话**：最近 30 次工具启动与退出，区分启动配置与最近成功请求的实际模型/Provider，展示时间、时长、退出结果与退出码。未记录结束时间显示「尚无退出记录」，不能视为进程存活。仅当日志明确记录与本地会话相同的 `sessionId` 时提供关联调用入口；不按时间或 Provider 猜测关联，也不展示聊天内容。
 - **系统日志**：按「模型请求 / 服务检查 / 配置变更 / 系统运行」分类，支持级别、Provider、分类、日期和搜索筛选。事件先显示中文说明，展开查看脱敏后的 `action`、`level`、`traceId` 等原始字段；存在明确调用关联时可直接打开调用详情。没有 `traceId` 的事件仅保留在日志中，不生成调用记录。
 
@@ -840,3 +871,5 @@ Runtime 代理用量从安装了支持统一代理的版本之后的新请求开
 
 - `ai web` 的侧栏显示默认 Provider，不是请求级实时承接者；`ai use` 运行期间的准确切换结果仍需用 `ai log --trace` 核实
 - 新请求的 Web 详情展示已观测 Token、成本、耗时和落点；旧日志缺少关联时保持未知，不推算完整实时 trace
+
+运行总览的错误提示在点击「查看记录」后于当前浏览器中隐藏；出现新的错误记录时重新提示。日志本身不会删除。

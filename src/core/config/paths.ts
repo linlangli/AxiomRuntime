@@ -1,6 +1,12 @@
 import path from "node:path";
 import os from "node:os";
 
+export function expandHomePath(value: string): string {
+  if (value === "~") return os.homedir();
+  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
 export function getConfigRoot(): string {
   return process.env.AI_GATEWAY_HOME
     ? path.resolve(process.env.AI_GATEWAY_HOME)

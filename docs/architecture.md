@@ -100,7 +100,7 @@ src/
 | `core/contracts`、`core/transport-proxy`、`core/policy`、`core/learning`、`core/auth-session`、`core/skills`、`plugins/` | 🔴 目录不存在 |
 | 本机 Web adapter（`src/web`、`src/core/web`） | 🟡 `ai web` 已实现基础控制面；企业治理与完整实时 trace 仍规划中 |
 
-本机控制面由 `src/core/web/dashboard-service.ts` 和 `src/core/web/local-settings.ts` 从现有 usage ledger、配置服务和 `service-exposure.json` 投影数据，不创建第二份 usage ledger。Web 现在提供六个一级页面：运行总览、用量统计、本地配置、运行记录、对外服务、帮助中心。用量统计支持 7/30/70 个 UTC 自然日筛选、Provider 分日成本、成本卡片内按 Provider/模型编辑 `model-pricing.json`；价格配置通过完整下拉列表选择 Provider，合并现有配置、usage 历史和价格键，模型下拉合并缓存目录、默认模型、usage 历史模型和已有价格键并支持手动输入；切换 Provider 会刷新模型和价格，空目录清除上一个 Provider 的模型；占比图使用无间隔分段、圆角和轻量涂鸦纹理，调用活动按 GitHub 式周列 × 7 天排列并使用固定小方格，短区间补充浅色日历上下文但只统计当前筛选区间；运行记录分为调用记录、工具会话、系统日志；`src/core/web/execution-history.ts` 负责日志白名单投影与按 `traceId` 的只读执行摘要，严格识别终止事件和 HTTP 结果、分别统计重试/切换、排除无关联独立事件、仅以明确且匹配的 `sessionId` 关联会话；Web 展示中文说明和侧边详情，缺少终止事件为结果未知，结果 Provider 不以最后出现者代替，缺少耗时仅显示事件跨度；工具配置并排展示 Claude Code 与 Codex 配置；选择 Provider 时调用 core 目录发现，只发送模型目录请求、失败保留缓存，不发模型调用。Claude Code 通过共享 core 配置 API 校验并持久更新模型及权限模式，保留其他设置；模型族覆盖属于别名配置。Codex 参数与 Provider 变更共用一次预览及受锁的原子配置写入；仅修改参数不触发登录。参数写入复用集成层锁与原子写入，只修改明确的 `model_reasoning_effort`、`sandbox_mode`、`approval_policy`，不触碰凭证；不兼容的 `default_permissions` 组合拒绝写入。账号展示仅读取文件凭证中的邮箱声明，不返回 token，不能视为登录有效性验证。本地配置分为「服务配置、模型路由、工具配置、网络代理、消息接入、配置维护」六个分类，通过 core API 编辑 Provider、路由、Codex、出站代理、Telegram，并提供受限权限的配置备份与恢复。完整记忆模块尚未实现，Web 暂不提供记忆设置入口或 embedding 编辑表单；core/CLI 的 embedding 连接前置配置与探测、Telegram 显式记忆与关键词检索仍保留，配置快照范围不变。敏感值只在表单提交时接收，状态接口不回显。
+本机控制面由 `src/core/web/dashboard-service.ts` 和 `src/core/web/local-settings.ts` 从现有 usage ledger、配置服务和 `service-exposure.json` 投影数据，不创建第二份 usage ledger。Web 现在提供六个一级页面：运行总览、用量统计、本地配置、运行记录、对外服务、帮助中心。用量统计支持 今天/7/30 个 UTC 自然日筛选、Provider 分日成本、成本卡片内按 Provider/模型编辑 `model-pricing.json`；价格配置通过完整下拉列表选择 Provider，合并现有配置、usage 历史和价格键，模型下拉合并缓存目录、默认模型、usage 历史模型和已有价格键并支持手动输入；切换 Provider 会刷新模型和价格，空目录清除上一个 Provider 的模型；占比图使用无间隔分段、圆角和轻量涂鸦纹理，调用活动按 GitHub 式周列 × 7 天排列并使用固定小方格，短区间补充浅色日历上下文但只统计当前筛选区间；运行记录分为调用记录、工具会话、系统日志；`src/core/web/execution-history.ts` 负责日志白名单投影与按 `traceId` 的只读执行摘要，严格识别终止事件和 HTTP 结果、分别统计重试/切换、排除无关联独立事件、仅以明确且匹配的 `sessionId` 关联会话；Web 日志流水位于用量统计页，提供时间、Provider 筛选和搜索，限定用量类型，展示数值使用统一 Token 缩写而导出保留原值，手动刷新，历史页固定查询范围；用量投影保留 `source`、`tool` 与缓存 Token，导出复用同一投影。Web 展示中文说明和侧边详情，缺少终止事件为结果未知，结果 Provider 不以最后出现者代替，缺少耗时仅显示事件跨度；工具配置并排展示 Claude Code 与 Codex 配置；选择 Provider 时调用 core 目录发现，只发送模型目录请求、失败保留缓存，不发模型调用。Claude Code 通过共享 core 配置 API 校验并持久更新模型及权限模式，保留其他设置；模型族覆盖属于别名配置。Codex 参数与 Provider 变更共用一次预览及受锁的原子配置写入；仅修改参数不触发登录。参数写入复用集成层锁与原子写入，只修改明确的 `model_reasoning_effort`、`sandbox_mode`、`approval_policy`，不触碰凭证；不兼容的 `default_permissions` 组合拒绝写入。账号展示仅读取文件凭证中的邮箱声明，不返回 token，不能视为登录有效性验证。本地配置分为「服务配置、模型路由、工具配置、网络代理、消息接入、配置维护」六个分类，通过 core API 编辑 Provider、路由、Codex、出站代理、Telegram，并提供受限权限的配置备份与恢复。完整记忆模块尚未实现，Web 暂不提供记忆设置入口或 embedding 编辑表单；core/CLI 的 embedding 连接前置配置与探测、Telegram 显式记忆与关键词检索仍保留，配置快照范围不变。敏感值只在表单提交时接收，状态接口不回显。
 
 帮助中心的完整命令手册由 `web/src/CommandManual.vue` 在构建时导入 `docs/USAGE.html` 原文，并从手册的正文 section 和命令索引投影目录、命令、参数说明与示例，不维护第二份命令清单。独立手册的样式、脚本与搜索控件不嵌入控制面；Web 使用自己的分类、跨分类全文搜索、复制和展开交互，正文保留同一来源的完整规则。该功能仅是静态文档适配，不调用执行或配置写入 API。
 
@@ -124,7 +124,7 @@ src/
 
 ---
 
-本机 Web 的补齐能力均通过共享 core API：`claude-settings.ts` 备份并编辑用户连接字段，`bot-service.ts` 为 Web 与具名 Bot CLI 提供同一生命周期锁，并在发送停止信号前校验进程归属标识；升级前启动且没有标识的旧 Bot 需核实 PID 并手动停止后重新启动。`history-service.ts` 从既有日志、会话和唯一 usage ledger 投影分页与 CSV/JSON 导出；轮询每 2 秒刷新，用量/会话可显式迁移至 SQLite 后索引分页，日志逐块扫描且只保留当前页；完整调用聚合和总览仍读取相应历史，不保证大规模性能。`service-playground.ts` 将瞬态调用凭证和请求转交现有 API，只有协议有效的公网成功调用才写入与当前开放/SSH 配置指纹绑定的验证记录。图片编辑转换为 multipart，调用输入、凭证和图片不写配置或日志。`runtime-tools.ts` 仅注册两个只读查询，不能执行任意 Shell。`credential-policy.ts` 在能力交集授权后检查有效期、Provider/模型白名单与原子请求计数；计数属于准入状态，不能充当 UsageObserver 账本，凭证轮换和快照恢复不重置计数。快照纳入 SSH 连接配置但不纳入专用私钥、known_hosts、准入计数或验证记录；恢复保留当前凭证集合。
+本机 Web 的补齐能力均通过共享 core API：`claude-settings.ts` 备份并编辑用户连接字段，`bot-service.ts` 为 Web 与具名 Bot CLI 提供同一生命周期锁，并在发送停止信号前校验进程归属标识；升级前启动且没有标识的旧 Bot 需核实 PID 并手动停止后重新启动。`history-service.ts` 从既有日志、会话和唯一 usage ledger 投影分页与 CSV/JSON 导出；由用户手动刷新，用量/会话可显式迁移至 SQLite 后索引分页，日志逐块扫描且只保留当前页；完整调用聚合和总览仍读取相应历史，不保证大规模性能。`service-playground.ts` 将瞬态调用凭证和请求转交现有 API，只有协议有效的公网成功调用才写入与当前开放/SSH 配置指纹绑定的验证记录。图片编辑转换为 multipart，调用输入、凭证和图片不写配置或日志。`runtime-tools.ts` 仅注册两个只读查询，不能执行任意 Shell。`credential-policy.ts` 在能力交集授权后检查有效期、Provider/模型白名单与原子请求计数；计数属于准入状态，不能充当 UsageObserver 账本，凭证轮换和快照恢复不重置计数。快照纳入 SSH 连接配置但不纳入专用私钥、known_hosts、准入计数或验证记录；恢复保留当前凭证集合。
 
 ## 4. 目标分层架构
 
@@ -339,20 +339,22 @@ Claude Provider 执行使用 `ANTHROPIC_API_KEY` 作为唯一认证来源。`eng
 
 ### 统一用量采集 🟢
 
-- CLI `ai use` 与 Telegram 的 Claude/Codex 执行**都**通过一个 execution-scoped 的 `openai-usage-proxy` listener
+- CLI `ai use` 的 Runtime Provider 模式与 Telegram 的 Claude/Codex 执行通过一个 execution-scoped 的 `openai-usage-proxy` listener
 - Claude 保留 Anthropic `/v1/messages` 协议，Codex 使用 OpenAI 兼容 `/v1`
 - UsageObserver 从真实 JSON/SSE 响应归一化 token；Anthropic streaming 的 input/cache/output 在同一响应内合并
 - 事件按 Runtime 已选择的 provider 与**实际** model 写入 `usage.json`
 - Telegram 把同一批 proxy records 投影到 `SessionManager.recordProviderUsage()`，**不产生第二份 token 账本**
 - Claude JSON stream 的 `cost_usd` 在 provider 返回时作为该 session 的实际成本；不估算、不补写 token
 
-🟢 `src/core/usage/codex-app-usage.ts` 是 UsageObserver 用量域的本机观测适配器。显式启用后，只读 `CODEX_HOME/sessions` 与 `archived_sessions` 的 JSONL，从 `session_meta` 的 `originator = "Codex Desktop"`、`model_provider` 和 `turn_context.model` 确认归属，消费 `event_msg/token_count` 的真实累积增量；首次观测使用 `last_token_usage`，排除启用前和会话创建前的继承记录。Cache Read 已包含在 input，reasoning 已包含在 output，不重复相加。计数回退、非法计数和无法识别的记录跳过并展示诊断计数，不估算 Token。
+🟢 `src/core/usage/codex-app-usage.ts` 是 UsageObserver 用量域的本机观测适配器。显式启用后，只读 `CODEX_HOME/sessions` 与 `archived_sessions` 的 JSONL，从 `session_meta` 的来源、`model_provider` 和 `turn_context.model` 确认归属，消费 `event_msg/token_count` 的真实累积增量；首次观测使用 `last_token_usage`，排除启用前和会话创建前的继承记录。Cache Read 已包含在 input，reasoning 已包含在 output，不重复相加。计数回退、非法计数和无法识别的记录跳过并展示诊断计数，不估算 Token。
 
 Web 读取 Codex 用户级 `config.toml` 的 Provider ID 以确定配置状态，表单不以首个 Runtime Provider 冒充当前配置；项目层和启动参数可能覆盖该状态，凭证文件存在不证明登录有效。用量映射独立于当前配置，历史会话仍可能引用已删除的 Provider ID。
 
-Provider 优先取显式 `providerMappings`，其次匹配 Runtime Provider 精确名称或 `providerIdForName()` 生成的 ID；歧义与未知 ID 以原始 ID 归属；无法确定账户的 `openai` 记录归属为 `ChatGPT（账户未知）`。历史显式映射仍优先生效。`ai_gateway_selected`、CLI 和 SDK originator 被排除，避免重计 Transport Proxy 已观测的请求。事件携带 `source = "codex_app"`，以 Codex 目录、原生 session ID、事件时间及累积用量生成稳定 `id`，经 `appendUsageEvents()` 在现有 `usage.json` 内加锁去重。先写唯一账本、再提交文件游标，因此重放或游标损坏恢复不会重复记账。不创建 listener、forwarder、第二份账本或对话存储。
+Provider 优先取显式 `providerMappings`，其次匹配 Runtime Provider 精确名称或 `providerIdForName()` 生成的 ID；歧义与未知 ID 以原始 ID 归属；无法确定账户的 `openai` 记录归属为 `ChatGPT（账户未知）`。历史显式映射仍优先生效。`ai_gateway_selected`、未标记的 CLI 和 SDK originator 被排除，避免重计 Transport Proxy 已观测的请求。事件按来源携带 `source = "codex_app"` 或 `source = "codex_cli_chatgpt"`，以 Codex 目录、原生 session ID、事件时间及累积用量生成稳定 `id`，经 `appendUsageEvents()` 在现有 `usage.json` 内加锁去重。先写唯一账本、再提交文件游标，因此重放或游标损坏恢复不会重复记账。不创建 listener、forwarder、第二份账本或对话存储。
 
-首次同步无采集设置时默认启用并持久化起点，已有关闭设置不覆盖。会话 `creator_account_id` 与当前 ChatGPT 凭证账户一致时，新事件可使用凭证声明的账户名称；不匹配或缺失时保持未知，已有账本不改写。`codex-usage.json` 保存开关、启用时间、目录和 Provider 映射，`codex-usage-state.json` 只保存文件路径摘要、游标、检查点及归属/计数元数据（包括原生账户 ID），均使用受限权限原子写入。两者不参与 Web 配置快照恢复，避免恢复旧快照时重新启用采集或回退采集起点。单次扫描读取最多 8 MiB、单行最多 1 MiB，跳过符号链接；刷新 dashboard 或查询每周 Provider 用量触发同步，关闭期间不补录。同步失败只反馈状态，保留账本并允许主页面继续使用。原生 JSONL 不是 Codex 的稳定公开接口，格式变化可能暂停该适配；云端任务和未带上述桌面身份的记录不在范围内。CLI 与 Web 只调用共享 core 配置 API，Web 保持既有 Host、Origin 和 token 检查，不修改 Codex 配置、凭证或登录状态。
+首次同步无采集设置时默认启用并持久化起点，已有关闭设置不覆盖。会话 `creator_account_id` 与当前 ChatGPT 凭证账户一致时，新事件可使用凭证声明的账户名称；不匹配或缺失时保持未知，已有账本不改写。Codex 本机回合投影由 `codex-app-calls.ts` 处理，复用相同扫描和游标，仅以 session ID + turn ID 关联原生回合，采用来源前缀与稳定 ID，与 Runtime 记录并列。`task_complete` 无错误或 error 为 null 表示回合完成，明确错误表示失败，中止或证据缺失为 unknown；不生成 Runtime trace/session、不写日志或用量账本。Token 增量仅关联明确上下文中唯一未结束回合，重复累计事件不重计，歧义保持未知；白名单元数据每文件上限 30、全局 200、展示最近 100；游标 schema 升级触发幂等重读。
+
+`codex-usage.json` 保存开关、启用时间、目录和 Provider 映射，`codex-usage-state.json` 只保存文件路径摘要、游标、检查点及归属/计数元数据（包括原生账户 ID），均使用受限权限原子写入。两者不参与 Web 配置快照恢复，避免恢复旧快照时重新启用采集或回退采集起点。单次扫描读取最多 8 MiB、单行最多 1 MiB，跳过符号链接；刷新 dashboard 或查询每周 Provider 用量触发同步，关闭期间不补录。同步失败只反馈状态，保留账本并允许主页面继续使用。原生 JSONL 不是 Codex 的稳定公开接口，格式变化可能暂停该适配；云端任务和未带受支持来源的记录不在范围内。CLI 与 Web 只调用共享 core 配置 API，Web 保持既有 Host、Origin 和 token 检查，不修改 Codex 配置、凭证或登录状态。
 
 ### 图片生成 🟢
 
@@ -583,6 +585,12 @@ Telegram / CLI / API Surface
 
 🟡 **当前状态**：Telegram 的 `Engine` 接口是一个 delivery-local 兼容 facade，不是 canonical Agent 契约。它目前直接 spawn CLI；目标态**必须**委托给统一 Orchestration 与 `AgentAdapterPort`。
 
+Telegram 的 Codex `codexAuth: "chatgpt"` 复用 core 的原生 ChatGPT 启动配置与本地登录校验，走 Codex 自有传输。代理按 Bot `proxyUrl`、Runtime 默认代理及进程环境变量解析；登录缺失时终止执行，由操作者在同一系统用户与 `CODEX_HOME` 下登录。Adapter 保留原有审批、进度、取消与工作目录边界，切换认证方式时另起 Codex 线程。原生采集器从已标记的 `exec` 会话把实际 Token 用量写入同一个 UsageObserver 账本，来源为 `codex_telegram_chatgpt`；调用记录归属 Telegram 的任务链路。
+
+ChatGPT 模式下，有参考图的请求继续通过同一条 `codex exec` 或 `codex exec resume` 执行。core 根据 CLI 返回的线程 ID 和带唯一标识的原始输入在 rollout 中定位当前回合，只提取 `image_gen.generation` 的完成结果。Telegram 将图片上传至原聊天，上传错误与模型执行结果分别记录。
+
+ChatGPT 模式的 Telegram 模型和推理档位由 core 读取同一 `CODEX_HOME` 的 `models_cache.json`。选择写入 Bot 配置的 `codexModel` 与 `codexReasoningEffort`，现有 Codex 线程可继续使用，后续执行传入对应模型参数与 `model_reasoning_effort`。通过其他入口切换 Bot 模型时清除旧档位覆盖。
+
 ### 执行权限与安装权限分离 🟢
 
 包安装可以要求管理员权限，但 Agent 进程和长期 Runtime 服务**应当**以专用非 root OS 身份运行。
@@ -595,6 +603,7 @@ Claude adapter **必须**在构造参数和临时 settings **之前**检测 UID 
 
 - Codex App、Codex CLI 与 IDE extension 在同一 OS 用户和同一 `CODEX_HOME` 下共享用户级 `config.toml` 配置层
 - `ai use codex` 通过 CLI `-c` 只为**本次子进程**固定 provider，不回写共享配置
+- `ai use codex chatgpt [model]` 由 core integration 复用 `CODEX_HOME/auth.json` 中的 ChatGPT 凭证，缺失时在同一配置锁下委托原生 `codex login`，验证凭证并收紧权限，失败恢复原文件。子进程固定内建 `openai`、ChatGPT 登录和文件凭证，移除继承的 API Key 与 Runtime 路由注入，使用原生 CLI 连接，不写 `config.toml`，不创建代理或用量账本。CLI 适配器为同名 Runtime Provider 提供 `--provider chatgpt` 入口。 启动前初始化现有本机采集配置。CLI 子进程通过 `CODEX_INTERNAL_ORIGINATOR_OVERRIDE` 写入 `axiomruntime_chatgpt_cli` 来源，支持 `--no-daemon` 的版本使用进程内服务，让来源传递到会话。采集同时校验来源标记、`source = "cli"` 与内建 `openai` Provider，随后复用 Codex App 的增量游标和唯一用量账本。旧版无来源标记的 CLI 会话保持排除。
 - `ai set codex` 调用独立的 core integration service，持久切换 Codex client，共享配置会在 App/CLI 后续新进程中生效
 
 该 service 的约束：ChatGPT OAuth 委托 `codex login`；持久写入限于用户级 `CODEX_HOME/config.toml` 和 `auth.json`；使用原子替换 + 回滚；API Key **不进入** TOML 和日志；凭证文件权限强制 `0600`。Provider 变更只从该 provider 已发现的模型缓存中解析模型；写入 Codex `base_url` 时复用 Codex Runner 的规范化规则，保证末尾恰好一个 `/v1`。

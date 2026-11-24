@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { applyLocalSettings, getLocalSettings } from "../dist/core/web/local-settings.js";
 import { loadRuntimeConfig } from "../dist/core/config/runtime-config.js";
-import { loadBotConfig } from "../dist/core/config/telegram-config.js";
+import { loadBotConfig, updateBotConfig } from "../dist/core/config/telegram-config.js";
 import { loadServiceExposure, saveServiceExposure, createServiceCredential, revokeServiceCredential } from "../dist/core/config/service-exposure.js";
 import { appendUsageEvent } from "../dist/core/config/usage-store.js";
 import { startRuntimeServer } from "../dist/server/runtime-server.js";
@@ -48,10 +48,14 @@ test("Web settings persist shared Runtime values, reject invalid inputs, and res
   await assert.rejects(applyLocalSettings({ action: "failover", enabled: "false" }), /布尔值/);
   await assert.rejects(applyLocalSettings({ action: "restore", id: "../../providers" }), /编号无效/);
   await assert.rejects(applyLocalSettings({ action: "telegram", name: "../../escape", defaultEngine: "claude" }), /Bot 名称/);
-  await applyLocalSettings({ action: "telegram", name: "personal", token: "private-bot-token", defaultEngine: "codex", defaultCwd: root, allowedUserIds: [123], provider: "", model: "", proxyUrl: "" });
+  const botInput = { action: "telegram", name: "personal", token: "private-bot-token", defaultEngine: "codex", defaultCwd: root, allowedUserIds: [123], provider: "", model: "", proxyUrl: "" };
+  await assert.rejects(applyLocalSettings({ ...botInput, codexAuth: "invalid" }), /Codex 登录方式/);
+  await applyLocalSettings({ ...botInput, codexAuth: "chatgpt", codexModel: "chatgpt-model" });
   const bot = await loadBotConfig("personal");
   assert.equal(bot.defaultPermissionMode, "default");
   assert.deepEqual(bot.allowedUserIds, [123]);
+  assert.equal(bot.codexAuth, "chatgpt");
+  assert.equal(bot.codexModel, "chatgpt-model");
   const settings = await getLocalSettings();
   assert.equal(settings.bots[0].tokenConfigured, true);
   assert.doesNotMatch(JSON.stringify(settings), /private-bot-token/);
@@ -61,6 +65,44 @@ test("Web settings persist shared Runtime values, reject invalid inputs, and res
     assert.equal((await fs.stat(path.join(root, "runtime.json"))).mode & 0o777, 0o600);
     assert.equal((await fs.stat(path.join(root, "web-backups", `${backup.id}.json`))).mode & 0o777, 0o600);
   }
+}));
+
+test("ChatGPT Bot settings can save with a stale Runtime Provider and preserve its settings", () => isolated(async root => {
+  await updateBotConfig("personal", { provider: "removed-provider", model: "provider-model" });
+  const input = { action: "telegram", name: "personal", defaultEngine: "codex", defaultCwd: root, allowedUserIds: [123] };
+
+  await applyLocalSettings({ ...input, codexAuth: "chatgpt", codexModel: "chatgpt-model" });
+  await applyLocalSettings({ ...input, codexAuth: "chatgpt", provider: "ignored-provider", model: "ignored-model" });
+  const bot = await loadBotConfig("personal");
+  assert.equal(bot.codexAuth, "chatgpt");
+  assert.equal(bot.codexModel, "chatgpt-model");
+  assert.equal(bot.provider, "removed-provider");
+  assert.equal(bot.model, "provider-model");
+
+  await assert.rejects(applyLocalSettings({ ...input, codexAuth: "provider", provider: bot.provider, model: bot.model }), /所选 Provider 不存在/);
+  await applyLocalSettings({ ...input, codexAuth: "provider", provider: "", model: "" });
+  assert.equal((await loadBotConfig("personal")).provider, undefined);
+}));
+
+test("Web Bot settings accept home paths and distinguish invalid work directories", t => isolated(async root => {
+  t.mock.method(os, "homedir", () => root);
+  const agentDir = path.join(root, "Agent");
+  await fs.mkdir(agentDir);
+  const input = { action: "telegram", name: "personal", defaultEngine: "codex", codexAuth: "chatgpt", allowedUserIds: [123] };
+  for (const defaultCwd of ["  Agent  ", "~/Agent", agentDir]) {
+    await applyLocalSettings({ ...input, defaultCwd });
+    assert.equal((await loadBotConfig("personal")).defaultCwd, agentDir);
+  }
+
+  const file = path.join(root, "file.txt");
+  await fs.writeFile(file, "");
+  await assert.rejects(applyLocalSettings({ ...input, defaultCwd: file }), /工作目录指向文件/);
+  await assert.rejects(applyLocalSettings({ ...input, defaultCwd: path.join(root, "missing") }), /工作目录不存在/);
+  await assert.rejects(applyLocalSettings({ ...input, defaultCwd: "relative/path" }), /工作目录不存在/);
+  assert.equal((await loadBotConfig("personal")).defaultCwd, agentDir);
+
+  await applyLocalSettings({ ...input, defaultCwd: "" });
+  assert.equal((await loadBotConfig("personal")).defaultCwd, root);
 }));
 
 test("service authorization enforces both capability scopes and live credential revocation", () => isolated(async root => {

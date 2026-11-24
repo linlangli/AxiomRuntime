@@ -12,20 +12,22 @@ export function buildApprovalKeyboard(id: string): InlineKeyboard {
     .text("Skip", `perm:skip:${id}`);
 }
 
-export function buildWorkdirStartKeyboard(workdirs: string[], scope: "setup" | "ready" = "setup"): InlineKeyboard {
-  const keyboard = new InlineKeyboard();
-  for (const [index, cwd] of workdirs.slice(0, 8).entries()) {
-    keyboard.text(cwd, `${scope}:workdir:pick:${index}`).row();
-  }
-  return keyboard.text("自定义", `${scope}:workdir:custom`);
+export function buildWorkdirStartKeyboard(workdirs: string[], scope: PickerScope = "setup", defaultCwd?: string): InlineKeyboard {
+  return buildWorkdirPicker(workdirs, scope, defaultCwd).text("自定义", `${scope}:workdir:custom`);
 }
 
-export function buildWorkdirListKeyboard(workdirs: string[], scope: "setup" | "ready" = "setup"): InlineKeyboard {
+export function buildWorkdirListKeyboard(workdirs: string[], scope: PickerScope = "setup", defaultCwd?: string): InlineKeyboard {
+  return buildWorkdirPicker(workdirs, scope, defaultCwd).text("back", `${scope}:workdir:back`);
+}
+
+function buildWorkdirPicker(workdirs: string[], scope: PickerScope, defaultCwd?: string): InlineKeyboard {
   const keyboard = new InlineKeyboard();
-  for (const [index, cwd] of workdirs.slice(0, 8).entries()) {
+  if (defaultCwd) keyboard.text(`默认 · ${defaultCwd}`, `${scope}:workdir:pick:default`).row();
+  const recent = workdirs.map((cwd, index) => ({ cwd, index })).filter(({ cwd }) => cwd !== defaultCwd);
+  for (const { cwd, index } of recent.slice(0, defaultCwd ? 7 : 8)) {
     keyboard.text(cwd, `${scope}:workdir:pick:${index}`).row();
   }
-  return keyboard.text("back", `${scope}:workdir:back`);
+  return keyboard;
 }
 
 export function buildCliKeyboard(): InlineKeyboard {

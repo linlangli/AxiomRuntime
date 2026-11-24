@@ -62,7 +62,7 @@ export type UsageEvent = {
   provider: string;
   tool: RunToolType;
   model: string;
-  source: "doctor_deep" | "model_probe" | "proxy" | "cli" | "codex_app";
+  source: "doctor_deep" | "model_probe" | "proxy" | "cli" | "codex_app" | "codex_cli_chatgpt" | "codex_telegram_chatgpt";
   id?: string;
   traceId?: string;
   sessionId?: string;

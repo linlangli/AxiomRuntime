@@ -4,7 +4,8 @@ import path from "node:path";
 import type { Bot, Context } from "grammy";
 import { escapeHtml, truncateText } from "../interaction/formatter.js";
 import type { TelegramAttachment } from "../session/types.js";
-import type { MessageHandlerDeps } from "./message.js";
+import { usesTelegramCodexChatGpt } from "../config.js";
+import { executePromptLocked, type MessageHandlerDeps } from "./message.js";
 import { completeAgentProfile, showReadyCard } from "./setup.js";
 
 export const MAX_TEXT_ATTACHMENT_BYTES = 2 * 1024 * 1024;
@@ -14,28 +15,29 @@ export const MAX_ATTACHMENTS_PER_PROMPT = 8;
 export function registerDocumentHandler(bot: Bot, deps: MessageHandlerDeps): void {
   bot.on("message:document", async (ctx) => {
     const document = ctx.message.document;
-    if (!document.file_name) {
+    const name = document.file_name;
+    if (!name) {
       await ctx.reply("文件必须包含文件名。");
       return;
     }
     const isImage = document.mime_type?.startsWith("image/") ?? false;
-    await receiveAttachment(ctx, deps, {
-      name: document.file_name,
+    await deps.sessionManager.runExclusive(ctx.chat.id, () => receiveAttachment(ctx, deps, {
+      name,
       kind: isImage ? "image" : "text",
       mimeType: document.mime_type,
       declaredSize: document.file_size
-    });
+    }));
   });
 
   bot.on("message:photo", async (ctx) => {
     const photo = ctx.message.photo.at(-1);
     if (!photo) return;
-    await receiveAttachment(ctx, deps, {
+    await deps.sessionManager.runExclusive(ctx.chat.id, () => receiveAttachment(ctx, deps, {
       name: `telegram-photo-${ctx.message.message_id}.jpg`,
       kind: "image",
       mimeType: "image/jpeg",
       declaredSize: photo.file_size
-    });
+    }));
   });
 }
 
@@ -100,6 +102,12 @@ async function receiveAttachment(
       createdAt: new Date().toISOString()
     };
     const session = deps.sessionManager.addAttachment(chatId, attachment);
+    const caption = ctx.message?.caption?.trim();
+    if (incoming.kind === "image" && caption && session.setupStep === "ready" && !ctx.message?.media_group_id
+      && usesTelegramCodexChatGpt(session.engine, deps.config)) {
+      await executePromptLocked(ctx, deps, caption);
+      return;
+    }
     const label = incoming.kind === "image" ? "图片" : "文件";
     await ctx.reply(
       `已附加${label} <code>${escapeHtml(incoming.name)}</code>，将在下一条请求中使用（${session.attachments.length}/${MAX_ATTACHMENTS_PER_PROMPT}）。`,

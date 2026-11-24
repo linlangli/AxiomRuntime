@@ -89,8 +89,8 @@ export const Formatter = {
     return "🤖 请选确定工作路径哦";
   },
 
-  workdirList(workdirs: string[]): string {
-    if (!workdirs.length) {
+  workdirList(workdirs: string[], defaultCwd?: string): string {
+    if (!defaultCwd && !workdirs.length) {
       return "🤖 还没有记录过工作路径。";
     }
     return "🤖 选择一个已存在的工作路径吧";

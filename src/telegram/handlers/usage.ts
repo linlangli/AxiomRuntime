@@ -2,7 +2,7 @@ import type { Context } from "grammy";
 import { resolveProviderForTool } from "../../core/runner/fallback.js";
 import type { TokenUsage } from "../../core/types.js";
 import { estimateTokenCostUsdFromConfig, upsertModelPrice } from "../../core/usage/pricing.js";
-import type { TelegramConfig } from "../config.js";
+import { usesTelegramCodexChatGpt, type TelegramConfig } from "../config.js";
 import { Formatter, formatUsagePriceInvalid, formatUsagePricePrompt, formatUsagePriceSaved } from "../interaction/formatter.js";
 import { buildUsagePricingKeyboard } from "../interaction/keyboards.js";
 import type { SessionManager } from "../session/manager.js";
@@ -23,7 +23,8 @@ export async function showUsagePanel(
   const session = deps.sessionManager.getOrCreate(chatId);
   const resolved = await getResolvedProvider(session, deps.config);
   const usage = resolved.provider ? findProviderUsage(session, resolved.provider.name) : undefined;
-  const estimatedCostUsd = resolved.provider && usage
+  const chatGpt = usesTelegramCodexChatGpt(session.engine, deps.config);
+  const estimatedCostUsd = resolved.provider && usage && !chatGpt
     ? await estimateStoredUsageCost(resolved.provider.name, resolved.provider.model, usage)
     : undefined;
   const missingPrice = Boolean(
@@ -32,7 +33,7 @@ export async function showUsagePanel(
     && usage.costUsd <= 0
     && usage.unknownCostCount > 0
     && estimatedCostUsd === undefined
-    && !options.tokenOnly
+    && !options.tokenOnly && !chatGpt
   );
   const extra = {
     parse_mode: "HTML",
@@ -40,7 +41,7 @@ export async function showUsagePanel(
   } as const;
   const text = Formatter.sessionUsage(session, resolved.provider, resolved.error, {
     estimatedCostUsd,
-    tokenOnly: options.tokenOnly,
+    tokenOnly: options.tokenOnly || chatGpt,
     missingPrice
   });
 
@@ -136,6 +137,9 @@ async function getResolvedProvider(
   session: TelegramSession,
   config?: TelegramConfig
 ): Promise<{ provider?: { name: string; model: string }; error?: string }> {
+  if (usesTelegramCodexChatGpt(session.engine, config)) {
+    return { provider: { name: "ChatGPT", model: config?.codexModel ?? "Codex 默认模型" } };
+  }
   try {
     const resolved = await resolveProviderForTool(session.engine, config?.provider, config?.model);
     return { provider: { name: resolved.provider.name, model: resolved.model } };
