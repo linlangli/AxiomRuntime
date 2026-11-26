@@ -262,6 +262,8 @@ Streaming 响应在首个文字、推理或工具参数增量前由代理暂存�
 
 ### Provider 配置探测 🟢
 
+桌面端是独立本机入口：`Provider.codexDesktop` 默认关闭，仅控制名单；`desktopRoutes` 是模型目录与推理的共同授权源。Web 与 CLI 调用相同的配置控制接口，以 Codex 顶层 `model_provider` 为总开关的事实来源，并通过本机证书及私有网关密钥验证、复用 loopback TLS transport。该传输不暴露管理 API，不调用公开服务凭证、不参与自动降级。官方地址固定，第三方从空 header 集构造请求，两条路线均拒绝重定向。切换总开关原子修改 Codex 配置，恢复锚点是同锁下的原配置副本，不修改登录凭据或 Provider 名单。流与用量复用 Runtime transport / UsageObserver，不引入第二本账。
+
 `core/providers` 拥有 Provider 配置探测与持久化事务。CLI、Telegram 和后续 Surface 只能调用同一个 core API，不得各自拼接 `/v1`、猜测认证 header 或在探测失败后写入半成品配置。
 
 探测分为两层：先以不消耗 token 的 `GET /models` 在“原始 Base URL / 切换末尾 `/v1`”与受限认证配置（`Bearer`、`x-api-key`、`api-key`）之间按最小变更顺序寻找可用组合；发现非空模型列表后，针对列表中实际存在的 OpenAI/Anthropic 模型族各选择一个代表模型，以 `max_tokens` / `max_output_tokens = 1` 做真实协议验证。若模型目录不可用，只有调用方明确提供 `provider.model` 时才允许进入手工模型回退：按模型族直接验证 Responses 或 Messages 协议，成功后只缓存该模型；禁止自动猜测模型名或跳过真实验证。确定性的 `4xx` 不重试，只有超时、`429` 和 `5xx` 使用有界短重试；找到更低变更成本的可用配置后立即停止，不做任意 header 名和值的暴力枚举。

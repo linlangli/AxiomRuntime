@@ -15,6 +15,7 @@ const editing = ref(false)
 const originalProvider = ref<ProviderStatus | null>(null)
 const providerForm = ref({ name: '', baseUrl: '', apiKey: '', model: '', mode: 'auto', level: 1 })
 const providers = computed(() => props.data.providers.filter(provider => `${provider.name} ${provider.model}`.toLowerCase().includes(search.value.toLowerCase())))
+const desktopGatewayEnabled = computed(() => props.data.codex.providerId === 'axiom-desktop')
 const route = computed(() => [...props.data.providers].filter(provider => provider.level > 0).sort((first, second) => first.level - second.level))
 const mode = ref<'provider' | 'chatgpt' | 'proxy'>(props.data.codex.providerId === 'openai' ? 'chatgpt' : 'provider')
 const codexProvider = ref(props.data.codex.runtimeProviderName ?? '')
@@ -61,7 +62,7 @@ async function botControl(name: string, action: string) {
 }
 const fieldNames: Record<string, string> = { name: '名称', baseUrl: '接口地址', apiKey: 'API Key', model: '默认模型', mode: '运行模式', level: '优先级', enabled: '自动切换', value: '代理地址', providerName: 'Provider', token: 'Bot Token', defaultEngine: '默认引擎', codexAuth: 'Codex 登录方式', codexModel: 'ChatGPT 模型', defaultCwd: '工作目录', allowedUserIds: '用户白名单', allowAllUsers: '允许所有用户', proxyUrl: '代理地址', provider: 'Provider', id: '备份编号' }
 const changes = computed(() => !pending.value ? [] : Object.entries(pending.value.body).filter(([key, value]) => key !== 'action' && (!['apiKey', 'token'].includes(key) || !!value) && JSON.stringify(value) !== JSON.stringify(pending.value?.before[key])).map(([key, value]) => ({
-  field: key === 'enabled' && pending.value?.body.action === 'codex-usage' ? '用量采集' : key === 'codexHome' ? 'Codex 目录' : key === 'providerMappings' ? 'Provider 对应关系' : fieldNames[key] ?? key,
+  field: key === 'enabled' && pending.value?.url === '/api/codex/desktop/gateway' ? '统一网关' : key === 'enabled' && pending.value?.url === '/api/codex/desktop' ? '接入模型名单' : key === 'enabled' && pending.value?.body.action === 'codex-usage' ? '用量采集' : key === 'codexHome' ? 'Codex 目录' : key === 'providerMappings' ? 'Provider 对应关系' : fieldNames[key] ?? key,
   before: ['apiKey', 'token'].includes(key) ? '凭证不回显' : display(pending.value?.before[key]),
   after: ['apiKey', 'token'].includes(key) ? '替换为新凭证' : display(value)
 })))
@@ -127,6 +128,17 @@ function copy(text: string) { void navigator.clipboard.writeText(text).then(() =
   <template v-if="section === '服务配置'">
     <div class="section-heading"><div><h2>连接你的 AI 服务 <span class="hand-tag">connect!</span></h2><p>本地 Provider 是模型连接与自动切换的共同配置源。</p></div><button class="button primary" :disabled="busy" @click="editProvider()"><Plus :size="15" />添加服务商</button></div>
     <input v-model="search" class="search-field" placeholder="搜索服务商或模型…" aria-label="搜索服务商" />
+    <section class="card"><h2>Codex 桌面端统一网关</h2>
+      <label class="file-row"><span>启用 Codex 统一网关</span><input type="checkbox" role="switch" :checked="desktopGatewayEnabled" :disabled="busy"
+        @click.prevent="preview('切换 Codex 桌面路由', { enabled: !desktopGatewayEnabled }, { enabled: desktopGatewayEnabled }, '/api/codex/desktop/gateway')" /></label>
+      <p>开启后，官方及已接入的第三方模型都经本机网关。首次需配置本机 HTTPS（见帮助），并保持网关宿主运行。关闭后，新聊天恢复原生 OpenAI。切换总开关后请完全退出并重开 Codex，再新建聊天；不会更改登录或迁移已有聊天。</p>
+      <h3>第三方 Provider 名单</h3>
+      <p>可在网关关闭时预先配置名单，不会改变 Codex 路由。使用第三方模型会把本轮所需对话和工具结果发送给它。</p>
+      <label v-for="provider in providers" :key="provider.name" class="file-row">
+        <span>{{ provider.name }}</span><input type="checkbox" role="switch" :checked="!!provider.codexDesktop" :disabled="busy"
+          @click.prevent="preview('修改 Codex 桌面集成', { name: provider.name, enabled: !provider.codexDesktop }, { name: provider.name, enabled: !!provider.codexDesktop }, '/api/codex/desktop')" />
+      </label>
+    </section>
     <div class="provider-grid"><section v-for="provider in providers" :key="provider.name" class="card provider-card"><div class="card-head"><div class="provider-avatar">{{ provider.name.slice(0, 1).toUpperCase() }}</div><span class="pill" :class="provider.health">{{ provider.health === 'ok' ? '健康' : provider.health === 'error' ? '异常' : '待验证' }}</span></div><h2>{{ provider.name }}</h2><p class="break-word">{{ provider.baseUrl }}</p><div class="provider-facts"><span>默认模型<strong>{{ provider.model || '未设置' }}</strong></span><span>切换顺序<strong>{{ provider.level ? `第 ${provider.level} 位` : '仅显式选择' }}</strong></span><span>凭证状态<strong>{{ provider.credentialConfigured ? '已配置' : '缺失' }}</strong></span><span>出站代理<strong>{{ provider.proxyUrl || '继承默认' }}</strong></span></div><div class="button-row"><button class="button" :disabled="busy" @click="request('/api/providers/refresh', { name: provider.name })"><RefreshCw :size="13" />检查</button><button class="button" :disabled="busy" @click="editProvider(provider)">编辑</button><button class="link-button danger-text" :disabled="busy" @click="preview('删除服务商', { name: provider.name }, {}, `/api/providers/${encodeURIComponent(provider.name)}`, 'DELETE')">删除</button></div></section></div>
     <div v-if="!providers.length" class="empty card">暂无匹配的服务商，添加第一个 Provider 开始使用。</div>
   </template>

@@ -592,7 +592,7 @@ async function validateChatGptAuth(authPath: string): Promise<void> {
   }
 }
 
-function setTopLevelTomlString(current: string, key: string, value: string): string {
+export function setTopLevelTomlString(current: string, key: string, value: string): string {
   const eol = current.includes("\r\n") ? "\r\n" : "\n";
   const lines = current.split(/\r?\n/);
   const firstTable = lines.findIndex((line) => /^\s*\[\[?/.test(line));
@@ -707,7 +707,7 @@ async function restoreFile(filePath: string, snapshot: FileSnapshot): Promise<vo
   await atomicWriteFile(filePath, snapshot.content, snapshot.mode);
 }
 
-async function atomicWriteFile(filePath: string, content: string | Buffer, mode: number): Promise<void> {
+export async function atomicWriteFile(filePath: string, content: string | Buffer, mode: number): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const temporaryPath = path.join(
     path.dirname(filePath),

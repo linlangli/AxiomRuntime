@@ -23,6 +23,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 }
 
 export interface ProviderStatus {
+  codexDesktop?: boolean
   name: string; baseUrl: string; mode: string; level: number; model: string; proxyUrl?: string
   health: 'ok' | 'error' | 'unknown'; healthScore: number | null; weeklyTokens: number
   usageShare: number; credentialConfigured: boolean; models: string[]; lastCheckedAt: string | null

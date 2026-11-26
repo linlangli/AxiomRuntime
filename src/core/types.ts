@@ -16,6 +16,7 @@ export type ProviderRequestProfile = {
 export type HealthStatus = "ok" | "error" | "unknown";
 
 export type Provider = {
+  codexDesktop?: boolean;
   name: string;
   baseUrl: string;
   apiKey: string;

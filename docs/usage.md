@@ -355,6 +355,16 @@ ai image recover "./.ai-image-recovery/响应记录.json"       # 本地恢复�
 
 ## 7. 配置 Codex 桌面端
 
+桌面网关访问官方目录和官方模型时，优先使用 Runtime 全局出站代理，其次使用 Codex 已配置的 `[proxy].url`。第三方仍按 Provider 和 Runtime 的代理配置出站。
+
+**桌面模型菜单集成（与下面的旧式账号切换命令独立）：** 在 macOS 上先运行随包的 `scripts/setup-codex-desktop-tls.command`，确认证书指纹并手动同意信任本机 HTTPS 叶证书。也可自行提供受本机 Codex 信任、SAN 包含 127.0.0.1 的 `localhost.pem` / `localhost-key.pem`，放在 Runtime 配置根目录的 `codex-desktop/`，私钥权限 0600。不要禁用 TLS 检查。
+
+1. 在 `ai web` 的「本地配置 → 服务配置 → Codex 桌面端统一网关」开启总开关，或运行 `ai codex-gateway start`。启动 HTTPS 成功后才备份并切换 Codex 配置；不会替换已有其他自定义 Provider，也不会接管已有全局 `model_catalog_json` 的配置。
+2. 通过名单开关或 `ai codex-gateway provider on "Nexus"` 接入第三方；用 `provider off "Nexus"` 移除，`provider list` 查看。名单不切换 Codex 路由、不依赖证书，移除后旧菜单项也不能发起新请求。仅列出默认或缓存中符合筛选条件的模型；上游须支持原生 Responses 和所需工具。
+3. 总开关改动后，完全退出并重开 Codex，再新建对话。网关模式中可在同一条对话选官方或「Provider · 模型」；两者都先经过 AxiomRuntime，切到第三方会发送本轮所需上下文。关闭总开关或执行 `ai codex-gateway off` 后，新对话使用原生 OpenAI，第三方名单和登录凭据不变；不会迁移已有聊天。目录未更新时请重开应用。
+4. `ai codex-gateway` 或无参数 `ai` 菜单可交互操作；`ai codex-gateway status` 显示保存的路由。网关只监听本机 HTTPS 48567，Web 和 CLI 复用同一个本机监听器。保持最先启动网关的进程运行；停止它不会重置路由，需切回原生时先关闭总开关。旧版已启用的配置沿用总开关开启状态。
+5. 若无法使用桌面端，优先在终端执行 `ai codex-gateway off`。若配置损坏，退出桌面端后可双击 Runtime 配置目录 `codex-desktop/recovery-*/恢复 Codex.command`，选切换到网关前的备份；脚本先另存现配置再恢复整份备份，不触碰账号。撤销证书信任可运行 `security remove-trusted-cert "$HOME/.ai-gateway/codex-desktop/localhost.pem"`（自定义根目录请替换路径）。
+
 上一节的 `ai use codex` 只影响本次执行。如果你想**持久**改掉 Codex App 的配置，用 `ai set codex`。
 
 ### 切回 ChatGPT 账号

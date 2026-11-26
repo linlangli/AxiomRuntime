@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { startDesktopTransport } from "../server/codex-desktop.js";
+import { disableDesktopGateway, getDesktopGatewayStatus, registerDesktopGateway, setDesktopGatewayProvider } from "../core/integrations/codex-desktop.js";
 import { applyCodexWebAction, type CodexWebAction } from "../core/web/codex-settings.js";
 import { getWebDashboard } from "../core/web/dashboard-service.js";
 import { getProviderStatus } from "../core/status/status-service.js";
@@ -38,6 +40,11 @@ export async function startLocalWebServer(options: { port?: number; assetRoot?: 
     throw new Error("Local Web assets are missing or unreadable. For a source checkout, run `npm ci --prefix web` and `npm run build` in the repository root, then run `ai web` again. For an npm installation, reinstall @offerpilot/axiomruntime.", { cause: error });
   }
   const token = crypto.randomBytes(32).toString("hex");
+  let desktop: ReturnType<typeof startDesktopTransport> | undefined;
+  const ensureDesktop = () => desktop ??= startDesktopTransport().then(transport => {
+    if (!transport.owned) desktop = undefined;
+    return transport;
+  }, error => { desktop = undefined; throw error; });
   let port = 0;
   const server = http.createServer(async (request, response) => {
     response.setHeader("Cache-Control", "no-store");
@@ -57,6 +64,25 @@ export async function startLocalWebServer(options: { port?: number; assetRoot?: 
         }
         if (request.method !== "GET" && request.headers.origin !== `http://127.0.0.1:${port}`) {
           sendJson(response, 403, { error: "Invalid origin." });
+          return;
+        }
+        if (request.method === "GET" && pathname === "/api/codex/desktop/gateway") {
+          sendJson(response, 200, await getDesktopGatewayStatus());
+          return;
+        }
+        if (request.method === "POST" && pathname === "/api/codex/desktop/gateway") {
+          const body = await readBody(request);
+          if (!isRecord(body) || typeof body.enabled !== "boolean") throw new WebInputError("Invalid desktop gateway setting.");
+          if (body.enabled) await registerDesktopGateway((await ensureDesktop()).secret);
+          else await disableDesktopGateway();
+          sendJson(response, 200, { effect: body.enabled ? "已启用统一网关。请完全退出并重开 Codex，再新建聊天。" : "已关闭统一网关。请完全退出并重开 Codex，再新建原生聊天。" });
+          return;
+        }
+        if (request.method === "POST" && pathname === "/api/codex/desktop") {
+          const body = await readBody(request);
+          if (!isRecord(body) || typeof body.name !== "string" || typeof body.enabled !== "boolean") throw new WebInputError("Invalid desktop integration.");
+          await setDesktopGatewayProvider(body.name, body.enabled);
+          sendJson(response, 200, { effect: body.enabled ? "已加入统一网关模型名单，不改变 Codex 路由。菜单未更新时请重开 Codex。" : "已移出统一网关模型名单并拒绝该 Provider 的新请求。" });
           return;
         }
         await handleApi(request, response, pathname);
@@ -79,9 +105,15 @@ export async function startLocalWebServer(options: { port?: number; assetRoot?: 
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Failed to start local Web server.");
   port = address.port;
+  try {
+    if ((await getDesktopGatewayStatus()).enabled) await ensureDesktop();
+  } catch { console.warn("Codex 桌面网关未启动。请检查本机 TLS 证书、凭据存储和端口 48567。"); }
   return {
     url: `http://127.0.0.1:${port}/#access=${token}`,
-    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    close: async () => {
+      (await desktop)?.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   };
 }
 

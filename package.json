@@ -36,6 +36,7 @@
   "files": [
     "dist",
     "docs/USAGE.html",
+    "scripts/setup-codex-desktop-tls.command",
     "README.md",
     "package.json"
   ],

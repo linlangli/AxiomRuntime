@@ -239,6 +239,7 @@ async function sync(): Promise<CodexAppUsageStatus> {
               || (delta.cacheReadInputTokens ?? 0) > (totals.cacheReadInputTokens ?? 0)) { state.invalidEvents += 1; return; }
             if (cursor.source !== "codex_app" && cursor.providerId !== "openai") return;
             collectNativeUsage(cursor, delta, new Date(timestamp).toISOString());
+            if (cursor.providerId === "axiom-desktop") return;
             if (!cursor.providerId || cursor.providerId === "ai_gateway_selected" || !cursor.model) { state.invalidEvents += 1; return; }
             const accountProvider = cursor.providerId === "openai" && cursor.accountId && tokens && cursor.accountId === tokens.account_id && accountName ? `ChatGPT（${accountName}）` : undefined;
             const provider = accountProvider ?? resolveProvider(cursor.providerId);

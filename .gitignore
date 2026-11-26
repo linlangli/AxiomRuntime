@@ -18,3 +18,4 @@ exports/
 
 .DS_Store
 *.log
+.ai-image-recovery/

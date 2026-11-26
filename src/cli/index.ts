@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { runAddCommand } from "./commands/add.js";
 import { runCheckCommand } from "./commands/check.js";
+import { runCodexGatewayCommand } from "./commands/codex-gateway.js";
 import { runContextCommand } from "./commands/context.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runFailoverCommand } from "./commands/failover.js";
@@ -151,7 +152,7 @@ function maskSecretArg(value: string): string {
 }
 
 async function runInteractive(): Promise<void> {
-  const interactiveCommandNames = ["setup", "use", "image", "set", "proxy", "failover", "add", "memory", "telegram", "models", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
+  const interactiveCommandNames = ["setup", "use", "image", "set", "codex-gateway", "proxy", "failover", "add", "memory", "telegram", "models", "check", "status", "session", "report", "doctor", "log", "context", "help", "last"];
   const command = await promptSelect("AI Gateway", [
     ...interactiveCommandNames
       .flatMap((name) => {
@@ -194,6 +195,7 @@ async function runProviderCommand(args: string[]): Promise<void> {
 }
 
 function registerBuiltInCommands(): void {
+  registerCliCommand({ name: "codex-gateway", description: "Codex 统一网关", run: runCodexGatewayCommand });
   registerCliCommand({ name: "secrets", description: "Manage Provider OS credentials", interactive: false, run: runSecretsCommand });
   registerCliCommand({ name: "history", description: "Manage usage/session history storage", interactive: false, run: runHistoryCommand });
   registerCliCommand({ name: "server", description: "Manage background Runtime API", interactive: false, run: runServerCommand });

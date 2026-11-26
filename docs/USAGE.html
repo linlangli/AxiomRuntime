@@ -831,6 +831,17 @@ ai set codex proxy off</pre>
           </section>
 
           <section class="panel" id="codex-usage">
+            <p>桌面网关优先使用 Runtime 全局出站代理访问官方目录和模型，也会读取 Codex 的 <code>[proxy].url</code> 作为后备。</p>
+            <h2>集成到 Codex 桌面模型菜单</h2>
+            <p>在 <code>ai web</code> 的「本地配置 → 服务配置 → Codex 桌面端统一网关」切换总开关；Provider 名单可独立设置，移除后拒绝该 Provider 的新请求。首次开启网关前，在 macOS 运行安装目录下的 <code>scripts/setup-codex-desktop-tls.command</code>，信任仅限 127.0.0.1 的本机证书。</p>
+            <pre>ai codex-gateway start
+ai codex-gateway off
+ai codex-gateway status
+ai codex-gateway provider list
+ai codex-gateway provider on "Nexus"
+ai codex-gateway provider off "Nexus"</pre>
+            <p>直接运行 <code>ai codex-gateway</code> 或在 <code>ai</code> 菜单选择「Codex 统一网关」可交互操作。切换总开关后完全退出并重开 Codex，再新建聊天；不会退出账号或迁移旧聊天。开启后，官方与第三方模型均走本机网关，第三方只收到推理所需的上下文和自身认证，不收到官方凭据。关闭后，新聊天使用原生 OpenAI。</p>
+            <p>保持启动网关的 Web 或 CLI 进程运行；停止进程不会恢复配置。若桌面打不开，先在终端执行 <code>ai codex-gateway off</code>；若配置损坏，退出后使用 Runtime 配置目录内 <code>codex-desktop/recovery-*/恢复 Codex.command</code>，选择切换前的备份。</p>
             <h2>Codex 本机用量采集</h2>
             <p>运行记录同时显示「Codex App 回合」和「Codex CLI · ChatGPT」，复用采集开关和起点。按原生回合 ID 关联状态、模型与时间；中止或证据缺失显示未知。App 回合显示会话配置 Provider，来自原生会话元数据。它是任务回合，不是单次模型请求；汇总明确上下文中唯一未结束回合的已观测 Token，不推断实际 Provider、成本、重试或切换。最多展示最近 100 个回合，受增量扫描限制，可能需多次刷新追上。</p>
             <p>用量统计默认显示今天的 UTC 自然日。Web 日志流水支持时间和 Provider 筛选、搜索及 CSV/JSON 导出；通过刷新按钮手动刷新，用量统计页仅展示用量记录；时间按浏览器本地时区显示，Token 按 k、w、亿缩写，不可用时显示 —，导出保留原始值。</p>

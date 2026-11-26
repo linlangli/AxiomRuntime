@@ -631,7 +631,7 @@ async function logFallback(
   });
 }
 
-async function readBoundedRequestBody(req: http.IncomingMessage, maxBytes: number): Promise<Buffer> {
+export async function readBoundedRequestBody(req: http.IncomingMessage, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
@@ -643,7 +643,7 @@ async function readBoundedRequestBody(req: http.IncomingMessage, maxBytes: numbe
   return Buffer.concat(chunks);
 }
 
-class RequestBodyTooLargeError extends Error {
+export class RequestBodyTooLargeError extends Error {
   constructor() {
     super("Request body exceeds configured limit.");
   }
